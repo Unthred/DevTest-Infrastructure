@@ -7,6 +7,7 @@ DIR=$(dirname "$0")
 . "$DIR/launcher.env" 2>/dev/null || exit 70
 export FOREMAN_MCP_CONFIG="$CONFIG_FILE"
 [ -n "$INBOX_DIR" ] && export FOREMAN_MCP_INBOX="$INBOX_DIR"
-exec "$NODE_BIN" --permission --allow-fs-read="$DIR" --allow-fs-read=/proc --allow-fs-read="$CONFIG_FILE" --allow-fs-read="$LOG_DIR" ${REPORTS_DIR:+--allow-fs-read="$REPORTS_DIR"} --allow-fs-write="$LOG_DIR" \
+[ -n "$STOP_DIR" ] && export FOREMAN_MCP_STOP_DIRS="$STOP_DIR"   # issue #1161: where foreman_stop_record may read; unset means the default
+exec "$NODE_BIN" --permission --allow-fs-read="$DIR" --allow-fs-read=/proc --allow-fs-read="$CONFIG_FILE" --allow-fs-read="$LOG_DIR" ${REPORTS_DIR:+--allow-fs-read="$REPORTS_DIR"} --allow-fs-read="${STOP_DIR:-/mnt/cache/logs/agent-cleanup}" --allow-fs-write="$LOG_DIR" \
   ${INBOX_DIR:+--allow-fs-read="$INBOX_DIR" --allow-fs-write="$INBOX_DIR/items"} \
   "$DIR/server.mjs"

@@ -139,7 +139,12 @@ test('`team status` reads the register from origin/main: no warning when readabl
   git('init', '-q', '-b', 'main'); fs.mkdirSync(path.join(repo, 'docs')); fs.writeFileSync(path.join(repo, 'docs', 'DECISIONS.md'), REGISTER);
   git('add', '.'); git('commit', '-q', '-m', 'register');
   // repo_path is not overridable locally, so run a copy of the package whose team.json points at the fixture.
-  const pkg = tmp(t); fs.cpSync(new URL('../supervisor', import.meta.url).pathname, path.join(pkg, 'supervisor'), { recursive: true }); fs.cpSync(new URL('../foreman-mcp/gbp.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'gbp.mjs'));
+  const pkg = tmp(t);
+  fs.cpSync(new URL('../supervisor', import.meta.url).pathname, path.join(pkg, 'supervisor'), { recursive: true });
+  fs.cpSync(new URL('../foreman-mcp/dependency-parser.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'dependency-parser.mjs'));
+  fs.cpSync(new URL('../foreman-mcp/gbp.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'gbp.mjs'));
+  fs.cpSync(new URL('../foreman-mcp/inbox-search.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'inbox-search.mjs'));
+  fs.cpSync(new URL('../foreman-mcp/draft-after.mjs', import.meta.url).pathname, path.join(pkg, 'foreman-mcp', 'draft-after.mjs'));
   const cli = path.join(pkg, 'supervisor', 'cli.mjs');
   const run = repoPath => {
     const shipped = JSON.parse(fs.readFileSync(path.join(pkg, 'supervisor', 'team.json'), 'utf8'));

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "meta.schema.json",
+  "title": "Read model: meta (GET /api/v1/meta), what this core offers, so a client can discover it",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "meta" },
+    "data": {
+      "type": "object",
+      "required": ["contract", "core_version", "models", "states", "commands", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "type": "string" },
+        "core_version": { "type": ["string", "null"] },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["name", "path", "schema"], "additionalProperties": false,
+            "properties": { "name": { "type": "string" }, "path": { "type": "string" }, "schema": { "type": "string" } }
+          }
+        },
+        "states": {
+          "type": "array",
+          "description": "The state vocabulary. A client maps each state to a look by its group, so a new state in a later minor version still draws sensibly.",
+          "items": {
+            "type": "object", "required": ["state", "group", "applies_to"], "additionalProperties": false,
+            "properties": {
+              "state": { "type": "string" },
+              "group": { "type": "string", "enum": ["active", "waiting", "held", "done", "failed", "off", "unknown"] },
+              "applies_to": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "tier", "reason_required", "reversible", "undo_command", "inputs", "refusals", "exists_today"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z_]+\\.[a-z_]+$" },
+              "tier": { "type": "string", "enum": ["direct", "approval", "person_only"] },
+              "reason_required": { "type": "boolean" },
+              "reversible": { "type": "boolean" },
+              "undo_command": { "type": ["string", "null"] },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object", "required": ["name", "type", "required"], "additionalProperties": false,
+                  "properties": { "name": { "type": "string" }, "type": { "type": "string" }, "required": { "type": "boolean" } }
+                }
+              },
+              "refusals": { "type": "array", "items": { "type": "string" } },
+              "exists_today": { "type": "string", "description": "Where this control exists in Foreman today, or none." }
+            }
+          }
+        },
+        "events": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

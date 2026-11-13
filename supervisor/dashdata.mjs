@@ -14,6 +14,7 @@ import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { readMcpInstall } from './mcpinstall.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
+import { limitResetStep } from './resetstep.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
 
@@ -230,6 +231,9 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   const prev = readCache(root) || {};
   const cache = { schema: 1, tick: { at: now, status, error: error ? redact(error) : null, lastOkAt: status === 'ok' ? now : (prev.tick?.lastOkAt ?? null), ...passTiming },
     repository: team?.c.repository ?? prev.repository ?? null, probes: mergeProbes(prev.probes, probes) };
+  const ledger = team?.tickLedger ?? {};   // issue #1223: what each planned action did this tick, and the resume checks that threw
+  cache.planned = Array.isArray(ledger.planned) ? ledger.planned : (prev.planned ?? null);
+  cache.resumeChecks = Array.isArray(ledger.planned) ? (ledger.resumeChecks || []) : (prev.resumeChecks ?? null);   // the paused jobs whose check threw, for foreman_why_blocked
   if (team?.view) { cache.pulls = compactPulls(team.view.prs); cache.issues = compactIssues(team.view.issues); cache.delivered = [...(team.delivered || [])].filter(Number.isSafeInteger).sort((a, b) => a - b); cache.merged = compactMerged(team.merged); cache.mergedNumbers = (team.merged || []).map(x => x.number).filter(Number.isSafeInteger); cache.fetchedAt = now;
     // file lists the tick read for the second-opinion hold (null = unreadable), so the page shows the same hold as the tick
     cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }
@@ -244,7 +248,10 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     agents: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])),
     allowance: Object.fromEntries(Object.entries(team.c.agents).map(([n, a]) => [n, allowance[a.provider] ? { observedAt: allowance[a.provider].observedAt, windows: allowance[a.provider].windows.map(w => ({ type: w.type, windowMinutes: w.windowMinutes ?? null, utilization: w.utilization, resetsAt: w.resetsAt })) } : null])),
     // Issue #487: when the tick began and why each idle agent was idle (upgrade hold, a named hold for that agent, or nothing to do).
-    ...(Number.isFinite(startedAt) ? { startedAt } : {}), idle: classifyIdle({ states: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])), heldAgents, holds, plan: actions }),
+    ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+    idle: classifyIdle({ states: Object.fromEntries(Object.entries(states).map(([n, s]) => [n, s.state])), heldAgents, holds, plan: actions,
+      planned: ledger.planned || [] }),
+    ...(ledger.planned ? { planned: ledger.planned } : {}), ...(ledger.resumeChecks ? { resumeChecks: ledger.resumeChecks } : {}),
     // Issue #406: what started this pass (schedule, job-end, install, inbox, approve); `merged` lists the other requests it absorbed. A snapshot
     // without `trigger` is from before wakes existed and was a scheduled pass.
     ...(typeof trigger === 'string' ? { trigger, ...(Array.isArray(merged) && merged.length ? { merged: merged.filter(x => typeof x === 'string').slice(0, 5) } : {}) } : {}),
@@ -252,6 +259,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     ...passTiming, ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
     ...(check && typeof check.result === 'string' ? { check: { result: check.result.slice(0, 20), reason: redact(String(check.reason || ''), 160), probes: Number.isSafeInteger(check.probes) ? check.probes : 0, served: Number.isSafeInteger(check.served) ? check.served : 0 } } : {}),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
+  // Issue #1162: open and close the Needs you items for limit resets, from the same modes the plan just used.
+  try { limitResetStep(team); } catch (error) { console.error(`ai-supervisor: limit reset step failed: ${error?.name || 'Error'}`); }
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
   try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }
   appendSnapshot(root, snap, now);

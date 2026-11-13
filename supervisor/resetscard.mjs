@@ -1,5 +1,7 @@
 // Issue #1159: the "Limit resets" card on the Usage and cost page. The page helpers are passed in (the dashrender pattern), so this
 // module imports nothing from the renderer. Every dynamic value goes through esc(). Forms are plain posts; the server adds the proof.
+import { adviceHtml } from './resetadvicecard.mjs';
+
 const SEV_WORD = { warning: 'amber', action: 'expired', ok: 'ok', info: 'no expiry' };
 const ACTION = 'action="/limit-resets"';
 
@@ -28,7 +30,7 @@ function resetRow(h, r) {
   const editForm = `<form method="post" ${ACTION}>${editHidden}${fields(h, r)}<button class="btn" type="submit">Save</button></form>`;
   const helps = `<p class="sub helps" data-helps="${r.helps.yes ? 'yes' : 'no'}">Helps Foreman now: ${h.esc(r.helps.text)}</p>`;
   const head = `<b>${h.esc(r.limitLabel)}</b>, ${h.esc(scope)}; ${h.badge(r.severity, r.text)}${used}`;
-  return `<li data-reset="${h.esc(r.id)}" data-expiry="${h.esc(SEV_WORD[r.severity] || r.severity)}">${head}${helps}`
+  return `<li data-reset="${h.esc(r.id)}" data-expiry="${h.esc(SEV_WORD[r.severity] || r.severity)}">${head}${helps}${adviceHtml(h, r.advice)}`
     + `${toggle}${button(h, r.id, 'delete', 'Delete')}<details><summary>Edit</summary>${editForm}</details></li>`;
 }
 function appliedRow(h, e) {

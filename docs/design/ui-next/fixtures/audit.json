@@ -1,0 +1,91 @@
+{
+  "contract": "1.0",
+  "model": "audit",
+  "generated_at": "2026-11-12T22:04:00Z",
+  "freshness": { "state": "fresh", "tick_at": "2026-11-12T22:00:07Z", "age_seconds": 233, "stale_after_seconds": 600, "reason_code": null, "reason_text": null },
+  "cursor": "e-000412",
+  "data": {
+    "direct_control": {
+      "enabled": true,
+      "changed_at": "2026-11-12T09:15:00Z",
+      "changed_by": "homeowner",
+      "actions": [
+        { "command": "direct_control.set", "input": { "enabled": false }, "enabled": true, "tier": "person_only", "reversible": true }
+      ]
+    },
+    "summary": { "window_seconds": 86400, "applied": 7, "refused": 2, "undone": 1 },
+    "entries": [
+      {
+        "id": "a1f0c3d2", "at": "2026-11-12T17:48:00Z", "actor": "overseer", "client": "mcp", "command": "job.stop",
+        "target": { "kind": "job", "key": "d81c44f0", "label": "job d81c44f0", "title": "Rebase of PR #1142" },
+        "input": { "id": "d81c44f0" }, "reason": "Third rebase of PR #1142 with the same refusal; stopping it to save allowance.",
+        "before": { "state": "running" }, "after": { "state": "stopped" }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "job.resume", "input": { "id": "d81c44f0" }, "available": true, "until": null, "undone_by": null }
+      },
+      {
+        "id": "b7e41a09", "at": "2026-11-12T16:05:00Z", "actor": "overseer", "client": "mcp", "command": "work_item.clear_retry_cap",
+        "target": { "kind": "change", "key": "change-1192", "label": "PR #1192", "title": "Overseer controls the queue directly over the MCP (#1164)" },
+        "input": { "key": "change-1192" }, "reason": "The rebase refusal is a known false positive.",
+        "before": null, "after": null, "outcome": "refused", "refusal_code": "needs_homeowner", "refusal_text": "Clearing a retry cap needs the homeowner. Propose it instead; nothing was changed.",
+        "undo": null
+      },
+      {
+        "id": "c92d5b7e", "at": "2026-11-12T16:02:00Z", "actor": "overseer", "client": "mcp", "command": "work_item.set_rank",
+        "target": { "kind": "work_item", "key": "issue-1238", "label": "#1238", "title": "A halted breaker or a blocked prompt must never freeze implement starts Nodeadlock" },
+        "input": { "key": "issue-1238", "rank": 1 }, "reason": "Blocking: a breaker halt froze implement starts today. Discussed with the homeowner.",
+        "before": { "rank": 6 }, "after": { "rank": 1 }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "work_item.set_rank", "input": { "key": "issue-1238", "rank": 6 }, "available": true, "until": null, "undone_by": null }
+      },
+      {
+        "id": "d03e8c41", "at": "2026-11-12T15:12:00Z", "actor": "overseer", "client": "mcp", "command": "work_item.edit_prerequisites",
+        "target": { "kind": "work_item", "key": "issue-1169", "label": "#1169", "title": "V2 item 33 Every decision card has a control you can use or is not a card Nodead" },
+        "input": { "key": "issue-1169", "prerequisites": [1157] }, "reason": "The prerequisite was written inside a sentence, so the issue was held as malformed for about 3 hours.",
+        "before": { "line_state": "malformed", "raw_line": "V2 item 33. Decision cards. Depends on: #1157. Related: #1154 to #1158." }, "after": { "line_state": "ok", "raw_line": "Depends on: #1157" },
+        "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "work_item.edit_prerequisites", "input": { "key": "issue-1169", "raw_line": "V2 item 33. Decision cards. Depends on: #1157. Related: #1154 to #1158." }, "available": true, "until": null, "undone_by": null }
+      },
+      {
+        "id": "e5a9f216", "at": "2026-11-12T13:35:00Z", "actor": "homeowner", "client": "web", "command": "inbox.approve",
+        "target": { "kind": "inbox_item", "key": "f28ef9de", "label": "Inbox f28ef9de", "title": "Rules drift check read only Driftcheck" },
+        "input": { "id": "f28ef9de" }, "reason": null,
+        "before": { "state": "waiting_for_approval" }, "after": { "state": "approved" }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "inbox.undo_decision", "input": { "id": "f28ef9de" }, "available": false, "until": "2026-11-12T13:35:30Z", "undone_by": null }
+      },
+      {
+        "id": "f6b20d58", "at": "2026-11-12T12:41:00Z", "actor": "homeowner", "client": "web", "command": "audit.undo",
+        "target": { "kind": "work_item", "key": "issue-1166", "label": "#1166", "title": "V2 item 31 Choose the agent for each job from spare allowance Balance" },
+        "input": { "audit_id": "07c3e9aa" }, "reason": "codex has no fresh allowance reading; leave it unassigned.",
+        "before": { "agent": "codex" }, "after": { "agent": null }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": null
+      },
+      {
+        "id": "07c3e9aa", "at": "2026-11-12T12:30:00Z", "actor": "overseer", "client": "mcp", "command": "work_item.assign",
+        "target": { "kind": "work_item", "key": "issue-1166", "label": "#1166", "title": "V2 item 31 Choose the agent for each job from spare allowance Balance" },
+        "input": { "key": "issue-1166", "agent": "codex" }, "reason": "codex weekly allowance is at 31% with spare capacity.",
+        "before": { "agent": null }, "after": { "agent": "codex" }, "outcome": "undone", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "work_item.assign", "input": { "key": "issue-1166", "agent": null }, "available": false, "until": null, "undone_by": "f6b20d58" }
+      },
+      {
+        "id": "18d4b6c3", "at": "2026-11-12T11:05:00Z", "actor": "overseer", "client": "mcp", "command": "work_item.park",
+        "target": { "kind": "work_item", "key": "issue-1141", "label": "#1141", "title": "V2 item 22 Overseer can withdraw or replace its own Inbox proposals Withdraw" },
+        "input": { "key": "issue-1141" }, "reason": "Superseded by #1164 V2 item 2 Overseer controls the queue directly over the MCP Direct.",
+        "before": { "state": "queued" }, "after": { "state": "parked" }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "work_item.unpark", "input": { "key": "issue-1141" }, "available": true, "until": null, "undone_by": null }
+      },
+      {
+        "id": "29e5c7d4", "at": "2026-11-12T09:15:00Z", "actor": "homeowner", "client": "web", "command": "direct_control.set",
+        "target": null,
+        "input": { "enabled": true }, "reason": null,
+        "before": { "enabled": false }, "after": { "enabled": true }, "outcome": "applied", "refusal_code": null, "refusal_text": null,
+        "undo": { "command": "direct_control.set", "input": { "enabled": false }, "available": true, "until": null, "undone_by": null }
+      },
+      {
+        "id": "3af6d8e5", "at": "2026-11-12T09:02:00Z", "actor": "overseer", "client": "mcp", "command": "job.resume",
+        "target": { "kind": "job", "key": "5d2c41aa", "label": "job 5d2c41aa", "title": "Implement job, paused" },
+        "input": { "id": "5d2c41aa" }, "reason": "Free an implementer slot.",
+        "before": null, "after": null, "outcome": "refused", "refusal_code": "direct_control_off", "refusal_text": "Direct control is switched off. Propose the action for approval instead; nothing was changed.",
+        "undo": null
+      }
+    ]
+  }
+}

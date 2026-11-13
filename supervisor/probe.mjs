@@ -50,16 +50,22 @@ export function probeKind(registry, providerId) {
 // D-019 (no provider call while waiting): never while a window that has not reset is used up, whatever the overage status,
 // and never while a job of the provider is in the usage-limit wait. The reset probe comes once the window has reset.
 //   mode: the computed mode now. stored: the mode the dispatcher recorded. allowance: newest reading of the provider.
+//   reserveHeld: remaining capacity is at or below the reserve (reserveHeld in capacityrule.mjs).
 //   state: { at, resetFor } of the last attempt for this agent. limitWait: a job of this provider waits on a usage limit.
-export function probeDue({ mode, stored = null, allowance = null, state = null, settings, now, limitWait = false }) {
+export function probeDue({ mode, stored = null, allowance = null, state = null, settings, now, limitWait = false, owed = null, reserveHeld = false }) {
   if (settings.probe === false || limitWait) return null;
   if (state?.at && now - state.at < settings.probe_interval_minutes * MINUTE) return null;
   // Overage in use could draw on credits; a live used-up window means the provider is out until it resets. Never.
   if (overageRisk(allowance, now, settings.exhausted_at) || usedUpWindow(allowance, now, settings.exhausted_at)) return null;
-  if (mode !== 'normal') {
+  // Issue #1172: an agent the reserve holds (mode normal, but no work starts on it) gets the stale probe like any held agent; the reserve decides
+  // whether work starts, never whether the reading is refreshed.
+  if (mode !== 'normal' || reserveHeld) {
     const age = Number.isFinite(allowance?.observedAt) && allowance.observedAt > 0 ? now - allowance.observedAt : Infinity;
     if (age >= settings.probe_age_hours * HOUR) return { reason: 'stale', resetFor: null };
   }
+  // Issue #1163: a job may be admitted and the reading is stale, or the agent is near its reserve (`owed`, from refreshDue). The caller passes it
+  // only when work is waiting, so an idle agent is never probed on a timer.
+  if (owed && mode !== 'waiting') return { reason: owed.reason, resetFor: null };
   if (stored && stored.mode !== 'normal' && Number.isFinite(stored.until) && stored.until + RESET_GRACE_MS <= now && state?.resetFor !== stored.until
     && !(Number.isFinite(allowance?.observedAt) && allowance.observedAt >= stored.until)) return { reason: 'reset', resetFor: stored.until };
   return null;

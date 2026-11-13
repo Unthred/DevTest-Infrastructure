@@ -1,0 +1,9 @@
+[
+  { "id": "e-000413", "type": "hello", "at": "2026-11-12T22:04:01Z", "contract": "1.0" },
+  { "id": "e-000414", "type": "heartbeat", "at": "2026-11-12T22:04:16Z", "freshness": { "state": "fresh", "tick_at": "2026-11-12T22:00:07Z", "age_seconds": 249, "stale_after_seconds": 600, "reason_code": null, "reason_text": null } },
+  { "id": "e-000415", "type": "command_applied", "at": "2026-11-12T22:04:30Z", "actor": "homeowner", "command": "inbox.approve", "audit_id": "4b07e9f6", "models": ["inbox", "appbar", "overview", "audit"] },
+  { "id": "e-000416", "type": "entity_changed", "at": "2026-11-12T22:04:30Z", "entity": { "ref": { "kind": "inbox_item", "key": "c2fc405d", "label": "Inbox c2fc405d" }, "condition": { "state": "approved", "attention": "none", "reason_code": null, "reason_text": null, "since": "2026-11-12T22:04:30Z" } } },
+  { "id": "e-000417", "type": "model_changed", "at": "2026-11-12T22:05:09Z", "models": ["appbar", "overview", "queue", "jobs"] },
+  { "id": "e-000418", "type": "freshness_changed", "at": "2026-11-12T22:16:00Z", "freshness": { "state": "stale", "tick_at": "2026-11-12T22:05:09Z", "age_seconds": 651, "stale_after_seconds": 600, "reason_code": "tick_overdue", "reason_text": "No tick has finished for 10 minutes." } },
+  { "id": "e-000419", "type": "resync_required", "at": "2026-11-12T22:20:00Z", "reason_code": "cursor_too_old" }
+]

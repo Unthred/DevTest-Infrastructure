@@ -1,0 +1,2217 @@
+{
+ "contract" : "1.0",
+ "cursor" : "e-000412",
+ "data" : {
+  "items" : [
+   {
+    "actions" : [
+     {
+      "command" : "work_item.fix_description",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1192"
+      },
+      "primary" : true,
+      "reversible" : false,
+      "tier" : "approval"
+     },
+     {
+      "command" : "work_item.accept_split",
+      "enabled" : false,
+      "input" : {
+       "key" : "change-1192"
+      },
+      "refusal_code" : "no_split_proposed",
+      "refusal_text" : "No split has been proposed for this PR yet.",
+      "reversible" : false,
+      "tier" : "approval"
+     },
+     {
+      "command" : "work_item.allow_fix_round",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1192"
+      },
+      "reversible" : false,
+      "tier" : "approval"
+     },
+     {
+      "command" : "work_item.clear_retry_cap",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1192"
+      },
+      "reversible" : false,
+      "tier" : "approval"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1192"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : "claude",
+    "change" : {
+     "checks" : "passing",
+     "fix_limit" : 3,
+     "fix_rounds" : 3,
+     "head" : "9a2cd36",
+     "rebase_attempts" : 2,
+     "review_rounds" : 4,
+     "verdict" : "changes"
+    },
+    "condition" : {
+     "attention" : "homeowner",
+     "reason_code" : "fix_limit_reached",
+     "reason_text" : "1 blocking finding remains and it is about the description only: the description gives a wrong line count. The rebase is also capped after 2 attempts with the same cause.",
+     "since" : "2026-11-12T17:05:00Z",
+     "state" : "stuck_at_fix_limit"
+    },
+    "estimated_start_at" : null,
+    "key" : "change-1192",
+    "number" : 1192,
+    "parent_key" : "issue-1164",
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "fixing",
+    "title" : "Overseer controls the queue directly over the MCP (#1164)",
+    "type" : "change",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "job.start",
+      "enabled" : true,
+      "input" : {
+       "target" : "change-1180"
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1180"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : "claude",
+    "change" : {
+     "checks" : "passing",
+     "fix_limit" : 3,
+     "fix_rounds" : 1,
+     "head" : "e3c1311",
+     "rebase_attempts" : 1,
+     "review_rounds" : 2,
+     "verdict" : "changes"
+    },
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "unrecorded",
+     "reason_text" : "A fix is planned and has not started. No reason recorded.",
+     "since" : "2026-11-12T18:41:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "change-1180",
+    "number" : 1180,
+    "parent_key" : "issue-1155",
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "fixing",
+    "title" : "Keep homeowner steps of merged PRs in Needs you until done",
+    "type" : "change",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1180"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "job.start",
+      "enabled" : true,
+      "input" : {
+       "target" : "change-1175"
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1175"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : "claude",
+    "change" : {
+     "checks" : "passing",
+     "fix_limit" : 3,
+     "fix_rounds" : 0,
+     "head" : "65b56fd",
+     "rebase_attempts" : 0,
+     "review_rounds" : 1,
+     "verdict" : "changes"
+    },
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "unrecorded",
+     "reason_text" : "A fix is planned and has not started. No reason recorded.",
+     "since" : "2026-11-12T18:41:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "change-1175",
+    "number" : 1175,
+    "parent_key" : "issue-1154",
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "fixing",
+    "title" : "Diagnose and resolve failed Inbox jobs instead of letting them expire (#1154)",
+    "type" : "change",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1175"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "job.start",
+      "enabled" : true,
+      "input" : {
+       "target" : "change-1139"
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1139"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : "codex",
+    "change" : {
+     "checks" : "unknown",
+     "fix_limit" : 3,
+     "fix_rounds" : 0,
+     "head" : "a3761c8",
+     "rebase_attempts" : 1,
+     "review_rounds" : 1,
+     "verdict" : null
+    },
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "file_overlap_hold",
+     "reason_text" : "A rebase is planned and is held by a file overlap hold (PR #1180).",
+     "since" : "2026-11-12T18:52:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "change-1139",
+    "number" : 1139,
+    "parent_key" : "issue-1127",
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "rebasing",
+    "title" : "Address supervisor review follow-ups (#1127)",
+    "type" : "change",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1139"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "job.start",
+      "enabled" : true,
+      "input" : {
+       "target" : "change-1142"
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "change-1142"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : "codex",
+    "change" : {
+     "checks" : "passing",
+     "fix_limit" : 3,
+     "fix_rounds" : 0,
+     "head" : "388157d",
+     "rebase_attempts" : 0,
+     "review_rounds" : 1,
+     "verdict" : "changes"
+    },
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "file_overlap_hold",
+     "reason_text" : "A fix is planned and is held by a file overlap hold (PR #1175).",
+     "since" : "2026-11-12T18:52:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "change-1142",
+    "number" : 1142,
+    "parent_key" : "issue-1133",
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "fixing",
+    "title" : "Address review follow-ups for issue #1133",
+    "type" : "change",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1142"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1238"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1238"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1238"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1238"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1238",
+    "number" : 1238,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 1,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "A halted breaker or a blocked prompt must never freeze implement starts Nodeadlock",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1238"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1240"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1240"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1240"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1240"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1240",
+    "number" : 1240,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 2,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "A PR stuck at the fix limit is parked and a split into smaller items is proposed for approval Splitstuck",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1240"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1226"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1226"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1226"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1226"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1226",
+    "number" : 1226,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 3,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "A description only finding is fixed by editing the PR description not by a fix round Descround",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1226"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1228"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1228"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1228"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1228"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1228",
+    "number" : 1228,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 4,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Rebase check compares what each commit changes instead of testing for lost lines Rangecheck",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1228"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1227"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1227"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1227"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1227"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1227",
+    "number" : 1227,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 5,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Items declare expected files on a Files line and overlap holds use it and cover open PRs Fileslist",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1227"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1229"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1229"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1229"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1229"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1229",
+    "number" : 1229,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 6,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Each decision proposal is its own file so PRs stop colliding on the decision register Decfiles",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1229"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1222"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1222"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1222"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1222"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1222",
+    "number" : 1222,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 7,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Dashboard shows agents idle with planned work and for how long Idlebanner",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1222"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1221"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1221"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1221"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1221"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1221",
+    "number" : 1221,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 8,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "App bar one minimal item per agent merging status and allowance on one line Onebar",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1221"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1218"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1218"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1218"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1218"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1218",
+    "number" : 1218,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 9,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Inbox tab items get approve reject requeue and the shared card controls Inboxacts",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1218"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1219"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1219"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1219"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1219"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1219",
+    "number" : 1219,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 10,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Inbox tab switch between card table and compact list views Inboxviews",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1219"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1220"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1220"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1220"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1220"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1220",
+    "number" : 1220,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 11,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Jobs table of every job with cause tokens cost and a detail panel Jobstable",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1220"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1224"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1224"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1224"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1224"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1224",
+    "number" : 1224,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 12,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Work tab table view of every issue and PR with all queue fields Queuetable",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1224"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1172"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1172"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1172"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1172"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1172",
+    "number" : 1172,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 13,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Supervisor follow-up 2 of 3 Stale reading probe never starved by the PR counted reserve Probehold",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1172"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1157"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1157"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1157"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1157"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1157",
+    "number" : 1157,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 14,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 27 New routine decision actions extra fix round close superseded resume breaker Cards",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1157"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1158"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1158"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1158"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1158"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1158",
+    "number" : 1158,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 15,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 28 Strong decision actions merge approve and review verdict that really apply Cards",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1158"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1160"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1160"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1160"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1160"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1160",
+    "number" : 1160,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 16,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 30 Clear the upgrade latch as an Inbox action Unlatch",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1160"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1169"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1169"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1169"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1169"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "prerequisite_open",
+     "reason_text" : "Waiting for #1157, which is still open.",
+     "since" : "2026-11-12T12:40:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1169",
+    "number" : 1169,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [
+      1157
+     ],
+     "line_state" : "ok",
+     "open" : [
+      1157
+     ],
+     "raw_line" : "Depends on: #1157"
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 17,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 33 Every decision card has a control you can use or is not a card Nodead",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1169"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1162"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1162"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1162"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1162"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1162",
+    "number" : 1162,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 18,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 29 Limit resets in the allowance with advice on when to use them Resets",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1162"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1166"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1166"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1166"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1166"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1166",
+    "number" : 1166,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 19,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 31 Choose the agent for each job from spare allowance Balance",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1166"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1239"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1239"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1239"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1239"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1239",
+    "number" : 1239,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 20,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Split team.mjs step 1 move config validation and loading into teamconfig.mjs Teamsplitone",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1239"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.set_rank",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1204"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1204"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.assign",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1204"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1204"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "finish_before_starting",
+     "reason_text" : "Open PRs are worked before new issues start.",
+     "since" : null,
+     "state" : "queued"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1204",
+    "number" : 1204,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : 21,
+    "rank_of" : 21,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "Review follow-ups: docs",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1204"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.edit_prerequisites",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1185",
+       "prerequisites" : [
+        1156
+       ]
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "work_item.park",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1185"
+      },
+      "reversible" : true,
+      "tier" : "direct"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "malformed_prerequisite_line",
+     "reason_text" : "The prerequisite declaration is inside a sentence, so Foreman cannot read it and will never pick the issue up.",
+     "since" : "2026-11-12T15:10:00Z",
+     "state" : "held"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1185",
+    "number" : 1185,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "malformed",
+     "open" : [],
+     "raw_line" : "V2 item 36. Decision cards. Depends on: #1156. Related: #1169."
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "queued",
+    "title" : "V2 item 36 Decision card actions apply in place with no page reload or lost view Inplace",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1185"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1153"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1153",
+    "number" : 1153,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "Review follow-ups: tests",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1153"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1152"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1152",
+    "number" : 1152,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "Foreman MCP: read-only tool to list Inbox items with their text and ids",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1152"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1150"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1150",
+    "number" : 1150,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "V2 item 4 AGENTS file generated from AI Rules with drift check Batch1",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1150"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1149"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1149",
+    "number" : 1149,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "V2 item 7 Documented targeted quiet and full test commands Batch1",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1149"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1143"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1143",
+    "number" : 1143,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "Review follow-ups: supervisor",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1143"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1141"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1141",
+    "number" : 1141,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "V2 item 22 Overseer can withdraw or replace its own Inbox proposals Withdraw",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1141"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1140"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1140",
+    "number" : 1140,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "V2 item 21 Claude API credit agent for held work Credit",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1140"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1136"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1136",
+    "number" : 1136,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "V2 item 20 Plan pass before implementing core items Quality",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1136"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1133"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1133",
+    "number" : 1133,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "Review follow-ups: tests",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1133"
+   },
+   {
+    "actions" : [
+     {
+      "command" : "work_item.unpark",
+      "enabled" : true,
+      "input" : {
+       "key" : "issue-1127"
+      },
+      "reversible" : true,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : null,
+    "change" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "parked_label",
+     "reason_text" : "Parked: the planner skips it until it is unparked.",
+     "since" : null,
+     "state" : "parked"
+    },
+    "estimated_start_at" : null,
+    "key" : "issue-1127",
+    "number" : 1127,
+    "parent_key" : null,
+    "prerequisites" : {
+     "declared" : [],
+     "line_state" : "none",
+     "open" : [],
+     "raw_line" : null
+    },
+    "project" : "Unthred/devtest-infrastructure",
+    "rank" : null,
+    "rank_of" : null,
+    "source" : "github",
+    "stage" : "parked",
+    "title" : "Review follow-ups: supervisor",
+    "type" : "issue",
+    "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1127"
+   }
+  ],
+  "stages" : [
+   "queued",
+   "implementing",
+   "in_review",
+   "fixing",
+   "rebasing",
+   "ready_to_merge",
+   "parked"
+  ],
+  "summary" : {
+   "held" : 6,
+   "max_open_changes" : 8,
+   "open_changes" : 5,
+   "parked" : 10,
+   "ranked" : 21
+  }
+ },
+ "freshness" : {
+  "age_seconds" : 233,
+  "reason_code" : null,
+  "reason_text" : null,
+  "stale_after_seconds" : 600,
+  "state" : "fresh",
+  "tick_at" : "2026-11-12T22:00:07Z"
+ },
+ "generated_at" : "2026-11-12T22:04:00Z",
+ "model" : "queue"
+}

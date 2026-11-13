@@ -4,16 +4,19 @@ import { createTools, CALLS_PER_MINUTE, MAX_TEXT } from './tools.mjs';
 import { controlTools } from './controltools.mjs';
 import { withControls } from './controlview.mjs';
 import { redact } from './redact.mjs';
+import { stopRecordTool, viewReasons, DEFAULT_STOP_DIRS } from './stoprecord.mjs';
 import { withRoutineActions } from './proposeschema.mjs';
 
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
 
 export function createToolset(options) {
   const base = createTools(options), now = options.now ?? Date.now, calls = [];
-  const extra = options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [];
+  const stop = stopRecordTool({ reasons: viewReasons({ source: options.source, getPath: options.getPath }), dirs: options.stopDirs ?? DEFAULT_STOP_DIRS, redact });   // issue #1161
+  const extra = [stop, ...(options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [])];
   const own = name => extra.find(d => d.name === name);
   return {
-    list: () => [...base.list().map(withRoutineActions), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }))],
+    list: () => [...base.list().map(withRoutineActions), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY }))],
     has: name => base.has(name) || !!own(name),
     async call(name, args = {}) {
       const def = own(name);

@@ -25,8 +25,6 @@ const grantOf = (team, pr) => {
 };
 // The open grant for this pull request's current head, or null. The planner lets exactly this fix job past the fix limit and the churn stop.
 export const openExtraFix = (team, pr) => grantOf(team, pr);
-// Who writes the fix of this pull request: the agent named by an open grant, else the branch's author.
-export const fixerOf = (team, pr) => grantOf(team, pr)?.agent ?? agentOfBranch(team.c, pr.headRefName);
 // Called when a fix or CI fix job starts: an open grant for that head and worker is used up whether or not the job's fix lands, so the limits
 // apply again straight after.
 export function spendExtraFix(team, act) {
@@ -39,33 +37,21 @@ async function fixJobRunning(team, n) {
   const live = [];
   for (const id of ids) {
     const job = await team.jobs.get(id).catch(() => null);
-    if (job && !['completed', 'failed', 'blocked', 'stopped', 'waiting_on'].includes(job.status)) live.push(id.slice(0, 8));
+    if (job && !['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) live.push(id.slice(0, 8));
   }
   return live;
 }
-const lastFixAgent = (team, n) => {
-  const rounds = Object.values(team.s.jobs).filter(j => WRITING.has(j.kind) && j.pr === n);
-  return rounds.sort((a, b) => (b.at || 0) - (a.at || 0))[0]?.agent ?? null;
-};
-
-// Whether this agent could write the fix now: configured, with allowance, and not refused by the writer rules (Opus, independence).
-function writerProblem(team, agent, pr) {
-  if (!team.c.agents[agent]) return `${agent} is not a configured worker (allowed: ${Object.keys(team.c.agents).join(', ')})`;
-  if (team.limitedOf(agent)?.out) return `${agent} is out of allowance`;
-  const refusal = team.modelFor({ agent, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key: `wb:${pr.number}` }, 'fix', {}, true).writeRefusal;
-  return refusal ? `${agent} may not write this fix: ${refusal}` : null;
-}
-// The requested worker, else a different one from the last fix round when one can write, else the branch's author.
+// D-011: each agent works only on its own branch in its own worktree, so the worker of a fix round is the branch's author. A requested worker is
+// accepted only when it is that author; another agent would have to write inside the author's worktree. The author may still be refused by the
+// writer rules (an Opus writer, or a model that would leave no independent reviewer).
 function chooseFixer(team, pr, requested) {
-  if (requested) {
-    const problem = writerProblem(team, requested, pr);
-    if (problem) refuse(problem);
-    return requested;
-  }
-  const last = lastFixAgent(team, pr.number), author = agentOfBranch(team.c, pr.headRefName);
-  if (!last) return author;
-  const other = Object.keys(team.c.agents).find(a => a !== last && !writerProblem(team, a, pr));
-  return other ?? author;
+  const author = agentOfBranch(team.c, pr.headRefName);
+  if (requested && requested !== author) refuse(`${requested} cannot write this fix: PR #${pr.number} is ${author}'s branch and each agent works only in its own worktree (D-011)`);
+  if (!team.c.agents[author]) refuse(`${author} is not a configured worker`);
+  if (team.limitedOf(author)?.out) refuse(`${author} is out of allowance`);
+  const refusal = team.modelFor({ agent: author, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key: `wb:${pr.number}` }, 'fix', {}, true).writeRefusal;
+  if (refusal) refuse(`${author} may not write this fix: ${refusal}`);
+  return author;
 }
 
 export async function extraFixRound(team, { target, model, reason }) {

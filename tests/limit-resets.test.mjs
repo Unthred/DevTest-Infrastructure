@@ -24,7 +24,7 @@ async function serve(t) {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   t.after(() => { server.closeAllConnections?.(); server.close(); });
   const port = server.address().port;
-  server.on('request', handler({ root, config: { ...config, ...MODELS }, host: '127.0.0.1', port, now: () => clock.now, viewTtlMs: DASHBOARD_VIEW_TTL_MS }));
+  server.on('request', handler({ root, config: { ...config, ...MODELS }, host: '127.0.0.1', port, now: () => clock.now, viewTtlMs: DASHBOARD_VIEW_TTL_MS, probe: async () => ({ ok: true }), wake: () => {} }));
   const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
     const options = { host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } };
     const r = http.request(options, res => {

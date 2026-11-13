@@ -3,7 +3,7 @@
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
 import { sweepJobTmp } from './jobtmp.mjs';
-import { readHostPressure, recordHostPressure, pressureText, hostPressureConfig } from './hostpressure.mjs';
+import { readHostPressure, recordHostPressure, pressureText } from './hostpressure.mjs';
 import { overlayHostHold } from './holdreason.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,11 +17,12 @@ import * as breaker from './breaker.mjs';
 import * as failcause from './failcause.mjs';
 import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
 import { applyRetryCap } from './retrycap.mjs';
-import { validateBreakerConfig } from './breaker.mjs';
-import { validateAlertsConfig } from './alert.mjs';
-import { configureDisplay, formatCost, validateDisplay } from './money.mjs';
-import { validateResourceConfig } from './resources.mjs';
-import { validateModelsConfig, mergeModelsConfig, resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
+import { PlanLedger, heldReasonOf, closeLedger, planItems, breakerHoldText } from './planledger.mjs';
+import { overlapText } from './overlaptext.mjs';
+import { launchPlanned } from './launchplanned.mjs';
+import { checkResumeChecks } from './resumefailures.mjs';
+import { formatCost } from './money.mjs';
+import { resolveModel, reviewModelsOf, isOpusModel, repeatedChanges, isRepair, typeOfKind, DEFAULT_THRESHOLD } from './models.mjs';
 import { makeNamer, shortCommit } from './naming.mjs';
 import { usageLimitSkip } from './tickskips.mjs';
 import { entryApproved } from './decisions.mjs';
@@ -30,30 +31,43 @@ import { redact, redactLong } from './redact.mjs';
 import { isSecretScanner } from './secret-scanner.mjs';
 import { findHeadWriter, findSessionWriter } from './writerevidence.mjs';
 import { findWorktreeWriter } from './worktreewriter.mjs';
-import { probeDue } from './probe.mjs';
+import { probesOwed } from './probesdue.mjs';
+import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
-import { weeklyWindow } from './budget.mjs';
-import { validateBudgetConfig, budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
+import { weeklyWindow, shortWindowOf } from './budget.mjs';
+import { budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
 import * as inboxStore from './inbox.mjs';
 import { inboxEndPatch } from './inboxoutcome.mjs';
 import { withReportContract, reportNameFor } from './inboxreport.mjs';
 import { repairInbox } from './inboxrepair.mjs';
+import { orderSensitive, orderGuardReason, checkHolds, holdItems } from './orderguard.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
-import { enforceNoDeferredSteps, homeownerSteps } from './homeownersteps.mjs';
+import { enforceNoDeferredSteps, syncPendingSteps } from './homeownersteps.mjs';
+import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
-import { assertGithubApp, withHostGithubApp } from './appidentity.mjs';
+import { clearLatchApproved } from './latchaction.mjs';
+import { releaseAgentApproved } from './releaseagent.mjs';
 import { dispatchApproved, depsOf, unparkedPulls } from './controlactions.mjs';
-import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, fixerOf, spendExtraFix } from './routineactions.mjs';
-import { validateChangeCheck } from './ghchange.mjs';
-import { recordDiskSample, validateHealthConfig, DEFAULT_VOLUMES } from './hostdisk.mjs';
+import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, spendExtraFix } from './routineactions.mjs';
+import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
+import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
-import { activeSlotUse, unavailableStart } from './slotaccounting.mjs';
+import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
+import { slimFinding } from './rebasehunks.mjs';
+import { holdRefusedRebase, noHeadDetail, pushStep, STOP_STEP } from './rebaserefusal.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
+import { isCiteRepair } from './incomplete.mjs';
+import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
+import { recordCreatedInboxJob } from './inboxlaunch.mjs';
+import { approveDecisions } from './decisionapprove.mjs';
+import { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE } from './teamconfig.mjs';
+// Issue #1239: configuration validation and loading live in teamconfig.mjs; every moved name stays importable from here.
+export { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE };
 
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
@@ -66,63 +80,6 @@ export const independentOf = (reviewer, writers) => writers.every(w => w.provide
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 export const MARKER = 'devtest-verdict';
-
-// Issue #379: validation does not mutate its input; it normalizes a copy (limits.roles, deprecations) and returns it.
-export function validateTeamConfig(input) {
-  const c = structuredClone(input);
-  if (c?.schema_version !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(c.repository || '') || !path.isAbsolute(c.repo_path || '') || !path.isAbsolute(c.worktree_base || ''))
-    throw new SupervisorError('invalid team config: schema, repository or paths');
-  const L = c.limits || {};
-  for (const k of ['max_review_attempts', 'max_fix_attempts']) if (!Number.isSafeInteger(L[k]) || L[k] < 1 || L[k] > 8) throw new SupervisorError(`invalid team limit: ${k}`);
-  // Issue #344: no fixed ceiling on concurrency. `overall` is optional; absent, it follows the role counts (see overallCap).
-  if ('overall' in L && !(Number.isSafeInteger(L.overall) && L.overall >= 1)) throw new SupervisorError('invalid team limit: overall');
-  if ('review_starvation_hours' in L && !(typeof L.review_starvation_hours === 'number' && L.review_starvation_hours > 0 && L.review_starvation_hours <= 720)) throw new SupervisorError('invalid team limit: review_starvation_hours');
-  if ('idle_minutes' in L && !(typeof L.idle_minutes === 'number' && L.idle_minutes > 0 && L.idle_minutes <= 10080)) throw new SupervisorError('invalid team limit: idle_minutes');
-  if ('chain_seconds' in L && !(typeof L.chain_seconds === 'number' && L.chain_seconds >= 0 && L.chain_seconds <= 3600)) throw new SupervisorError('invalid team limit: chain_seconds');
-  if ('test_slots' in L && !(Number.isSafeInteger(L.test_slots) && L.test_slots >= 1 && L.test_slots <= 8)) throw new SupervisorError('invalid team limit: test_slots');
-  if ('test_reuse_hours' in L && !(Number.isSafeInteger(L.test_reuse_hours) && L.test_reuse_hours >= 0 && L.test_reuse_hours <= 720)) throw new SupervisorError('invalid team limit: test_reuse_hours');
-  if ('test_concurrency' in L && !(Number.isSafeInteger(L.test_concurrency) && L.test_concurrency >= 1 && L.test_concurrency <= 32)) throw new SupervisorError('invalid team limit: test_concurrency');
-  if ('test_tmp_root' in c && !(typeof c.test_tmp_root === 'string' && path.isAbsolute(c.test_tmp_root))) throw new SupervisorError('invalid team config: test_tmp_root must be an absolute path');
-  if ('reports_dir' in c && !(typeof c.reports_dir === 'string' && path.isAbsolute(c.reports_dir))) throw new SupervisorError('invalid team config: reports_dir must be an absolute path');   // issue #882
-  if ('test_resources' in c) validateResourceConfig(c.test_resources);
-  if ('chain_passes' in L && !(Number.isSafeInteger(L.chain_passes) && L.chain_passes >= 0 && L.chain_passes <= 8)) throw new SupervisorError('invalid team limit: chain_passes');
-  if ('chain_poll_seconds' in L && !(typeof L.chain_poll_seconds === 'number' && L.chain_poll_seconds >= 1 && L.chain_poll_seconds <= 300)) throw new SupervisorError('invalid team limit: chain_poll_seconds');
-  if ('stall_hours' in L && !(typeof L.stall_hours === 'number' && L.stall_hours > 0 && L.stall_hours <= 720)) throw new SupervisorError('invalid team limit: stall_hours');
-  try { robust.validateRobustLimits(L); } catch (error) { throw new SupervisorError(error.message); }   // issue #995
-  normalizeRoleLimits(c);
-  if ('inbox_max_minutes' in L && !(Number.isFinite(L.inbox_max_minutes) && L.inbox_max_minutes >= 1 && L.inbox_max_minutes <= 720)) throw new SupervisorError('invalid team limit: inbox_max_minutes');   // issue #971
-  if ('max_open_prs' in L && !(Number.isSafeInteger(L.max_open_prs) && L.max_open_prs >= 1 && L.max_open_prs <= 100)) throw new SupervisorError('invalid team limit: max_open_prs');
-  validateUnblockLimits(L.unblock);
-  validateOptionalSections(c);
-  try { validateChangeCheck(c.change_check); } catch (error) { throw new SupervisorError(error.message); }   // issue #755
-  try { c.breaker = validateBreakerConfig(c.breaker); } catch (error) { throw new SupervisorError(error.message); }   // issue #549
-  validateDashboard(c.dashboard);
-  try { c.display = validateDisplay(c.display); } catch (error) { throw new SupervisorError(error.message); }   // issue #1097
-  if (c.health?.volumes !== undefined) { try { validateHealthConfig(c.health); } catch (error) { throw new SupervisorError(error.message); } }   // issue #1092
-  validateHealth(c.health);   // issue #1093
-  // Issue #418: an owner-account comment on a PR requests the re-review. Off unless enabled; enabling it is only safe once agents
-  // post under their own GitHub identity (#377): until then a comment from the owner account cannot be told from an agent's.
-  if (c.inbox !== undefined && !(c.inbox && typeof c.inbox === 'object' && !Array.isArray(c.inbox) && typeof c.inbox.dir === 'string' && path.isAbsolute(c.inbox.dir) && Object.keys(c.inbox).every(k => k === 'dir' || k === 'max_pending') && (c.inbox.max_pending === undefined || (Number.isSafeInteger(c.inbox.max_pending) && c.inbox.max_pending >= 1 && c.inbox.max_pending <= 200)))) throw new SupervisorError('invalid inbox: { dir: absolute path, max_pending?: 1-200 }');   // issue #124
-  if (c.owner_comment_review !== undefined) {
-    const o = c.owner_comment_review, login = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(x);
-    if (!o || typeof o !== 'object' || typeof o.enabled !== 'boolean' || ('owner' in o && !login(o.owner)) || ('agent_logins' in o && !(Array.isArray(o.agent_logins) && o.agent_logins.every(login))))
-      throw new SupervisorError('invalid owner_comment_review: { enabled: boolean, owner?: login, agent_logins?: [login] }');
-  }
-  const agents = Object.entries(c.agents || {});
-  if (agents.length < 1) throw new SupervisorError('team needs at least one agent');
-  const seen = new Set();
-  for (const [name, a] of agents) {
-    if (!/^[a-z][a-z0-9-]{1,31}$/.test(name) || !/^[a-z][a-z0-9-]{1,31}$/.test(a.provider || '') || !/^[a-z0-9-]+\/$/.test(a.branch_prefix || '') || !Array.isArray(a.issues) || !a.issues.every(n => Number.isSafeInteger(n) && n > 0))
-      throw new SupervisorError(`invalid agent: ${name}`);
-    for (const n of a.issues) { if (seen.has(n)) throw new SupervisorError(`issue ${n} has two owners`); seen.add(n); }
-  }
-  if (new Set(agents.map(([, a]) => a.provider)).size !== agents.length) throw new SupervisorError('two agents share a provider');
-  validateModelsConfig(c.models, agents.map(([n]) => n));
-  validateBudgetConfig(c.budget, agents.map(([n]) => n));
-  if (c.access?.mode === 'full' && c.access.decision !== 'D-020') throw new SupervisorError('full access must cite D-020');
-  normalizeReviewConfig(c, agents.map(([n]) => n));
-  return c;
-}
 
 // Issue #136: how long a pending supervisor install drains running jobs (no new job starts) before it goes ahead.
 export const DRAIN_DEFAULT_MINUTES = 30;
@@ -137,200 +94,19 @@ function fixJobMeta(act, rebase, ticket) {
   const escalated = act.escalated ? { escalated: true, ticket } : {};
   return { pr: act.pr, head: act.head, branch: act.branch, ...escalated, ...(act.scanOnly ? { scanOnly: true } : {}) };
 }
-function validateDashboard(d) {
-  if (d === undefined) return;
-  if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).some(k => k !== 'allowed_origins')) throw new SupervisorError('invalid team config: dashboard');
-  const a = d.allowed_origins;
-  if (!Array.isArray(a) || a.length > 10 || !a.every(o => typeof o === 'string' && ORIGIN_PATTERN.test(o) && !/^http:\/\/[^/]*:80$|^https:\/\/[^/]*:443$/.test(o))) throw new SupervisorError('invalid team config: dashboard.allowed_origins must be a list of exact origins such as https://host (no path, no default port, no IPv6 literal)');
-}
-// Issue #1093: disk warning levels for the Health page, in percent. The alert level must be above the warn level.
-export const HEALTH_DEFAULTS = { disk_warn_percent: 85, disk_alert_percent: 95 };
-function validateHealth(h) {
-  if (h === undefined) return;
-  const pct = n => typeof n === 'number' && n > 0 && n <= 100;
-  if (!h || typeof h !== 'object' || Array.isArray(h) || Object.keys(h).some(k => k !== 'volumes' && !(k in HEALTH_DEFAULTS))) throw new SupervisorError('invalid team config: health');
-  const w = h.disk_warn_percent ?? HEALTH_DEFAULTS.disk_warn_percent, a = h.disk_alert_percent ?? HEALTH_DEFAULTS.disk_alert_percent;
-  if (!pct(w) || !pct(a) || w >= a) throw new SupervisorError('invalid team config: health disk levels must be percentages with warn below alert');
-}
-function validateOptionalSections(c) {
-  validateSelfUpgrade(c.self_upgrade); assertGithubApp(c);   // issue #1115
-  hostPressureConfig(c.host_pressure);   // issue #1151
-}
-function validateSelfUpgrade(u) {
-  if (u === undefined) return;
-  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !['drain_max_minutes', 'min_install_gap_minutes', 'public_dashboard_url'].includes(k))) throw new SupervisorError('invalid team config: self_upgrade');
-  if ('public_dashboard_url' in u && !(typeof u.public_dashboard_url === 'string' && /^https?:\/\/[^\s]+$/.test(u.public_dashboard_url))) throw new SupervisorError('invalid team config: self_upgrade.public_dashboard_url');
-  if ('drain_max_minutes' in u && !(Number.isSafeInteger(u.drain_max_minutes) && u.drain_max_minutes >= 1 && u.drain_max_minutes <= 720)) throw new SupervisorError('invalid team config: self_upgrade.drain_max_minutes');
-  if ('min_install_gap_minutes' in u && !(Number.isSafeInteger(u.min_install_gap_minutes) && u.min_install_gap_minutes >= 0 && u.min_install_gap_minutes <= 1440)) throw new SupervisorError('invalid team config: self_upgrade.min_install_gap_minutes');
-}
 
-// Automatic unblocks (issue #163) are budgeted: per PR (or issue) and per UTC day. A limit is only ever changed by the homeowner.
-export const UNBLOCK_DEFAULTS = { per_pr: 4, per_day: 12, cooldown_ms: 600000 };
-function validateUnblockLimits(u) {
-  if (u === undefined) return;
-  if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).some(k => !(k in UNBLOCK_DEFAULTS))) throw new SupervisorError('invalid team limit: unblock');
-  for (const k of ['per_pr', 'per_day']) if (k in u && !(Number.isSafeInteger(u[k]) && u[k] >= 0 && u[k] <= 100)) throw new SupervisorError(`invalid team limit: unblock.${k}`);
-  if ('cooldown_ms' in u && !(Number.isSafeInteger(u.cooldown_ms) && u.cooldown_ms >= 0 && u.cooldown_ms <= 86400000)) throw new SupervisorError('invalid team limit: unblock.cooldown_ms');
-}
-
-// Concurrency is counted per role (issue #148): limits.roles = { implementer, reviewer }. The old limits.per_agent is accepted for one
-// release: it maps to both role slots and leaves a deprecation warning (c.deprecations) that the tick reports. roles wins when both are set.
 const TYPE_ORDER = ['merge', 'rebase', 'cifix', 'fix', 'review', 'continue', 'inbox', 'implement'];   // the per-agent priority of choose()
-// Issue #460: a rebase has its own role slot (limits.roles.rebaser, default 1), so it never holds the implementer slot from new work.
-// Issue #971: the inbox lane (limits.roles.inbox, default 1) is a slot of its own for approved overseer prompts. It is not counted
-// against limits.overall, so a short supervised prompt is never held behind long implement or review jobs.
-export const ROLES = ['implementer', 'reviewer', 'rebaser', 'inbox'];
-export const OVERALL_ROLES = ROLES.filter(r => r !== 'inbox');
 export const DEFAULT_INBOX_MAX_MINUTES = 15;
 export const inboxMaxMs = L => (Number.isFinite(L?.inbox_max_minutes) && L.inbox_max_minutes > 0 ? L.inbox_max_minutes : DEFAULT_INBOX_MAX_MINUTES) * 60000;
-// Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard).
-// Issue #971 (review of #980): keywords cannot tell which prompt changes order or config ('Swap 940 and 935', 'Skip 935', 'Bring 940
-// forward' match nothing), so the guard fails safe: every approved or running prompt holds new implement picks until it has ended.
-// Prompts are short and bounded by limits.inbox_max_minutes, and reviews, fixes and rebases continue meanwhile.
-export const orderSensitive = () => true;
-export const DEFAULT_REBASERS = 1;
-// The count of a role: the configured one, else 1. limits.roles.rebaser is optional; an absent value is left absent so a config is not rewritten.
-export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.roles[r] : r === 'rebaser' ? DEFAULT_REBASERS : 1);   // rebaser and inbox default to 1
+// Prompts that change the queue order or a config file must apply before the planner hands out new implement work (the order guard,
+// orderguard.mjs). Issue #1238: only a prompt declared read_only or report_only is exempt.
+export { orderSensitive };
 export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : type === 'inbox' ? 'inbox' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
-// Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
-// issue title and body name. A wrong prediction is safe: two jobs on different branches never share a worktree, and an overlap the
-// prediction missed surfaces as a merge conflict, which the existing rebase job resolves in queue order.
-export function expectedFiles(issue) {
-  const text = `${issue?.title || ''}\n${issue?.body || ''}`;
-  const found = text.match(/(?<![\w./-])(?:[\w.-]+\/)+[\w.-]*\w(?![\w/])|(?<![\w./-])[\w-]+\.(?:mjs|js|json|md|yml|yaml|cs|sh|html|css)\b/g) || [];
-  return new Set(found.filter(f => /\.\w+$/.test(f)).map(f => f.replace(/^\.\//, '')));
-}
 export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''); return m ? Number(m[1]) : null; };
-// Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
-// the open-PR cap pausing new implement work. Empty when nothing does.
-export function capNotes(L, pauseText = null) {
-  const sum = OVERALL_ROLES.reduce((n, r) => n + roleCount(L, r), 0), out = [];
-  if (Number.isSafeInteger(L?.overall) && L.overall >= 1 && L.overall < sum) out.push(`limits.overall is ${L.overall}, below the ${sum} slots the role counts allow, so at most ${L.overall} jobs run at once`);
-  if (pauseText) out.push(`${pauseText}; no new implement job starts while the open-PR cap (limits.max_open_prs) is reached`);
-  return out;
-}
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : OVERALL_ROLES.reduce((n, r) => n + roleCount(L, r), 0));
-function normalizeRoleLimits(c) {
-  const L = c.limits ||= {}, ok = v => Number.isSafeInteger(v) && v >= 1;   // no upper bound: the count per role is the homeowner's choice (#344)
-  // Idempotent on its own output, also after a structuredClone (issue #379): the per_agent text already on a validated config is kept, so
-  // a derived roles block is never mistaken for an explicit one. On a raw config, any roles block next to per_agent (even one equal
-  // to it) is explicit: roles wins and the text says 'remove it'.
-  const prior = Array.isArray(c.deprecations) ? c.deprecations.find(d => typeof d === 'string' && d.startsWith('limits.per_agent')) : undefined;
-  c.deprecations = [];
-  if ('per_agent' in L) {
-    if (!ok(L.per_agent)) throw new SupervisorError('invalid team limit: per_agent');
-    c.deprecations.push(prior ?? (L.roles === undefined ? 'limits.per_agent is deprecated: it is mapped to limits.roles { implementer, reviewer }; replace it with limits.roles' : 'limits.per_agent is deprecated and ignored because limits.roles is set; remove it'));
-    if (L.roles === undefined) L.roles = { implementer: L.per_agent, reviewer: L.per_agent };
-  }
-  const R = L.roles;
-  // issue #460: rebaser is optional (default 1); implementer and reviewer stay required
-  if (!R || typeof R !== 'object' || Array.isArray(R) || Object.keys(R).some(k => !ROLES.includes(k)) || !ROLES.every(k => ok(R[k]) || ((k === 'rebaser' || k === 'inbox') && R[k] === undefined))) throw new SupervisorError('invalid team limit: roles');
-  // Issue #402: optional limits.provider_roles { <provider>: { implementer?, reviewer? } }. A provider's count caps its own jobs in that
-  // role, so one provider's reviews cannot fill the slot meant for the other. A role it omits is limited only by limits.roles.
-  const P = L.provider_roles;
-  if (P !== undefined) {
-    const providers = new Set(Object.values(c.agents || {}).map(a => a?.provider));
-    if (!P || typeof P !== 'object' || Array.isArray(P)) throw new SupervisorError('invalid team limit: provider_roles');
-    for (const [prov, r] of Object.entries(P)) {
-      if (!providers.has(prov) || !r || typeof r !== 'object' || Array.isArray(r) || !Object.keys(r).length || Object.keys(r).some(k => !ROLES.includes(k)) || !Object.values(r).every(ok))
-        throw new SupervisorError(`invalid team limit: provider_roles.${String(prov).slice(0, 32)}`);
-    }
-  }
-}
-
-// Review independence (issue #152, amends D-021): a review is independent when the reviewer's model differs from the model that wrote the
-// pull request head, so no provider-based interim mode exists any more. interim_review is accepted for one release (its weekly_at is
-// still read as the out-of-allowance threshold) and leaves a deprecation warning; out_of_allowance { weekly_at } replaces it.
-// second_opinion { paths: [glob], reviewer: <agent> } is optional: a pull request touching those paths gets one extra review from
-// the named agent when its provider differs from the one that wrote the head and it has allowance. Not configured: none.
-export function normalizeReviewConfig(c, names) {
-  const bad = what => new SupervisorError('invalid ' + what + ' config');
-  if (c.interim_review !== undefined) {
-    const ir = c.interim_review;
-    if (!ir || typeof ir !== 'object' || Array.isArray(ir) || ('weekly_at' in ir && !validFraction(ir.weekly_at))) throw bad('interim_review');
-    (c.deprecations ||= []).push('interim_review is retired (issue #152): its enabled flag is ignored once D-024 is approved (until then enabled:false still stops an interim PASS from merging under D-021); use out_of_allowance { weekly_at }');
-  }
-  const oa = c.out_of_allowance;
-  if (oa !== undefined && (!oa || typeof oa !== 'object' || Array.isArray(oa) || Object.keys(oa).some(k => k !== 'weekly_at') || !validFraction(oa.weekly_at))) throw bad('out_of_allowance');
-  const so = c.second_opinion;
-  if (so !== undefined && (!so || typeof so !== 'object' || Array.isArray(so) || Object.keys(so).some(k => !['paths', 'reviewer'].includes(k))
-    || !Array.isArray(so.paths) || !so.paths.length || !so.paths.every(g => typeof g === 'string' && /^[\w.\-*?/]+$/.test(g) && !g.startsWith('/') && !g.includes('..')) || !names.includes(so.reviewer))) throw bad('second_opinion');
-}
-const validFraction = v => Number.isFinite(v) && v > 0 && v <= 1;
-export const weeklyAtOf = c => c.out_of_allowance?.weekly_at ?? c.interim_review?.weekly_at ?? 0.995;
-// Path globs: ** crosses directories, * and ? do not.
-export function globToRegExp(g) {
-  let out = '';
-  for (let i = 0; i < g.length; i++) {
-    if (g[i] === '*') { if (g[i + 1] === '*') { out += '.*'; i++; if (g[i + 1] === '/') i++; } else out += '[^/]*'; }
-    else if (g[i] === '?') out += '[^/]';
-    else out += g[i].replace(/[.+^$|(){}\[\]\\]/g, '\\$&');
-  }
-  return new RegExp('^' + out + '$');
-}
 export const touchesPaths = (files, globs) => files.some(f => globs.some(g => globToRegExp(g).test(f)));
-
-// Local override (issue #30): <state root>/team.local.json, outside versions/, so upgrades keep it and the installed
-// copy is never edited. Only operational knobs may be overridden; repository, paths, providers, access and board come
-// from the reviewed file in Git.
-export const LOCAL_OVERRIDE = 'team.local.json';
-export function applyLocalOverride(shipped, local) {
-  if (local == null) return shipped;
-  if (typeof local !== 'object' || Array.isArray(local)) throw new SupervisorError('invalid team.local.json: not an object');
-  const keys = Object.keys(local).filter(k => k !== 'github_app');   // issue #1115: host-only, never in the public shipped file
-  const bad = keys.filter(k => !['enabled', 'limits', 'agents', 'depends_on_overrides', 'alerts', 'models', 'interim_review', 'out_of_allowance', 'budget', 'self_upgrade', 'breaker', 'test_tmp_root', 'reports_dir', 'test_resources', 'inbox', 'change_check', 'dashboard', 'display'].includes(k));
-  if (bad.length) throw new SupervisorError(`invalid team.local.json: key not overridable: ${bad[0]}`);
-  const out = structuredClone(withHostGithubApp(shipped, local));   // issue #1115
-  if ('enabled' in local) { if (typeof local.enabled !== 'boolean') throw new SupervisorError('invalid team.local.json: enabled must be boolean'); out.enabled = local.enabled; }
-  if ('test_tmp_root' in local) { if (typeof local.test_tmp_root !== 'string' || !path.isAbsolute(local.test_tmp_root)) throw new SupervisorError('invalid team.local.json: test_tmp_root must be an absolute path'); out.test_tmp_root = local.test_tmp_root; }
-  if ('reports_dir' in local) { if (typeof local.reports_dir !== 'string' || !path.isAbsolute(local.reports_dir)) throw new SupervisorError('invalid team.local.json: reports_dir must be an absolute path'); out.reports_dir = local.reports_dir; }   // issue #882
-  if ('test_resources' in local) out.test_resources = validateResourceConfig(local.test_resources);
-  if ('change_check' in local) { try { validateChangeCheck(local.change_check); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } out.change_check = { ...(out.change_check || {}), ...local.change_check }; }   // issue #755
-  if ('inbox' in local) out.inbox = local.inbox;   // issue #642: validated like the shipped key by validateTeamConfig, which loadTeamConfig runs on the merged result
-  if ('breaker' in local) { try { out.breaker = validateBreakerConfig({ ...(out.breaker || {}), ...local.breaker }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }
-  if ('display' in local) { try { out.display = validateDisplay({ ...(out.display || {}), ...local.display }); } catch (error) { throw new SupervisorError(`invalid team.local.json: ${error.message}`); } }   // issue #1097
-  if ('dashboard' in local) { validateDashboard(local.dashboard); out.dashboard = { ...local.dashboard }; }
-  if ('self_upgrade' in local) { validateSelfUpgrade(local.self_upgrade); out.self_upgrade = { ...(out.self_upgrade || {}), ...local.self_upgrade }; }
-  if ('alerts' in local) out.alerts = validateAlertsConfig(local.alerts);
-  if ('interim_review' in local) {   // retired (issue #152): tolerated so an installed team.local.json keeps working; only weekly_at is read
-    const o = local.interim_review;
-    if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => !['enabled', 'weekly_at'].includes(k))) throw new SupervisorError('invalid team.local.json: interim_review may set only enabled and weekly_at');
-    out.interim_review = { ...(out.interim_review || {}), ...o };
-  }
-  if ('out_of_allowance' in local) {
-    const o = local.out_of_allowance;
-    if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => k !== 'weekly_at') || !validFraction(o.weekly_at)) throw new SupervisorError('invalid team.local.json: out_of_allowance may set only weekly_at');
-    out.out_of_allowance = { ...(out.out_of_allowance || {}), ...o };
-  }
-  if ('models' in local) { validateModelsConfig(local.models, Object.keys(out.agents)); out.models = mergeModelsConfig(out.models, local.models); }
-  if ('budget' in local) { validateBudgetConfig(local.budget, Object.keys(out.agents)); out.budget = { ...(out.budget || {}), ...local.budget }; }
-  if (local.limits) {
-    if (typeof local.limits !== 'object' || Array.isArray(local.limits)) throw new SupervisorError('invalid team.local.json: limits');
-    out.limits = { ...out.limits, ...local.limits };
-    if ('per_agent' in local.limits && !('roles' in local.limits)) delete out.limits.roles;   // a deprecated local per_agent still takes effect over the shipped roles
-    else if ('roles' in local.limits) { delete out.limits.per_agent; const base = shipped.limits?.roles ?? ('per_agent' in (shipped.limits || {}) ? { implementer: shipped.limits.per_agent, reviewer: shipped.limits.per_agent } : {});   // an older shipped file with per_agent supplies the roles a partial override leaves out
-      out.limits.roles = { ...base, ...local.limits.roles }; }
-  }
-  if (local.depends_on_overrides) out.depends_on_overrides = { ...out.depends_on_overrides, ...local.depends_on_overrides };
-  for (const [name, o] of Object.entries(local.agents || {})) {
-    if (!out.agents[name]) throw new SupervisorError(`invalid team.local.json: unknown agent ${name}`);
-    const extra = Object.keys(o || {}).filter(k => k !== 'issues');
-    if (extra.length) throw new SupervisorError(`invalid team.local.json: agent field not overridable: ${extra[0]}`);
-    if ('issues' in o) out.agents[name].issues = o.issues;
-  }
-  return out;
-}
-export function loadTeamConfig(shippedFile, root) {
-  const shipped = JSON.parse(fs.readFileSync(shippedFile, 'utf8'));
-  let local = null;
-  try { local = JSON.parse(fs.readFileSync(path.join(root, LOCAL_OVERRIDE), 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw new SupervisorError(`unreadable ${LOCAL_OVERRIDE}`); }
-  const cfg = validateTeamConfig(applyLocalOverride(shipped, local));
-  configureDisplay(cfg.display);   // issue #1097: the cost display rate of this process
-  return cfg;
-}
 
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
 export function decisionApproved(registerText, id) {
@@ -406,8 +182,7 @@ export function latestChecks(rollup) {
   });
   return [...latest.values()];
 }
-// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once.
-// Must equal the --limit of listPulls in github.mjs.
+// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once. Must equal the --limit of listPulls in github.mjs.
 const OPEN_PULLS_CAP = 100;
 // Issue #188: the one-rerun-settled flag from a cancelWatch map, so status views agree with the dispatcher.
 export function retriedIn(cancelWatch, pr, now) { const w = cancelWatch?.[`${pr.number}:${pr.headRefOid}`], at = w?.rerunAt ?? w?.timeoutAt; return !!at && now - at >= RERUN_SETTLE_MS; }
@@ -519,7 +294,7 @@ export function validateVerdict(v, expect) {
   if (!SHA.test(v.headSha || '') || v.headSha !== expect.head) return 'verdict is for a different head';
   if (!['PASS', 'CHANGES'].includes(v.verdict)) return 'verdict must be PASS or CHANGES';
   const strings = (a, max, len) => Array.isArray(a) && a.length <= max && a.every(x => typeof x === 'string' && x.length > 0 && x.length <= len);
-  if (!Array.isArray(v.findings) || v.findings.length > 50 || !v.findings.every(f => f && typeof f === 'object' && !Array.isArray(f) && Object.keys(f).length === 2 &&
+  if (!Array.isArray(v.findings) || v.findings.length > 50 || !v.findings.every(f => f && typeof f === 'object' && !Array.isArray(f) && hasFindingKeys(f) &&
     ['blocking', 'follow-up'].includes(f.kind) && typeof f.text === 'string' && f.text.length > 0 && f.text.length <= 2000))
     return 'findings must be bounded objects with kind blocking or follow-up and text';
   if (!strings(v.commandsRun, 100, 500) || (v.verdict === 'PASS' && v.commandsRun.length === 0)) return 'commandsRun must list the commands run (required for PASS)';
@@ -563,7 +338,7 @@ export const TOP_LEVEL_DIRS = new Set(['.github', 'bin', 'broker', 'browser', 'c
 const noDotSegments = w => !w.split('/').some(seg => seg === '..' || seg === '.');
 const isRepoDir = w => /^(?:[\w.-]+\/)+(?:[\w-]+)?$/.test(w) && !w.includes('..') && TOP_LEVEL_DIRS.has(w.split('/')[0]) && noDotSegments(w);
 // Issue #559: a file token needs the same anchoring. With a slash it must start at a top-level directory; without one it must be a root file or carry a source/doc extension (so "fix.retry" is not a path). Tokens are lower-cased before the check.
-export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'readme.md']);
+export const ROOT_FILES = new Set(['.gitignore', 'agents.md', 'claude.md', 'package.json', 'readme.md']);
 const FILE_EXT = /\.(?:mjs|cjs|js|ts|json|jsonl|md|yml|yaml|sh|cs|csproj|sln|txt|toml|html|css|ps1|patch|diff|conf|ini|cfg)$|\/dockerfile(?:\.[\w-]+)?$/;
 // Issue #678: a Dockerfile suffix is accepted only on a slashed path (docker/Dockerfile.retry); a bare "dockerfile.retry" is refused like any other unlisted bare token. A bare root "Dockerfile" stays refused (this repository has none, and tests pin ROOT_FILES to real root files).
 // Issue #588: the extension list applies to slashed tokens too (so "tests/fix.retry" is not a path), and ".." is refused anywhere in the token (so "docs/a..b.md" is not).
@@ -616,7 +391,7 @@ export function reclassifyFalseClaims(v) {
   const findings = [...v.findings];
   for (const c of bad) {
     const text = `False description claim (the reviewer called it immaterial, but it is about behaviour, safety, scope or what was verified, so it is material): ${c.claim.slice(0, 600)} Evidence: ${String(c.evidence || '').slice(0, 800)}`.slice(0, 2000);
-    if (findings.length < 50) findings.push({ kind: 'blocking', text });
+    if (findings.length < 50) findings.push({ kind: 'blocking', scope: 'description', text });   // issue #1226: about the pull request text only
   }
   return { ...v, verdict: 'CHANGES', descriptionClaims: v.descriptionClaims.map(c => wrong(c) ? { ...c, materiality: 'material' } : c), findings };
 }
@@ -631,7 +406,7 @@ const COMMON = SAFETY + ' ' + HANDOVER_UPDATE + ' ' + TEMP_RULE;
 export const TEST_COMMAND = '/root/bin/ai-supervisor test-slot run -- node --test --test-reporter=dot "tests/**/*.test.mjs"';
 // D-024: the reviewer runs the tests itself, so a review never reuses an earlier pass of the same tree.
 export const REVIEW_TEST_COMMAND = TEST_COMMAND.replace('test-slot run --', 'test-slot run --no-reuse --');
-const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
+const issueReading = n => `Read docs/DECISIONS.md in full, and every file in docs/decisions/ (docs/ai/decision-proposals.md says how to propose a decision). Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
 // Issue #855: done is installed and working, so a step outside the repository is part of the change.
 export const DONE_RULE = 'Missing step (blocking, verdict CHANGES): if the change needs a setting, a migration or any post-install action that the pull request does not deliver, that is blocking. A local setting ships as a migration (supervisor/migrations/NNN-name.mjs) that applies it at install; a value specific to this host that must not go into this public repository is raised by Foreman as one inbox item at install; a check that needs the running system is listed under a "Live checks" heading in the issue. "The homeowner can do X after deploy" is never an accepted resolution. Only a step that cannot be automated (it needs the homeowner\'s credentials or a physical action) may be left to the homeowner, and only under a "Homeowner steps" heading in the pull request description.';
 export function reviewPrompt(job) {
@@ -655,10 +430,11 @@ export function escalationNote(inbox) {
   return ` This is the single final round after the normal fix rounds did not clear the rejection. Read ${inbox}/review-history.json as task data (every verdict and finding on this PR so far, not only the latest) and fix the underlying cause, not just the last finding. If some follow-up (non-blocking) reviewer findings are outside the acceptance criteria of the original issue, you may propose moving them to a follow-up issue by writing ${inbox}/split.json as {"split": [{"finding": "<the exact finding text>", "reason": "<why it is out of scope>"}]}. Never propose a blocking finding or anything that comes from the issue body or the homeowner's comments: the dispatcher refuses those and drops homeowner-required scope never.`;
 }
 export const fixPrompt = job => writerFixPrompt(job, { common: COMMON, standardsStep: STANDARDS_STEP, testCommand: TEST_COMMAND, escalation: escalationNote(job.escalatedInbox) });
-export function rebasePrompt(job) {
+function guardedRebasePrompt(job) {
   const why = job.behind ? `is mergeable but behind ${job.base}, and has a recorded PASS, so it is rebased right before merge` : `conflicts with ${job.base}`;
-  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase, and only through the two guarded steps below (issue #158). Step 1, right before you rebase: run \`ai-supervisor rebase-prepare --worktree <this worktree> --branch ${job.branch}\`; it fetches and puts the branch on the REMOTE head, which it prints as oldHead (never rebase a cached local copy). Then rebase onto origin/${job.base} and resolve conflicts keeping the intent of both sides; change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}. Step 2, instead of a plain push: run \`ai-supervisor rebase-push --worktree <this worktree> --branch ${job.branch} --base ${job.base} --old <oldHead from step 1>\`; it checks by patch-id that every commit of the old remote head that is not on ${job.base} is in your result, and also compares the lines and call sites the PR added before and after (issue #415: a resolution must not drop a change or leave a function without its call), and only then pushes with --force-with-lease against the head step 1 fetched. If it reports pushed:false (a dropped commit, a lost change, or the branch moved during the job) do NOT push by any other means: stop and say which, repeating the message field of its output. Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise an independent reviewer (a fresh session on a different model, D-024) reviews the new head. The post-condition is a new pushed head that is mergeable.`;
+  return `${COMMON}\n\nTask: pull request #${job.pr} (branch ${job.branch}, head ${job.head}) ${why}. Do a conflict-only rebase, and only through the two guarded steps below (issue #158). Step 1, right before you rebase: run \`ai-supervisor rebase-prepare --worktree <this worktree> --branch ${job.branch}\`; it fetches and puts the branch on the REMOTE head, which it prints as oldHead (never rebase a cached local copy). Then rebase onto origin/${job.base} and resolve conflicts keeping the intent of both sides; change nothing else in the rebase (do not amend, squash, reword or reorder commits, so an unchanged patch stays recognisable); read only the conflicting files. If the handover conflicts, take main's version of it (git checkout origin/${job.base} -- docs/ai/CURRENT_HANDOVER.md) and leave it unchanged on this branch; do not append to it. Run node tools/validate-project.mjs and ${TEST_COMMAND}. Step 2, instead of a plain push: run \`ai-supervisor rebase-push --worktree <this worktree> --branch ${job.branch} --base ${job.base} --old <oldHead from step 1>\`; ${pushStep(job.base)} Then comment on the pull request with the old head, the new head and the output of git range-diff origin/${job.base} <old head> <new head>. The dispatcher itself compares the two heads: a recorded PASS for the old head carries over to the new head only when every commit is unchanged (equal patches and messages); otherwise an independent reviewer (a fresh session on a different model, D-024) reviews the new head. The post-condition is a new pushed head that is mergeable.`;
 }
+export const rebasePrompt = job => `${guardedRebasePrompt(job)} ${STOP_STEP}`;
 export const ciFixPrompt = job => writerCiFixPrompt(job, { common: COMMON, standardsStep: STANDARDS_STEP, testCommand: TEST_COMMAND, escalation: escalationNote(job.escalatedInbox) });
 export const continuePrompt = job => writerContinuePrompt(job, { common: COMMON, issueReading, testCommand: TEST_COMMAND });
 export const implementPrompt = job => writerImplementPrompt(job, { common: COMMON, issueReading, standardsStep: STANDARDS_STEP, testCommand: TEST_COMMAND });
@@ -916,7 +692,7 @@ export class Team {
   }
   // Issue #316: why a writing job (the fix/ci-fix of this PR's author) must not run now, or null. Used by the planner and the dashboard.
   writeBlock(pr, kind = 'fix') {
-    const agent = fixerOf(this, pr);   // issue #1157: the worker an extra fix round names, else the author
+    const agent = agentOfBranch(this.c, pr.headRefName);
     if (!agent || !this.c.agents[agent]) return null;
     return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
   }
@@ -1003,27 +779,19 @@ export class Team {
     const now = this.clock.now(), settings = budgetSettings(this.c), out = {};
     for (const [name, a] of this.agents()) {
       const allowance = this.usage.allowance?.[a.provider] || null, jobs = (this.usage.jobs || []).filter(j => j.provider === a.provider);
-      const used = weeklyWindow(allowance, now)?.utilization ?? null;
-      const capacity = capacityFor({ name, used, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
+      const weekly = weeklyWindow(allowance, now), used = weekly?.utilization ?? null;
+      const shortWindow = shortWindowOf(allowance, now);
+      const capacity = capacityFor({ name, used, resetsAt: weekly?.resetsAt ?? null, shortWindow, jobs, settings, prs: (this.view || this.nameView)?.prs, owns: pr => agentOfBranch(this.c, pr.headRefName) });
       out[name] = assessAgent({ allowance, jobs, history: weeklyHistory(this.usage.snapshots, name, allowance), settings, now, latched: this.s.budget[name] || null, capacity });
       out[name].capacity = capacity;
     }
     return out;
   }
-  // Allowance probes owed now (issue #110): [{ agent, provider, reason, resetFor }], at most one per provider. Read-only; the caller
-  // runs them and calls noteProbe. Only for providers whose manifest declares a probe (`canProbe`), and never on a dry run.
-  probesDue(canProbe = () => true) {
+  // Allowance probes owed now (issue #110, #1163; supervisor/probesdue.mjs). Read-only; the caller runs them and calls noteProbe. `canProbe`: providers with a probe.
+  probesDue(canProbe = () => true, demand = null) {
     const modes = this.budgets();
     if (!modes) return [];
-    const now = this.clock.now(), settings = budgetSettings(this.c), out = [], seen = new Set();
-    for (const [agent, a] of this.agents()) {
-      if (seen.has(a.provider) || !canProbe(a.provider)) continue;
-      // D-019: a job of this provider that stopped on a usage limit waits for its reset; no provider call meanwhile.
-      const limitWait = (this.usage.jobs || []).some(j => j.provider === a.provider && j.status === 'paused_limit' && j.lastEvent === 'usage_limit');
-      const due = probeDue({ mode: modes[agent].mode, stored: this.s.budget[agent] || null, allowance: this.usage.allowance?.[a.provider] || null, state: this.s.probes[agent] || null, settings, now, limitWait });
-      if (due) { seen.add(a.provider); out.push({ agent, provider: a.provider, ...due }); }
-    }
-    return out;
+    return probesOwed({ agents: this.agents(), modes, usage: this.usage, stored: this.s.budget, probeState: this.s.probes, settings: budgetSettings(this.c), now: this.clock.now(), canProbe, demand });
   }
   // The attempt is recorded whether or not it produced a reading, so a failing probe cannot run more than once per interval.
   noteProbe(agent, due) { this.s.probes[agent] = { at: this.clock.now(), resetFor: due.resetFor ?? this.s.probes[agent]?.resetFor ?? null }; this.save(); }
@@ -1106,6 +874,7 @@ export class Team {
     this.recordReviewWaits(prs);
     const active = await this.jobs.listActive();
     this.activeIds = new Set(active.map(j => j.id));
+    this.citeRepairIds = new Set(active.filter(isCiteRepair).map(j => j.id));   // issue #1188
     await this.findStaleMarks(prs, issueByNo, active);
     // A live Inbox record is its own lane even before processInbox adopts it.
     const inboxStatuses = this.inboxDir() ? inboxStore.allStatuses(this.inboxDir()) : [];
@@ -1170,28 +939,28 @@ export class Team {
       if (!byRole && !byTotal) continue;
       const holders = (byRole ? occupying.filter(j => roleOfType(this.s.jobs[j.id]?.kind) === role) : occupying).map(nameOf);
       const text = `${role} slot full${byRole ? '' : ' (overall cap reached)'}: ${holders.slice(0, 5).join('; ') || 'running jobs'}`;
-      for (const [agent, a] of this.agents()) { const act = this.choose(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
+      for (const [agent, a] of this.agents()) { const act = this.chooseOpen(agent, a, prs, issueByNo, role); if (act) this.hold(agent, act.type, text); }
     }
     // Issue #402: a provider at its own limits.provider_roles count holds only that provider's work; the other provider's slot is free.
     for (const role of ROLES) for (const [agent, a] of this.agents()) {
       if (!this.providerSlotFull(a.provider, role, this.usedBy0 || {})) continue;
-      const act = this.choose(agent, a, prs, issueByNo, role);
+      const act = this.chooseOpen(agent, a, prs, issueByNo, role);
       if (act) this.hold(agent, act.type, `${a.provider} ${role} slot full (limits.provider_roles ${this.c.limits.provider_roles[a.provider][role]})`);
     }
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
   // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
-  overlapHold(agent, n, issue, type = 'implement') {
+  overlapHold(agent, n, issue, type = 'implement', pr = null) {
     for (const f of this.predictFiles(issue)) {
       const other = this.claimed?.get(f);
-      if (other !== undefined && other !== n) { this.hold(agent, type, `issue #${n} waits: it is expected to edit ${f}, which the running or planned job for issue #${other} also edits`); return true; }
+      if (other !== undefined && other !== n) { this.hold(agent, type, overlapText({ type, issue: n, pr, file: f, other, prs: this.view?.prs }), pr); return true; }
     }
     return false;
   }
   // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
   repairOverlap(agent, type, pr, issueByNo) {
     const n = issueOfBranch(pr.headRefName), issue = n != null ? issueByNo?.get(n) : null;
-    return !!issue && this.overlapHold(agent, n, issue, type);
+    return !!issue && this.overlapHold(agent, n, issue, type, pr.number);
   }
   // Issues #402, #1116: spare allowance, only to choose between agents (never holds work back): remaining capacity relative to need when every
   // agent's capacity is known, else the week minus the projected use; an unknown reading scores 0 (capacity.mjs).
@@ -1207,8 +976,8 @@ export class Team {
   // The same check against the jobs running or queued right now, for a route outside the planner (the one resume of a transiently stopped job).
   async providerRoleFull(provider, role) {
     if (!Number.isSafeInteger(this.c.limits.provider_roles?.[provider]?.[role])) return false;
-    const usedBy = {};
-    for (const a of await this.jobs.listActive()) if (['queued', 'running'].includes(a.status)) { const k = `${a.provider}:${roleOfType(this.s.jobs[a.id]?.kind)}`; usedBy[k] = (usedBy[k] || 0) + 1; }
+    const inboxStatuses = this.inboxDir() ? inboxStore.allStatuses(this.inboxDir()) : [];
+    const usedBy = activeProviderSlotUse({ active: (await this.jobs.listActive()).filter(job => ['queued', 'running'].includes(job.status)), records: this.s.jobs, roles: ROLES, roleOfType, inboxStatuses });
     return this.providerSlotFull(provider, role, usedBy);
   }
   // Agents other than `agent` that could review this pull request now: independent of its writers, with allowance and attempts left.
@@ -1449,7 +1218,7 @@ export class Team {
     }
     // CI fix: my open, non-draft PR has a completed failing check on its current head
     for (const pr of repair ? up : []) {
-      if (fixerOf(this, pr) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
+      if (agentOfBranch(this.c, pr.headRefName) !== agent || pr.isDraft || pr.mergeable === 'CONFLICTING' || !SHA.test(pr.headRefOid) || this.ciState(pr) !== 'red') continue;
       const key = verdictKey(pr.number, pr.headRefOid);
       const checks = failingChecks(pr.statusCheckRollup, this.retried(pr));
       // Issue #400: a round whose only failing checks are secret scanners cannot be cleared by the fix job (the old commit stays flagged
@@ -1458,20 +1227,20 @@ export class Team {
       // repeats to retry the notice, at most 3 times so it stays bounded. A green scanner check clears both markers (issue #451).
       const scanOnly = scannerOnly(checks);
       if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
-      const extraFix = !scanOnly && !!openExtraFix(this, pr), escalated = !scanOnly && !extraFix && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1157: an extra round runs past the limit
+      const escalated = !scanOnly && !openExtraFix(this, pr) && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1157: an extra round runs past it
       if (busy('cifix', key) || (escalated && (!this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
     }
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? up : []) {
-      if (fixerOf(this, pr) !== agent) continue;
-      const key = verdictKey(pr.number, pr.headRefOid), extraFix = !!openExtraFix(this, pr);   // issue #1157: one granted round runs past the limit and the churn stop
-      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || (this.churned(pr.number) && !extraFix)) continue;   // issue #864: churn stops the fix loop
-      const escalated = !extraFix && this.fixCount(pr.number) >= L.max_fix_attempts;
+      if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
+      const key = verdictKey(pr.number, pr.headRefOid), extraFix = !!openExtraFix(this, pr);   // issue #1157: one granted round runs past the limit and churn
+      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || (this.churned(pr.number) && !extraFix)) continue;   // issue #864
+      const description = descriptionRoundFor(this, pr), escalated = !extraFix && !description && this.fixCount(pr.number) >= L.max_fix_attempts;
       if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
-      return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}) };
+      return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}), ...(description ? { description: true } : {}) };
     }
     // Issue #302: an agent's review jobs all share one review worktree, so it runs one review (or split draft) at a time. While that
     // worktree is in use, or one review is already planned this tick, no further review is planned: a normal wait, never a lease skip.
@@ -1481,6 +1250,7 @@ export class Team {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || pr.mergeable === 'CONFLICTING' || this.ciState(pr) !== 'green' || !SHA.test(pr.headRefOid)) continue;
       const key = verdictKey(pr.number, pr.headRefOid);
+      if (this.authorRepairing(pr)) continue;   // issue #1188
       if (this.s.verdicts[key] || this.carryPending(pr) || busy('review', `${key}:${agent}`) || this.reviewInFlight(pr) || this.taken?.has(`review-pr:${pr.number}:${pr.headRefOid}`)) continue;
       if ((this.s.reviewAttempts[`${key}:${agent}`] || 0) >= L.max_review_attempts) continue;
       // Independence (issue #152): a review on the model that wrote the head is refused.
@@ -1607,6 +1377,10 @@ export class Team {
   // Issue #433: a head with a review job in flight (running, queued or paused) for any reviewing agent is not planned for review by another
   // agent. A paused job holds no slot (#380), so without this the freed slot would start a second review of the same head. A job on a
   // different head does not count (a moved head is stale and the new head is planned); a job whose agent could not review this head (reviewRefusal) is no review.
+  // Issue #1188: review of a head waits while the author's job is repairing failed Requirements cites in the same job.
+  authorRepairing(pr) {
+    return Object.entries(this.s.jobs).some(([id, j]) => this.citeRepairIds?.has(id) && !j.ingested && (j.pr === pr.number || (j.branch && j.branch === pr.headRefName)));
+  }
   reviewInFlight(pr) {
     return Object.values(this.s.jobs).some(j => j.kind === 'review' && !j.ingested && j.pr === pr.number && j.head === pr.headRefOid && this.c.agents[j.agent] && !this.reviewRefusal(j.agent, pr, j.key));
   }
@@ -1738,35 +1512,37 @@ export class Team {
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await guard('time caps', () => enforceStops(this, report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
-      await guard('board catch-up', () => this.flushBoard(report));
+      await guard('board catch-up', () => this.flushBoard(report)); await guard('decision approvals', () => approveDecisions({ gh: this.gh, repoPath: this.c.repo_path, owner: this.ownerLogin(), isOwnerComment: c => this.isOwnerComment(c) }, report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));
     if (!dryRun) await guard('host pressure', async () => { this.hostPressureState = this.hostPressureNow(); });   // before plan(): the plan reads it (issue #1151)
+    if (!dryRun) await guard('hold cycles', () => this.checkHolds(report));   // issue #1238
     const planSince = Date.now();
     let actions = await this.plan();
     lap('plan', planSince);
+    const ledger = new PlanLedger(actions, heldReasonOf(this));
     if (!dryRun) await guard('breaker successes', () => this.backfillSuccesses());
-    actions = this.applyBreaker(actions, report, dryRun);
+    actions = ledger.filtered('breaker', actions, this.applyBreaker(actions, report, dryRun));
     if (!dryRun) await this.rearmOnRecovery(report);
-    actions = applyRetryCap(this, actions, report);   // issue #995
+    actions = ledger.filtered('retry_cap', actions, applyRetryCap(this, actions, report));   // issue #995
     if (!dryRun) await guard('job liveness', () => this.livenessSweep(report));
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
     if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
-    if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
+    if (!dryRun) { await guard('self-check', () => this.runSelfCheck(report)); await guard('homeowner steps', () => syncPendingSteps(this, report)); }   // #1155
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
       report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length,
         agents: [...new Set(actions.filter(a => a.type !== 'merge' && a.agent).map(a => a.agent))] };   // issue #487: the hold belongs to these agents only
-      actions = actions.filter(a => a.type === 'merge');
+      actions = ledger.filtered('upgrade', actions, actions.filter(a => a.type === 'merge'), report.held.reason);
     }
     // Issue #1007: with the root volume or swap nearly full no new job starts (merges are not jobs); the Inbox item names the top consumers.
     if (!dryRun) {
       const pressure = this.hostPressureState || { hold: false, reasons: [] };
       if (pressure.hold) {
         report.held = { ...(report.held || {}), reason: `host pressure: ${pressure.reasons.join(' and ')}`, actions: actions.filter(a => a.type !== 'merge').length };
-        actions = actions.filter(a => a.type === 'merge');
+        actions = ledger.filtered('host_pressure', actions, actions.filter(a => a.type === 'merge'), report.held.reason);
       }
     }
     report.actions = actions;
@@ -1774,15 +1550,9 @@ export class Team {
     if (!dryRun) await this.checkStalls(report);
     if (this.modes) report.allowance = Object.fromEntries(Object.entries(this.modes).map(([n, m]) => [n, { mode: m.mode, reason: m.reason, until: m.until, ...(this.held[n] ? { held: this.held[n] } : {}) }]));
     if (dryRun) return report;
-    for (const act of actions) {
-      // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
-      // an earlier job was starting holds the rest until the next tick (merges are not jobs).
-      const l = act.type !== 'merge' ? this.limitedOf(act.agent) : null;
-      if (l?.out) { (report.skipped ||= []).push(usageLimitSkip(act, l)); continue; }
-      const startSince = Date.now();
-      await guard(`${act.type} ${act.pr ?? act.issue} (${act.agent})`, () => this.runAction(act, report));
-      lap('job launches', startSince);
-    }
+    await guard('resume checks', () => checkResumeChecks(this, report));   // issue #1223
+    await launchPlanned(this, actions, report, { guard, lap, ledger, refresh: refreshBeforeAdmission });
+    closeLedger(this, report, ledger);   // issue #1223: every planned action launched or has one reason
     this.save();
     phases.total = Date.now() - t0;
     return report;
@@ -1808,7 +1578,7 @@ export class Team {
     this.save();
     if (applied.length) report.selfChecked = applied.map(f => f.what);
   }
-  selfCheckItems() { return Object.values(this.s.selfcheck?.items || {}); }
+  selfCheckItems() { return [...Object.values(this.s.selfcheck?.items || {}), ...planItems(this.s)]; }
   // Issue #995 part 1: every running job has a heartbeat taken from its transcript, progress stamp or record. No growth for
   // limits.job_idle_minutes cancels it through the normal stop path (the reason is recorded) and the item is planned again. The limit and
   // each job's last activity are kept in state.liveness for the dashboard and `team status`.
@@ -1913,7 +1683,7 @@ export class Team {
     try {
       const { kept, stopped } = breaker.filterActions(this.s.breaker, limits, actions);
       if (stopped.length) { (report.breaker ||= {}).stopped = stopped.map(x => ({ type: x.action.type, ref: x.action.pr ?? x.action.issue ?? null, agent: x.action.agent ?? null, cause: x.cause })); }
-      for (const x of stopped) this.hold(x.action.agent, x.action.type, `circuit breaker: ${x.cause === '@global' ? 'wasted usage reached the higher limit' : 'cause ' + x.cause} halted new ${x.action.type} jobs until the homeowner resumes`);
+      for (const x of stopped) this.hold(x.action.agent, x.action.type, breakerHoldText(x), x.action.pr ?? x.action.issue ?? null);
       return kept;
     } catch (error) { this.breakerFailed(error, report); return actions; }
   }
@@ -1937,6 +1707,7 @@ export class Team {
       try {
         if (r.command === 'reopen') await this.reopen(Number(r.args[0]));
         else if (r.command === 'accept-split') await this.acceptSplit(Number(r.args[0]));
+        else if (r.command === 'after-install-done') markDone(this.s, Number(r.args[0]));
         else await this.requestReReview(r.args[0], r.args[1]);
         (report.notified ||= []).push({ queuedHomeownerRequest: what, applied: true });
         discardHomeownerRequest(r);
@@ -2059,21 +1830,10 @@ export class Team {
     }
     return null;
   }
-  // Issue #971: the reason new implement work waits, or null. An approved prompt not yet started, or a running inbox job, whose text
-  // changes queue order or config holds new implement picks until it ends; a job record older than twice the time cap no longer holds.
-  orderGuard() {
-    const dir = this.inboxDir(); if (!dir) return null;
-    const now = this.clock.now(), stale = 2 * inboxMaxMs(this.c.limits);
-    for (const j of Object.values(this.s.jobs)) if (j.kind === 'inbox' && !j.ingested && j.orderSensitive && now - (j.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
-    // A job the fast lane started during this pass is held only in its item's status (adopt) until the next pass adopts it.
-    for (const st of inboxStore.allStatuses(dir)) if (st.state === 'running' && st.adopt?.rec?.kind === 'inbox' && !st.adopt.rec.ingested && !this.s.jobs[st.adopt.id] && now - (st.adopt.rec.at || 0) < stale) return 'waiting for a running inbox prompt that changes queue order or config; new implement work starts after it ends';
-    for (const st of inboxStore.approvedItems(dir, 'prompt')) {
-      if (Object.values(this.s.jobs).some(j => j.inboxId === st.id)) continue;
-      const l = inboxStore.loadItem(dir, st.id);
-      if (l.ok) return 'waiting for an approved inbox prompt that changes queue order or config; new implement work starts after it has run';
-    }
-    return null;
-  }
+    // Issue #971 and #1238: the reason new implement work waits, or null (rules in orderguard.mjs).
+  orderGuard() { return orderGuardReason(this, inboxMaxMs(this.c.limits)); }   // issue #1238: the rules live in orderguard.mjs
+  checkHolds(report) { checkHolds(this, inboxMaxMs(this.c.limits), report); }
+  holdItems() { return holdItems(this); }
   // Issue #971: stop a running inbox job that passed limits.inbox_max_minutes. The job's end is then ingested as a failed item.
   async enforceInboxCap(report) {
     const cap = inboxMaxMs(this.c.limits), now = this.clock.now();
@@ -2155,8 +1915,7 @@ export class Team {
   async applyDoneRule(pr, head, verdict) {
     if (!this.gh.pullBody) return verdict;
     let body; try { body = await this.gh.pullBody(pr); } catch { return verdict; }
-    const steps = homeownerSteps(body);
-    if (steps.length) this.s.homeownerSteps[pr] = { head, steps: steps.slice(0, 10), at: this.clock.now() }; else delete this.s.homeownerSteps[pr];
+    recordPrSteps(this.s, pr, head, body, this.clock.now());
     this.save();
     return enforceNoDeferredSteps(verdict, body);
   }
@@ -2226,6 +1985,11 @@ export class Team {
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
     if (ROUTINE_ACTIONS.has(action)) return applyRoutine(this, { action, target, reason, model, superseded_by });   // issues #1115, #1157
+    if (action === 'clear_latch') {   // issue #1160; handinstall.mjs imports team.mjs through upgrade.mjs, so it is loaded here, not at the top
+      const { handInstallHold } = await import('./handinstall.mjs');
+      return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
+    }
+    if (action === 'release_agent') return releaseAgentApproved(target, this.faults);   // issue #1179
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
     const tk = rec.issue != null && !['review', 'fix', 'rebase', 'cifix'].includes(rec.kind) ? 'issue' : 'pull', tgt = rec.pr ?? rec.issue;
@@ -2233,7 +1997,7 @@ export class Team {
     if (action === 'stop_job') {
       if (TERMINAL.has(job.status)) throw new SupervisorError(`job ${target} already ended (${job.status})`);
       if (typeof this.jobs.stop !== 'function') throw new SupervisorError('this supervisor cannot stop a job');
-      await this.jobs.stop(id); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
+      await this.jobs.stop(id, 'manual_stop', { by: 'homeowner', why: reason }); log(`stopped the ${rec.kind} job ${target}`, 'stopped'); return `job ${target} stopped`;
     }
     if (action === 'resume_job') {
       if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError(`job ${target} is ${job.status}, not resumable`);
@@ -2319,20 +2083,6 @@ export class Team {
     this.save();
     log(`closed the ${rec.kind} job ${id.slice(0, 8)}, overtaken by a newer head of PR #${rec.pr}`, saved);
     return `job ${id.slice(0, 8)} closed (${saved})`;
-  }
-  // Posted once only: the state is recorded as 'posting' BEFORE the effect, and the item's marker is looked for on GitHub first, so a lost
-  // response or a repeated tick finds the issue instead of filing a second one. The text is redacted again and must carry no AI attribution.
-  async postIssueDraft(dir, st, item, report) {
-    const id = st.id, mark = inboxStore.marker(id);
-    if (st.state === 'approved' && !inboxStore.claim(dir, id, 'approved', { state: 'posting' }, this.clock.now())) return;   // issue #856: an Undo won; post nothing
-    let n = await this.gh.findIssueByMarker(mark);
-    if (!n) {
-      const title = redact(item.title, 200), body = redactLong(item.body, 8000, ' [cut]');
-      if (inboxStore.attributionShaped(title + body) || inboxStore.secretShaped(title + body)) { inboxStore.finish(dir, id, { state: 'failed', reason: 'the text failed the final check', result: 'nothing was posted' }, this.clock.now()); return; }
-      n = await this.gh.createIssue(title, `${body}\n\n${mark}`);
-    }
-    inboxStore.finish(dir, id, { state: 'done', issue: n, result: `posted as issue #${n}` }, this.clock.now());
-    (report.actions ||= []).push({ type: 'inbox-issue', result: `posted overseer issue draft ${id.slice(0, 8)} as #${n}` });
   }
   // A finished inbox prompt job: write its outcome back to the item, where the overseer can read it.
   ingestInbox(id, j, job) {
@@ -2503,8 +2253,8 @@ export class Team {
       }
       if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
       if (j.kind === 'inbox') this.ingestInbox(id, j, job);
-      if (j.escalated && job.status === 'completed') await this.processSplit(id, j, report);
-      if (j.kind === 'rebase' && job.status !== 'completed') this.recordIncompleteRebase(id, j, job, report);
+      if (job.status === 'completed') await (j.description ? finishDescriptionRound(this, id, j, report) : j.escalated && this.processSplit(id, j, report));   // a description round is never escalated
+      if (j.kind === 'rebase' && job.status !== 'completed') { this.recordIncompleteRebase(id, j, job, report); await holdRefusedRebase(this, id, j, job); }
       if (j.kind === 'rebase' && job.status === 'completed' && !(await this.recordRebase(id, j, report))) await this.carryVerdict(id, j, report);
       // Issue #579: an implement job that ended without completing leaves no pull request; the issue's mark is surfaced at once (findStaleMarks).
       // Issue #597: a completed ingest (a later resume of the same job) clears a stale cause, and a transient stop that resumeTransient
@@ -2591,12 +2341,12 @@ export class Team {
     if (typeof check.resolvedConflicts === 'boolean') j.rebase.resolvedConflicts = check.resolvedConflicts;   // absent = unknown
     if (check.missing.length) j.rebase.lost = slim(check.missing);
     // Issue #415: a change that disappeared inside the commits (file and line or identifier only), or a function left without a call site.
-    const changes = (Array.isArray(check.lostChanges) ? check.lostChanges : []).slice(0, 50).map(c => ({ file: String(c.file).slice(0, 200), kind: c.kind === 'unreferenced' ? 'unreferenced' : 'line', text: String(c.text).slice(0, 200) }));
+    const changes = (Array.isArray(check.lostChanges) ? check.lostChanges : []).slice(0, 50).map(slimFinding);
     if (changes.length) j.rebase.lostChanges = changes;
     this.save();
     if (changes.length) {
       (report.lostChanges ||= []).push({ pr: j.pr, job: id, changes: changes.length });
-      await this.postNotice(j.pr, `rebase-lost-changes job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}. The commit list is ${check.missing.length ? 'incomplete' : 'complete'}, but ${changes.length} change(s) the PR added at the old head are gone from the new head and are not on \`${j.base || 'main'}\` (or a function is now defined without any use):\n\n${changes.map(c => `- \`${c.file}\`: ${c.kind === 'unreferenced' ? `function \`${c.text}\` is defined but nothing references it` : `\`${c.text}\``}`).join('\n')}\n\nThis is not a conflict-only rebase, and no verdict carries to the new head. Required: restore the lost changes (the old head is still reachable by its id), or confirm each removal is intended, before anything is reviewed or merged.`);
+      await this.postNotice(j.pr, `rebase-lost-changes job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}. The commit list is ${check.missing.length ? 'incomplete' : 'complete'}, but ${changes.length} change(s) the PR added at the old head are gone from the new head and are not on \`${j.base || 'main'}\` :\n\n${changes.map(c => `- commit ${c.commit.slice(0, 8)}, \`${c.file}\`, hunk ${c.hunk}: ${c.kind} \`${c.text}\``).join('\n')}\n\nThis is not a conflict-only rebase, and no verdict carries to the new head. Required: restore the lost changes (the old head is still reachable by its id), or confirm each removal is intended, before anything is reviewed or merged.`);
       await this.gh.addLabel(j.pr, 'needs-homeowner');
     }
     if (!check.missing.length) return changes.length > 0;
@@ -2877,6 +2627,7 @@ export class Team {
     if (!pr || pr.state === 'CLOSED' || pr.state === 'MERGED' || pr.merged) throw new SupervisorError(`PR #${n} is not open`);
     if (!agentOfBranch(this.c, pr.headRefName)) throw new SupervisorError(`PR #${n} is not on a Foreman branch`);
     if (pr.isDraft || !SHA.test(pr.headRefOid)) throw new SupervisorError(`PR #${n} is a draft or has no readable head`);
+    if (isParked(pr)) throw Object.assign(new SupervisorError(reReviewParkedText(n)), { code: 'parked' });   // issue #1171 (D-040)
     const head = pr.headRefOid, key = verdictKey(n, head), v = this.s.verdicts[key];
     const entry = this.s.reReviews[n] ?? { requests: [] };   // not stored here: a refusal must leave no state behind
     const refuse = (code, text) => Object.assign(new SupervisorError(text), { code });
@@ -2933,7 +2684,7 @@ export class Team {
   // otherwise only a report.skipped entry, so approval comments on a PASS PR cause no noise) and is not used up.
   async scanOwnerComments(report, guard = (_, fn) => fn()) {
     if (!this.c.owner_comment_review?.enabled || !this.gh.prComments) return;
-    for (const pr of await this.gh.listPulls()) {
+    for (const pr of unparkedPulls(await this.gh.listPulls())) {   // issue #1171 (D-040): no re-review is requested for a parked PR, and its owner comment is not used up
       if (!agentOfBranch(this.c, pr.headRefName) || pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const v = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)];
       const entry = this.s.reReviews[pr.number];
@@ -3082,7 +2833,7 @@ export class Team {
     // Head moved or PR closed. Skipped when the list is at the listPulls cap (100): a PR beyond it would look closed, and its
     // watch (with the recorded rerun) would be dropped and the rerun repeated.
     if (pulls.length < OPEN_PULLS_CAP) for (const key of Object.keys(this.s.cancelWatch)) if (!open.has(key)) delete this.s.cancelWatch[key];
-    for (const pr of pulls) {
+    for (const pr of unparkedPulls(pulls)) {   // issue #1171 (D-040): a parked PR gets no rerun and no notice; its watch is kept
       if (pr.isDraft || !SHA.test(pr.headRefOid)) continue;
       const lone = loneCancelled(pr.statusCheckRollup, this.retried(pr)), key = `${pr.number}:${pr.headRefOid}`;
       if (!lone.length) {
@@ -3183,7 +2934,7 @@ export class Team {
   async notifyFixLimit(report, guard = (_, fn) => fn()) {
     for (const pr of await this.gh.listPulls()) {
       const author = agentOfBranch(this.c, pr.headRefName);
-      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts) continue;
+      if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts || descriptionRoundFor(this, pr)) continue;
       const rejected = this.s.verdicts[verdictKey(pr.number, pr.headRefOid)]?.verdict === 'CHANGES' || this.ciState(pr) === 'red';
       const nkey = `fixlimit:${pr.number}`, akey = `fixlimit-alert:${pr.number}`;
       if (!rejected) continue;
@@ -3319,6 +3070,7 @@ export class Team {
           if (j.kind === 'implement' && !j.endedNoPr) j.endedNoPr = { status: job.status, event: String(job.lastEvent || '').slice(0, 48), at: this.clock.now() };
           this.save(); return;
         }   // notifyOne handles it as before
+        if (await jobTargetParked(j, open, this.gh)) return;   // issue #1171 (D-040): a parked item's job is not resumed; the one resume is kept
         if (this.limitedOf(j.agent)?.out) return;   // out of allowance: wait for the reset rather than burn the one resume
         if (breaker.blocks(this.s.breaker, this.c.breaker, { type: j.kind, issue: j.issue ?? null })) return;   // issue #549: a halted job type does not restart either
         if (await this.providerRoleFull(job.provider ?? this.c.agents[j.agent]?.provider, roleOfType(j.kind))) return;   // issue #402: the provider's own role count is full; wait, keeping the one resume
@@ -3530,7 +3282,6 @@ export class Team {
   // Issue #362: history is kept before a capped or replaced record goes. Best effort: archiving must never stop the tick.
   archiveOverflow(which, entries) { try { archiveOverflow(this.root, which, entries); } catch (error) { console.error(`ai-supervisor: ${which} archive failed: ${error?.name || 'Error'}`); } }
   archiveVerdict(key, v, stage) { try { archiveVerdict(this.root, key, v, stage); } catch (error) { console.error(`ai-supervisor: verdict archive failed: ${error?.name || 'Error'}`); } }
-
   // Issue #881: a board move is best effort. A failure is a tick warning naming the issue and status, never an action failure, and the steps after it
   // still run. After a GitHub rate limit, moves are held (state.board.pending, newest status per issue) until the reset time GitHub reported, then
   // flushBoard() replays them so the board catches up.
@@ -3616,10 +3367,10 @@ export class Team {
       const fixDir = escalatedInbox || path.join(this.dir, 'inbox', ticket); fs.mkdirSync(fixDir, { recursive: true, mode: 0o700 });
       const rq = await this.writeRequirements(act.branch, fixDir);
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-fix-${act.pr}`), branch: act.branch, base: `origin/${act.branch}` });
-      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, scope: `Fix the CHANGES verdict on PR #${act.pr}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'update_issue'],
-        prompt: fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file }), postcondition: { kind: 'new_head', pr: act.pr, baseHead: act.head } };
-      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}) };
-      bump = () => { this.s.fixAttempts[act.key] = (this.s.fixAttempts[act.key] || 0) + 1; spendExtraFix(this, act); };
+      spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, ...await roundSpec(this, act, COMMON,
+        fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file })) };
+      meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}), ...(act.description ? { description: true } : {}) };
+      bump = () => { countRound(this.s, act); spendExtraFix(this, act); };
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
       let rq = null;
@@ -3636,7 +3387,7 @@ export class Team {
       meta = fixJobMeta(act, rebase, ticket);
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
-        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; spendExtraFix(this, act); };
+        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase) spendExtraFix(this, act); };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],
@@ -3672,7 +3423,7 @@ export class Team {
       let job;
       try { job = await this.jobs.create(spec); }   // a lease conflict throws here, before any attempt is counted
       catch (error) { if (unclaim) unclaim(); throw error; }
-      if (announce) await announce();
+      await recordCreatedInboxJob({ inboxDir: this.inboxDir(), act, job, now: () => this.clock.now(), announce });
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();
@@ -3740,15 +3491,15 @@ export class Team {
       }
       if (p.kind === 'new_head') {
         const pr = await this.gh.getPull(p.pr);
-        return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead && await tablePostcondition(p, job, pr, this.gh.pullBody);
+        return !!pr && SHA.test(pr.headRefOid) && pr.headRefOid !== p.baseHead && await tablePostcondition(p, job, pr, this.gh.pullBody, this.gh);
       }
-      if (p.kind === 'continued') return continuedPostcondition(p, job, await this.gh.getPull(p.pr), this.gh.pullBody);
+      if (p.kind === 'continued') return continuedPostcondition(p, job, await this.gh.getPull(p.pr), this.gh.pullBody, this.gh);
       if (p.kind === 'rebased') {   // a new head that GitHub reports mergeable (it computes this lazily, so re-ask a few times)
         const why = text => { job.postconditionDetail = text; return false; };   // issue #460: the reason an incomplete rebase records
         for (let i = 0; i < 4; i++) {
           const pr = await this.gh.getPull(p.pr);
           if (!pr || !SHA.test(pr.headRefOid)) return why('the pull request head could not be read');
-          if (pr.headRefOid === p.baseHead) return why('no new head was pushed: the branch is unchanged');
+          if (pr.headRefOid === p.baseHead) return why(noHeadDetail(job, p));
           if (pr.mergeable === 'MERGEABLE') return true;
           if (pr.mergeable === 'CONFLICTING') return why('a new head was pushed but the pull request still conflicts with its base');
           await this.sleep(2000);
@@ -3757,10 +3508,11 @@ export class Team {
       }
       if (p.kind === 'inbox_result') { try { return fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'inbox-result.txt'), 'utf8').trim().length > 0; } catch { return false; } }
       if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
+      if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();
         const pr = open.find(x => x.headRefName === p.branch);
-        if (pr && await tablePostcondition(p, job, pr, this.gh.pullBody)) { delete job.waitingOn; return true; }
+        if (pr && await tablePostcondition(p, job, pr, this.gh.pullBody, this.gh)) { delete job.waitingOn; return true; }
         // Issue #1023: no pull request because a prerequisite is still open is a wait, not an incomplete run.
         const items = await this.openPrerequisites(job, p, open);
         if (items.length) job.waitingOn = items; else delete job.waitingOn;

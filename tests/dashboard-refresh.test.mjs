@@ -76,3 +76,9 @@ test('rows are kept by item id, and an Undo compares with the live page (issue #
   assert.match(read('app.js'), /refresher\?\.refresh\(true, \{ live: true \}\)/);
   assert.doesNotMatch(read('app.js'), /\.refresh-now'\)/);
 });
+
+test('a refreshed status-bar item keeps an open detail open and keeps its focus (issue #1221)', () => {
+  const src = read('refresh.mjs');
+  assert.match(src, /function replaceStat\(doc, el, fresh\)[\s\S]*?details\[open\][\s\S]*?d\.open = true[\s\S]*?summary'\)\?\.focus/);
+  assert.match(src, /replaceStat\(doc, el, newEls\[i\]\)/);
+});

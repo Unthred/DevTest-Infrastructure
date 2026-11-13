@@ -230,7 +230,12 @@ function plannerWorld(t, { tweak = () => {}, issue = 950, open = true } = {}) {
   execFileSync(realGit, ['init', '-q', '--bare', '-b', 'main', origin]);
   fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main'); git(repo, 'config', 'user.email', 't@example.invalid'); git(repo, 'config', 'user.name', 'T');
   fs.writeFileSync(path.join(repo, 'R'), 'x\n'); git(repo, 'add', 'R'); git(repo, 'commit', '-qm', 'init'); git(repo, 'remote', 'add', 'origin', origin); git(repo, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
-  const code = path.join(dir, 'code'); fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true }); fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
+  const code = path.join(dir, 'code');
+  fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true });
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'dependency-parser.mjs'), path.join(code, 'foreman-mcp', 'dependency-parser.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'inbox-search.mjs'), path.join(code, 'foreman-mcp', 'inbox-search.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'draft-after.mjs'), path.join(code, 'foreman-mcp', 'draft-after.mjs'));
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
   team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [issue]; team.agents.codex.issues = [];
   team.limits.chain_seconds = 0;   // a chained tick would keep the first pass alive while its job runs; these tests count passes

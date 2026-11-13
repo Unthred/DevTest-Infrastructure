@@ -1,0 +1,76 @@
+{
+  "contract": "1.0",
+  "model": "allowance",
+  "generated_at": "2026-11-12T22:04:00Z",
+  "freshness": { "state": "fresh", "tick_at": "2026-11-12T22:00:07Z", "age_seconds": 233, "stale_after_seconds": 600, "reason_code": null, "reason_text": null },
+  "cursor": "e-000412",
+  "data": {
+    "agents": [
+      {
+        "brief": {
+          "id": "claude", "display_name": "claude", "provider": "claude", "roles": ["implementer", "reviewer", "rebaser"],
+          "condition": { "state": "idle", "attention": "fault", "reason_code": "unrecorded", "reason_text": "Idle with 2 planned actions held. Foreman recorded no reason for the hold.", "since": "2026-11-12T18:41:00Z" },
+          "weekly": { "state": "known", "used_fraction": 0.14, "level": "normal", "resets_at": "2026-11-19T04:00:00Z", "window_seconds": 604800, "reason_code": null, "reason_text": null },
+          "short": { "state": "known", "used_fraction": 0.01, "level": "normal", "resets_at": "2026-11-13T02:10:00Z", "window_seconds": 18000, "reason_code": null, "reason_text": null },
+          "reading": { "read_at": "2026-11-12T21:58:00Z", "age_seconds": 360, "stale": false, "max_age_seconds": 3600 },
+          "running_jobs": 0
+        },
+        "mode": "normal",
+        "mode_reason_code": null,
+        "mode_reason_text": null,
+        "projected_fraction": 0.38,
+        "runs_out_at": null,
+        "tokens_window": 61200000,
+        "cost_pence_window": 14230,
+        "actions": [
+          { "command": "agent.refresh_allowance", "input": { "agent": "claude" }, "enabled": false, "tier": "direct", "reversible": false, "refusal_code": "cooldown", "refusal_text": "A reading was taken 6 minutes ago; the next refresh is allowed after 5 minutes of cooldown per agent and when the reading is older." },
+          { "command": "agent.pause", "input": { "agent": "claude" }, "enabled": true, "tier": "direct", "reversible": true }
+        ]
+      },
+      {
+        "brief": {
+          "id": "codex", "display_name": "codex", "provider": "codex", "roles": ["implementer"],
+          "condition": { "state": "paused", "attention": "fault", "reason_code": "file_overlap_hold", "reason_text": "Paused with 2 planned actions held by a file overlap hold.", "since": "2026-11-12T18:52:00Z" },
+          "weekly": { "state": "known", "used_fraction": 0.31, "level": "normal", "resets_at": "2026-11-16T09:00:00Z", "window_seconds": 604800, "reason_code": null, "reason_text": null },
+          "short": { "state": "unknown", "used_fraction": null, "level": null, "resets_at": null, "window_seconds": 18000, "reason_code": "window_expired_no_reading", "reason_text": "5 hour window has reset; no new reading yet" },
+          "reading": { "read_at": "2026-11-12T13:02:00Z", "age_seconds": 32520, "stale": true, "max_age_seconds": 3600 },
+          "running_jobs": 0
+        },
+        "mode": "unknown",
+        "mode_reason_code": "allowance_reading_stale",
+        "mode_reason_text": "The reading is 9 hours old, so the planner cannot tell how much allowance is left.",
+        "projected_fraction": null,
+        "runs_out_at": null,
+        "tokens_window": 24800000,
+        "cost_pence_window": null,
+        "actions": [
+          { "command": "agent.refresh_allowance", "input": { "agent": "codex" }, "enabled": true, "tier": "direct", "reversible": false, "primary": true },
+          { "command": "agent.resume", "input": { "agent": "codex" }, "enabled": true, "tier": "direct", "reversible": true }
+        ]
+      }
+    ],
+    "limit_resets": [
+      { "id": "reset-fable", "agent": "claude", "limit": "weekly", "scope": "fable", "count": 3, "expires_at": "2027-03-31T23:59:59Z", "advice_code": "not_needed_now", "advice_text": "Weekly use is 14% with 6 days left; a reset now would be wasted." },
+      { "id": "reset-normal", "agent": "claude", "limit": "weekly", "scope": "all", "count": 1, "expires_at": null, "advice_code": "not_needed_now", "advice_text": "Weekly use is 14% with 6 days left; a reset now would be wasted." }
+    ],
+    "credit": {
+      "agent": "credit",
+      "condition": { "state": "off", "attention": "none", "reason_code": "credit_agent_parked", "reason_text": "The credit agent (#1140) is parked, so no credit is spent.", "since": null },
+      "budget_pence": 7500,
+      "spent_pence": 0,
+      "cycle_ends_at": null
+    },
+    "waste": {
+      "window_seconds": 604800,
+      "jobs": 59,
+      "tokens": 86000000,
+      "cost_pence": 19350,
+      "by_cause": [
+        { "code": "rebase_refused_lost_changes", "text": "Rebase refused: lost changes", "job_kind": "rebase", "jobs": 44, "tokens": 67080000, "cost_pence": 15093, "changes": 28, "fraction": 0.78 },
+        { "code": "postcondition_not_met", "text": "Postcondition not met", "job_kind": "rebase", "jobs": 9, "tokens": 12900000, "cost_pence": 2903, "changes": 6, "fraction": 0.15 },
+        { "code": "rebase_conflict_unresolved", "text": "Rebase conflict not resolved", "job_kind": "rebase", "jobs": 6, "tokens": 6020000, "cost_pence": 1354, "changes": 5, "fraction": 0.07 }
+      ]
+    },
+    "currency": { "code": "GBP", "minor_unit": "pence", "usd_rate": 0.75 }
+  }
+}

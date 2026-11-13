@@ -1,0 +1,61 @@
+{
+  "$id": "event.schema.json",
+  "title": "One event of the change stream: GET /api/v1/events (issue #1254)",
+  "anyOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/model_changed" },
+    { "$ref": "#/$defs/command_applied" },
+    { "$ref": "#/$defs/freshness_changed" },
+    { "$ref": "#/$defs/resync_required" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^e-(0|[1-9][0-9]*)$" },
+    "models": { "type": "array", "items": { "type": "string" } },
+    "hello": {
+      "type": "object",
+      "required": ["id", "type", "at", "contract"],
+      "additionalProperties": false,
+      "properties": { "id": { "$ref": "#/$defs/id" }, "type": { "const": "hello" }, "at": { "type": "string", "format": "date-time" }, "contract": { "const": "1.0" } }
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["id", "type", "at", "freshness"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "type": { "const": "heartbeat" }, "at": { "type": "string", "format": "date-time" },
+        "freshness": { "$ref": "common.schema.json#/$defs/freshness" }
+      }
+    },
+    "model_changed": {
+      "type": "object",
+      "required": ["id", "type", "at", "models"],
+      "additionalProperties": false,
+      "properties": { "id": { "$ref": "#/$defs/id" }, "type": { "const": "model_changed" }, "at": { "type": "string", "format": "date-time" }, "models": { "$ref": "#/$defs/models" } }
+    },
+    "command_applied": {
+      "type": "object",
+      "required": ["id", "type", "at", "actor", "command", "audit_id", "models"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "type": { "const": "command_applied" }, "at": { "type": "string", "format": "date-time" },
+        "actor": { "type": "string" }, "command": { "type": "string" }, "audit_id": { "type": "string" }, "models": { "$ref": "#/$defs/models" }
+      }
+    },
+    "freshness_changed": {
+      "type": "object",
+      "required": ["id", "type", "at", "freshness"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "type": { "const": "freshness_changed" }, "at": { "type": "string", "format": "date-time" },
+        "freshness": { "$ref": "common.schema.json#/$defs/freshness" }
+      }
+    },
+    "resync_required": {
+      "type": "object",
+      "required": ["id", "type", "at", "reason_code"],
+      "additionalProperties": false,
+      "properties": { "id": { "$ref": "#/$defs/id" }, "type": { "const": "resync_required" }, "at": { "type": "string", "format": "date-time" }, "reason_code": { "const": "cursor_too_old" } }
+    }
+  }
+}

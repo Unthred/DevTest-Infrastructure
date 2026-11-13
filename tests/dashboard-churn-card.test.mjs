@@ -53,3 +53,13 @@ test('without the churn record the same PR keeps the plain needs-homeowner card'
   const v = await viewOf(t, state);
   assert.deepEqual(v.panels.needsYou.map(c => c.id), ['homeowner-pr-41']);
 });
+
+test('a tripped per-cause breaker halt reaches the rendered card as a resume_breaker control with the real halt key', async t => {
+  const cause = 'fix:failed:timeout';
+  const halt = { cause, since: NOW - 3600000, jobs: 3, tokens: 90000, cost: 0, prs: [41], types: ['fix'], trippedBy: 'cause' };
+  const state = { fixAttempts: {}, verdicts: {}, jobs: {}, notified: {}, breaker: { halts: { [cause]: halt }, waste: {}, successes: {}, global: null, clearedAt: {}, history: [] } };
+  const v = await viewOf(t, state);
+  const card = v.panels.needsYou.find(c => c.id === 'breaker-halt');
+  assert.ok(card, v.panels.needsYou.map(c => c.id).join());
+  assert.deepEqual(card.card.controls.map(c => [c.action, c.target]), [['resume_breaker', cause]]);
+});

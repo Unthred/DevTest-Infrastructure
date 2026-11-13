@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import { requestBreakerResume } from './breakerresume.mjs';
-import { queueHomeownerRequest } from './homeownerqueue.mjs';
+import { homeownerCommand, queueHomeownerRequest } from './homeownerqueue.mjs';
 import { resumeAllowed } from './breaker.mjs';
 import { rangeEqual } from './rangediff.mjs';
-import { checkRebase, prepareRebase, pushRebase } from './rebasecheck.mjs';
+import { checkRebase } from './rebasecheck.mjs';
+import { rebaseCommand, REBASE_USAGE } from './rebasecli.mjs';
 import { transcriptFile } from './transcript.mjs';
 import { transcriptMtime } from './robust.mjs';
 import path from 'node:path';
@@ -37,8 +38,9 @@ import { ghRunner } from './github.mjs';
 import { updateIndex } from './issueindex.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { redact } from './redact.mjs';
+import { gitFailure, worktreeForBranch, refuseStuckRebase } from './worktreelookup.mjs';
 import { saveWork } from './savework.mjs';
-import { hasProbe, refreshProvider } from './probe.mjs';
+import { admissionProbe } from './admissionprobe.mjs';
 import { probeNow } from './probenow.mjs';
 import { planningInputs, readRegister } from './planning.mjs';
 import { codexAllowanceProbe } from './allowance.mjs';
@@ -47,6 +49,7 @@ import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome, classifySkips } from './upgrade.mjs';
 import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
+import { activeJobSummary } from './incomplete.mjs';
 const self = fileURLToPath(import.meta.url);
 function args(list) {
   const out = { _: [] };
@@ -118,7 +121,7 @@ function realJobs(root, registry) {
       const dir = path.join(root, 'jobs'); const out = [];
       for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) if (name.endsWith('.json')) {
         const j = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-        if (['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status)) out.push({ id: j.id, provider: j.provider, status: j.status });
+        if (['queued', 'running', 'paused_limit', 'paused_manual'].includes(j.status)) out.push(activeJobSummary(j));
       }
       return out;
     },
@@ -136,16 +139,20 @@ function realJobs(root, registry) {
     rearm: async id => { const job = readJob(root, id); if (job.status !== 'queued' || !(job.nextAttemptAt > Date.now())) return false; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true); return true; },
     // Issue #629: the homeowner's approved stop, the same steps as `ai-supervisor stop ID`
     transcriptMtime: async id => transcriptMtime(transcriptFile(root, id)),   // issue #995: the job's heartbeat
-    stop: async (id, reason = 'manual_stop') => {
+    stop: async (id, reason = 'manual_stop', { by = 'overseer', why = '' } = {}) => {
       const job = readJob(root, id);
       if (terminal.has(job.status)) throw new SupervisorError('terminal job cannot be stopped');
-      stopJob(root, job, { reason, by: 'overseer', signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
+      stopJob(root, job, { reason, by, why, signal: workerSignal(job, { processStart, childAlive }, 'SIGTERM') });
     },
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
-function realGit(repoPath) {
-  const git = (...args) => { const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError(`git ${args[0]} failed`); return r.stdout.trim(); };
+export function realGit(repoPath) {
+  const git = (...args) => {
+    const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 });
+    if (r.status !== 0) throw new SupervisorError(gitFailure(args[0], r));
+    return r.stdout.trim();
+  };
   return {
     // range-diff equality (issue #79); refs are fetched first so both heads and the base are present
     rangeEqual: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return rangeEqual({ repoPath, base, oldHead, newHead }); },
@@ -170,8 +177,9 @@ function realGit(repoPath) {
     },
     // issue #995: remove a worktree whose work is already saved, and its local branch (the work is on a saved/ branch)
     removeWorktree: async ({ worktree, branch }) => { git('worktree', 'remove', '--force', worktree); if (branch) spawnSync('git', ['-C', repoPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 60000 }); },
-    worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
+    worktreeFor: async branch => worktreeForBranch(git('worktree', 'list', '--porcelain'), branch),
     ensureWorktree: async ({ path: wt, branch, base }) => {
+      refuseStuckRebase(git('worktree', 'list', '--porcelain'), branch);
       if (fs.existsSync(wt)) {
         // An existing directory is reused only if it is a linked worktree of THIS repository (resolved from its own absolute path).
         let common = null;
@@ -213,15 +221,11 @@ function probeAllowances(config) {
   }
   return out;
 }
-async function runDueProbes(root, registry, team, found) {
-  const due = team.probesDue(id => hasProbe(registry, id));
-  for (const d of due) {
-    team.noteProbe(d.agent, d);
-    const r = await refreshProvider(registry, d.provider);
-    if (r.record) { found[d.provider] = r.record; storeProbes(root, { [d.provider]: r.record }); }
-    else console.error(`ai-supervisor: allowance probe for ${d.agent} (${d.reason}) produced no reading: ${r.error}`);
-  }
-  return Object.keys(found).length > 0;
+// Issue #110: probes owed before planning (a held agent's stale reading); the hook for the refresh at the admission decision (#1163) goes on the returned team.
+async function runDueProbes(root, registry, team, found, rebuild) {
+  const probe = admissionProbe({ registry, root, found });
+  for (const d of team.probesDue(probe.canProbe)) { team.noteProbe(d.agent, d); await probe.run(d); }
+  return Object.assign(Object.keys(found).length ? await rebuild() : team, { admissionProbe: probe });
 }
 // Enable gate (issue #40): everything a live tick needs that a dry-run plan alone would not prove. Read-only, no model call.
 // Provider preflights run against the configured product repository, never the caller's working directory.
@@ -303,7 +307,7 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
       let team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
       // Issue #110: refresh the allowance of a held agent whose reading is stale (or whose reset time has just passed) before
       // planning, so a fresh reading can release the reviews-only latch in this very tick. A dry run or a hold never spends a run.
-      if (!dryRun && !hold && await runDueProbes(root, registry, team, found)) team = await teamFor(root, registry, config, true, { wrapGh, ghStats });
+      if (!dryRun && !hold) team = await runDueProbes(root, registry, team, found, () => teamFor(root, registry, config, true, { wrapGh, ghStats }));
       phasesBefore['team setup'] = Date.now() - setupSince;
       const report = await team.tick({ dryRun, hold, replay: mode === 'replay', beforeChain: () => wrapper?.endReplay() });
       if (!dryRun) {
@@ -389,19 +393,10 @@ async function main() {
   const registry = path.resolve(a.registry || defaultRegistry);
   registryOption = a.registry ? registry : null;   // only an operator-given registry is passed on (issue #406)
   if (command === 'help') {
-    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  rebase-prepare --worktree DIR --branch B | rebase-push --worktree DIR --branch B --base BASE --old SHA\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
+    console.log('ai-supervisor dry-run|start --spec FILE [--foreground] [--registry FILE]\n  status [ID] | logs ID | pause ID | stop ID | resume ID [--force] | auto-resume ID --no-auto-resume | self-upgrade status|install-now|clear-latch|hand-install SHA | reconcile | preflight | daemon | release ID\n  ' + REBASE_USAGE + '\n  probe AGENT | team reopen ISSUE | team record-writer PR SESSION_ID | team breaker status|resume SCOPE | team tick [--dry-run] | team status [--json] | dashboard serve --host LAN_IPV4 [--port N]\n  reports-dir | report-save NAME [FILE|-]   (the overseer reports folder: print its path; save a report there)');
     return;
   }
-  // issue #158: the guarded steps of a rebase job (the prompt tells the agent to use exactly these)
-  if (command === 'rebase-prepare') {
-    if (!a.worktree || !a.branch) throw new SupervisorError('usage: rebase-prepare --worktree DIR --branch BRANCH');
-    console.log(JSON.stringify(prepareRebase({ worktree: a.worktree, branch: a.branch }), null, 2)); return;
-  }
-  if (command === 'rebase-push') {
-    if (!a.worktree || !a.branch || !a.base || !a.old) throw new SupervisorError('usage: rebase-push --worktree DIR --branch BRANCH --base BASE --old OLD_HEAD');
-    const result = pushRebase({ worktree: a.worktree, branch: a.branch, base: a.base, oldHead: a.old });
-    console.log(JSON.stringify(result, null, 2)); if (!result.pushed) process.exitCode = 3; return;
-  }
+  if (rebaseCommand(command, a)) return;   // issues #158, #1207: the guarded steps of a rebase job
   if (command === 'dry-run' || command === 'start') {
     if (!a.spec) throw new SupervisorError('--spec FILE is required');
     const spec = JSON.parse(fs.readFileSync(a.spec, 'utf8'));
@@ -574,11 +569,11 @@ async function main() {
       try { console.log(JSON.stringify(await (await teamFor(root, registry, config)).startApprovedNow({}))); } finally { release(); }
       return;
     }
-    if (a._[0] === 'accept-split') {   // issue #244: the "Accept split" path of the Needs you item
-      const n = Number(a._[1]);
-      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError('usage: team accept-split ISSUE');
-      const release = await homeownerLock(root, 'accept-split', queueOf(root, 'accept-split', [n]));
-      try { console.log(JSON.stringify({ issue: n, filed: await (await teamFor(root, registry)).acceptSplit(n) })); } finally { release(); }
+    if (['accept-split', 'after-install-done'].includes(a._[0])) {   // issues #244 (Accept split) and #1177 (After install checks made)
+      const cmd = a._[0], n = Number(a._[1]);
+      if (!Number.isSafeInteger(n) || n <= 0) throw new SupervisorError(`usage: team ${cmd} ${cmd === 'accept-split' ? 'ISSUE' : 'PR'}`);
+      const release = await homeownerLock(root, cmd, queueOf(root, cmd, [n]));
+      try { console.log(JSON.stringify(await homeownerCommand(await teamFor(root, registry), cmd, n))); } finally { release(); }
       return;
     }
     if (a._[0] === 'breaker') {   // issue #549: the circuit breaker's status, and the homeowner's resume
@@ -701,12 +696,13 @@ async function main() {
     }
   }
   if (command === 'logs') {
-    const id = a._[0]; readJob(root, id);
+    const id = resolveJobId(root, a._[0] ?? ''); readJob(root, id);   // issue #1160: the short id the dashboard shows
     const file = path.join(root, 'events', `${id}.jsonl`);
     if (fs.existsSync(file)) process.stdout.write(fs.readFileSync(file, 'utf8').split('\n').slice(-51).join('\n'));
     return;
   }
-  const id = a._[0]; if (!id) throw new SupervisorError('job ID is required');
+  if (!a._[0]) throw new SupervisorError('job ID is required');
+  const id = resolveJobId(root, a._[0]);   // issue #1160: pause, stop, resume and release take the short id, as status does
   const job = readJob(root, id);
   if (command === 'pause' || command === 'stop') {
     if (['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) throw new SupervisorError('terminal job cannot be paused or stopped');
@@ -729,4 +725,7 @@ async function main() {
   if (command === 'release') { releaseLeases(root, job); print(job); return; }
   throw new SupervisorError('unknown command');
 }
-main().catch(error => { console.error(`ai-supervisor: ${error instanceof SupervisorError ? error.message : error.message}`); process.exitCode = 2; });
+// A test imports this module for realGit without running the command line (issue #1276).
+if (!process.env.AI_SUPERVISOR_IMPORT_ONLY) {
+  main().catch(error => { console.error(`ai-supervisor: ${error.message}`); process.exitCode = 2; });
+}

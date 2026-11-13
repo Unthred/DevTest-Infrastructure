@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inbox.schema.json",
+  "title": "Read model: inbox (GET /api/v1/inbox?state=&kind=&q=&sort=&limit=&cursor=)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "inbox" },
+    "data": {
+      "type": "object",
+      "required": ["facets", "page", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "facets": {
+          "type": "object",
+          "description": "Counts over the whole Inbox (not just this page), so a client can draw filter buttons with counts.",
+          "required": ["state", "kind"],
+          "additionalProperties": false,
+          "properties": {
+            "state": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "kind": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "page": {
+          "type": "object",
+          "required": ["total", "matched", "returned", "next_cursor"],
+          "additionalProperties": false,
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "matched": { "type": "integer", "minimum": 0 },
+            "returned": { "type": "integer", "minimum": 0 },
+            "next_cursor": { "type": ["string", "null"] }
+          }
+        },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/inbox_item" } }
+      }
+    }
+  },
+  "$defs": {
+    "inbox_item": {
+      "type": "object",
+      "required": ["id", "full_id", "kind", "state", "attention", "title", "why", "will_text", "body_text", "proposed_by", "created_at", "decided_at", "undo_until", "result_text", "reason_code", "reason_text", "target", "job_id", "parked", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/short_id" },
+        "full_id": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "kind": { "type": "string", "enum": ["prompt", "issue_draft", "action", "control", "decision", "host_value"] },
+        "state": { "type": "string", "enum": ["waiting_for_approval", "approved", "running", "done", "failed", "refused", "rejected"] },
+        "attention": { "$ref": "common.schema.json#/$defs/attention" },
+        "title": { "type": "string" },
+        "why": { "type": ["string", "null"] },
+        "will_text": { "type": ["string", "null"], "description": "What approving does, written by the core." },
+        "body_text": { "type": ["string", "null"], "description": "The prompt, issue body or action line, as plain text. Null in list responses unless detail=1." },
+        "proposed_by": { "type": "string", "enum": ["overseer", "foreman", "homeowner"] },
+        "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "decided_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+        "undo_until": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+        "result_text": { "type": ["string", "null"] },
+        "reason_code": { "type": ["string", "null"] },
+        "reason_text": { "type": ["string", "null"] },
+        "target": { "anyOf": [{ "$ref": "common.schema.json#/$defs/ref" }, { "type": "null" }] },
+        "job_id": { "type": ["string", "null"] },
+        "parked": { "type": "boolean" },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+ "role": "devtest",
+ "provider": "claude",
+ "kind": "rebase",
+ "issue": 1180,
+ "postcondition": {
+  "kind": "rebased",
+  "pr": 1180,
+  "baseHead": "e3c13111cf6aa0525904043146edbf2763797f29"
+ },
+ "model": "sonnet",
+ "effort": "low",
+ "branch": "claude/issue-1155-v2-item-25",
+ "id": "60b46719080fc517fd9d569569d1c6cf",
+ "schemaVersion": 1,
+ "status": "blocked",
+ "createdAt": 1794471499798,
+ "updatedAt": 1794477860587,
+ "attempts": 2,
+ "usage": {
+  "inputTokens": 3393004,
+  "outputTokens": 34980,
+  "costUsdEstimate": 1.6130549
+ },
+ "incompleteReason": {
+  "cause": "postcondition_not_met",
+  "detail": "no new head was pushed: the branch is unchanged",
+  "attempt": 2
+ },
+ "lastEvent": "incomplete",
+ "incompleteRetries": 1,
+ "access": "full"
+}

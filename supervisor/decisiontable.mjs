@@ -2,6 +2,7 @@
 // routine controls the card offers. Pure: no I/O. An id that matches no entry is an explicit error card, never a silent default.
 // Controls are limited to actions that already exist (inbox ACTIONS plus park); strong actions belong to later slices and are only named.
 import { redact } from './redact.mjs';
+import { BREAKER_SCOPE } from './inbox.mjs';
 
 // What a control needs from the item, how it is labelled, and what it does in one sentence (the button's tooltip).
 export const CONTROLS = {
@@ -12,7 +13,8 @@ export const CONTROLS = {
   close_job: { label: 'Close job', target: 'job', does: 'Closes this overtaken job after saving its work to a branch on the remote.' },
   reopen: { label: 'Reopen issue', target: 'issue', does: 'Clears the implemented mark so Foreman can start the issue again.' },
   unpark: { label: 'Unpark', target: 'any', does: 'Removes the parked label so the planner may take it again.' },
-  extra_fix_round: { label: 'Allow one more fix round', target: 'pull', input: 'model', does: 'Allows exactly one more fix job on the current head, past the fix limit and the churn stop; the limits apply again after it. Pick the worker or leave it to Foreman (a different one from the last round). Refused without a CHANGES verdict or red CI on the head, or while a fix job runs.' },
+  clear_latch: { label: 'Clear upgrade latch', target: 'latch', does: 'Clears the upgrade latch so the next tick may install merged work. Refused when no latch is set or an install is running.' },
+  extra_fix_round: { label: 'Allow one more fix round', target: 'pull', does: 'Allows exactly one more fix job on the current head, past the fix limit and the churn stop, written by the branch author; the limits apply again after it. Refused without a CHANGES verdict or red CI on the head, or while a fix job runs.' },
   close_superseded: { label: 'Close as superseded', target: 'any', input: 'superseded_by', does: 'Saves the branch under saved/ (pull requests), comments naming the superseding numbers you enter and closes it. Refused when one of them does not exist.' },
   resume_breaker: { label: 'Resume breaker', target: 'scope', does: 'Resumes this tripped circuit breaker scope as `team breaker resume` does, recorded with who and why.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
@@ -39,9 +41,10 @@ const T = {
   'selfcheck-review': { clears: 'clears when a review records a verdict at this head or a new head is pushed', actions: ['new_review_attempt', 'park'] },
   selfcheck: { clears: 'clears when the host condition passes the next check', actions: [] },
   'homeowner-pr': { clears: 'clears when the needs-homeowner label is removed: the holding job is resumed, or a new head moves past it', actions: ['park'] },
+  'after-install': { clears: 'clears when the After install checks of the pull request are marked done', actions: [], later: NO_BUTTON },
   'homeowner-steps': { clears: 'clears when the pull request is merged, closed or its head changes', actions: [], later: NO_BUTTON },
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
-  'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
+  'decision-proposal': { clears: 'clears when the decision (a register entry or its docs/decisions file) is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
   decision: { clears: 'clears when the register entry reads homeowner-approved on main', actions: [], later: NO_BUTTON },
   stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['close_superseded', 'park'] },
   'stall-check-error': { clears: 'clears when the next stalled-PR check succeeds', actions: [] },
@@ -55,7 +58,7 @@ const T = {
   inboxfail: { clears: 'clears three days after it failed, or sooner when the work is done another way', actions: [] },
   inboxrefused: { clears: 'clears three days after the latest refusal; the overseer can propose again', actions: [] },
   'hand-deploy': { clears: 'clears when the installed commit moves past the change', actions: [] },
-  'upgrade-latched': { clears: 'clears when you run the clear-latch command', actions: [] },
+  'upgrade-latched': { clears: 'clears when you clear the latch with the control on this card (or ai-supervisor self-upgrade clear-latch on Tower)', actions: ['clear_latch'] },
   'upgrade-refused': { clears: 'clears when a later main is installed or the refusal no longer applies', actions: [] },
   'dashboard-restart-failed': { clears: 'clears when the dashboard restarts on the installed commit', actions: [] },
   'dashboard-stale': { clears: 'clears when the dashboard is restarted on the installed commit', actions: [] },
@@ -63,6 +66,8 @@ const T = {
   'config-invalid': { clears: 'clears when team.local.json is valid again', actions: [] },
   'migration-failed': { clears: 'clears when the configuration migration succeeds on a later tick', actions: [] },
   'cap-deadlock': { clears: 'clears when one of the open pull requests can move or is closed', actions: [] },
+  'hold-cycle': { clears: 'clears when the prompt that was waiting has run or is undone', actions: [] },
+  'stalled-hold': { clears: 'clears when the hold ends or its control is used', actions: [] },
   'foreman-idle': { clears: 'clears when Foreman starts the waiting work', actions: [] },
   idle: { clears: 'clears when the agent starts the waiting work', actions: [] },
   pause: { clears: 'clears when the agent resumes or the pause is confirmed', actions: [] },
@@ -77,6 +82,7 @@ const T = {
   'assignment-fault': { clears: 'clears when each open issue has an implementer or a stated reason', actions: [] },
   agentfault: { clears: 'clears when Foreman\'s own check of the agent passes', actions: [] },
   dependency: { clears: 'clears when the Depends on line is fixed', actions: [] },
+  resets: { clears: 'clears when you mark the reset used on the Limit resets card, or the advice no longer says to use it', actions: [], later: NO_BUTTON },
   'board-paused': { clears: 'clears when the GitHub rate limit ends', actions: [] },
 };
 
@@ -90,15 +96,16 @@ export const typeOf = id => {
 const clean = (t, n) => redact(String(t ?? '').replace(/\s+/g, ' ').trim(), n);
 // The reason is never empty: the item's explanation and what it says, then a plain fallback naming the type.
 export function reasonOf(item, type) {
-  const parts = [clean(item.text, 300), clean(item.tried, 300)].filter(Boolean);
+  const parts = [clean(item.text, 700), clean(item.tried, 300)].filter(Boolean);
   return parts.length ? parts.join(' ') : `Foreman stopped on a "${type}" item and recorded no further detail.`;
 }
 
 const JOB_ID = /^(?:job|selfcheck-job)-([a-f0-9]{8})/;
 // The target is always taken from the item, never from the request.
 function targetFor(item, spec) {
+  if (spec.target === 'latch') return item.id === 'upgrade-latched' ? 'latch' : null;   // no target: a fixed word
   if (spec.target === 'job') return JOB_ID.exec(String(item.id))?.[1] ?? null;
-  if (spec.target === 'scope') return typeof item.scope === 'string' && /^(?:@global|[A-Za-z0-9_.-]{1,40})$/.test(item.scope) ? item.scope : null;
+  if (spec.target === 'scope') return typeof item.scope === 'string' && BREAKER_SCOPE.test(item.scope) ? item.scope : null;
   const ref = item.ref;
   if (!ref || !Number.isSafeInteger(ref.n) || ref.n < 1) return null;
   if (spec.target === 'any') return String(ref.n);
@@ -115,7 +122,7 @@ function applies(action, target, ctx) {
 
 // Returns { type, reason, clears, controls, later } or { error } for a type with no entry.
 export function decisionCard(item, ctx = {}) {
-  const c = { parked: ctx.parked instanceof Set ? ctx.parked : new Set(), appConfigured: !!ctx.appConfigured, workers: Array.isArray(ctx.workers) ? ctx.workers : [] };
+  const c = { parked: ctx.parked instanceof Set ? ctx.parked : new Set(), appConfigured: !!ctx.appConfigured };
   const type = typeOf(item?.id);
   if (!type) return { type: null, error: `Foreman raised "${clean(item?.id, 60)}", which this dashboard has no decision entry for. This is a bug; nothing can be done from this card.` };
   const entry = T[type];
@@ -124,7 +131,7 @@ export function decisionCard(item, ctx = {}) {
   for (const action of wanted) {
     const spec = CONTROLS[action];
     const target = targetFor(item, spec);
-    if (target && applies(action, target, c)) controls.push({ action, target, label: spec.label, does: spec.does, ...(spec.input ? { input: spec.input } : {}), ...(spec.input === 'model' ? { choices: c.workers } : {}) });
+    if (target && applies(action, target, c)) controls.push({ action, target, label: spec.label, does: spec.does, ...(spec.input ? { input: spec.input } : {}) });
   }
   return { type, reason: reasonOf(item, type), clears: entry.clears, controls, later: entry.later ?? null };
 }

@@ -84,7 +84,7 @@ test('extra_fix_round refusals: no rejection, a fix job running, stale target, u
   await assert.rejects(apply(noVerdict, { action: 'extra_fix_round', target: '41', reason: 'x' }), /no CHANGES verdict or red CI/);
   assert.equal(noVerdict.team.s.extraFix?.[41], undefined, 'nothing recorded');
   await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '99', reason: 'x' }), /not open; nothing changed/);
-  await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', model: 'nobody', reason: 'x' }), /not a configured worker/);
+  await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', model: 'nobody', reason: 'x' }), /cannot write this fix.*D-011/);
   ok.team.s.jobs.aaaaaaaa = { kind: 'fix', pr: 38, agent: 'claude', at: 5 }; ok.jobs.states.aaaaaaaa = { id: 'aaaaaaaa', status: 'running' };
   await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', reason: 'x' }), /fix job running/);
   assert.equal(ok.team.s.extraFix?.[38], undefined);
@@ -92,21 +92,18 @@ test('extra_fix_round refusals: no rejection, a fix job running, stale target, u
   await apply(ok, { action: 'extra_fix_round', target: '38', reason: 'x' });
   await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', reason: 'x' }), /already had its extra fix round/);
 });
-test('extra_fix_round: the worker defaults to a different one from the last round, and can be named', async t => {
+test('extra_fix_round: the branch author writes the round (D-011); another agent is refused and nothing is recorded', async t => {
   const w = churned(t, true);
   w.team.s.jobs.bbbbbbbb = { kind: 'fix', pr: 38, agent: 'codex', at: 5, ingested: true }; w.jobs.states.bbbbbbbb = { id: 'bbbbbbbb', status: 'completed' };
+  await assert.rejects(apply(w, { action: 'extra_fix_round', target: '38', model: 'codex', reason: 'x' }), /codex cannot write this fix: PR #38 is claude's branch.*D-011/);
+  assert.equal(w.team.s.extraFix?.[38], undefined);
   await apply(w, { action: 'extra_fix_round', target: '38', reason: 'x' });
-  assert.equal(w.team.s.extraFix[38].agent, 'claude', 'not the agent that wrote the last round');
+  assert.equal(w.team.s.extraFix[38].agent, 'claude', 'the author, whoever wrote the last round');
   const acts = await fixActs(w);
   assert.equal(acts.length, 1); assert.equal(acts[0].agent, 'claude');
   const named = churned(t);
-  await assert.rejects(apply(named, { action: 'extra_fix_round', target: '38', model: 'codex', reason: 'x' }), /codex may not write this fix: .*no other agent is configured to review/, 'the writer rules still bind a named worker');
-  assert.equal(named.team.s.extraFix?.[38], undefined);
   await apply(named, { action: 'extra_fix_round', target: '38', model: 'claude', reason: 'x' });
   assert.equal(named.team.s.extraFix[38].agent, 'claude');
-  const none = churned(t);
-  await apply(none, { action: 'extra_fix_round', target: '38', reason: 'x' });
-  assert.equal(none.team.s.extraFix[38].agent, 'claude', 'no earlier round: the branch author');
 });
 test('extra_fix_round: a new head ends an unused grant', async t => {
   const w = churned(t);
@@ -178,24 +175,27 @@ test('the inbox accepts the three actions with their optional fields and refuses
 });
 
 test('cards: fix limit, churn and breaker cards offer the new routine controls; a click records an approved action with its input', () => {
-  const ctx = { workers: ['claude', 'codex'], parked: new Set(), appConfigured: false };
+  const ctx = { parked: new Set(), appConfigured: false };
   const fix = decisionCard({ id: 'fixlimit-38', text: 'x', ref: { kind: 'pull', n: 38 } }, ctx);
   assert.deepEqual(fix.controls.map(c => c.action), ['extra_fix_round', 'close_superseded']);
   assert.deepEqual(decisionCard({ id: 'churn-38', text: 'x', ref: { kind: 'pull', n: 38 } }, ctx).controls.map(c => c.action), ['extra_fix_round', 'close_superseded']);
-  assert.deepEqual(decisionCard({ id: 'breaker-halt', text: 'x', scope: 'postcondition_not_met', ref: null }, ctx).controls.map(c => [c.action, c.target]), [['resume_breaker', 'postcondition_not_met']]);
+  assert.deepEqual(decisionCard({ id: 'breaker-halt', text: 'x', scope: 'fix:failed:timeout', ref: null }, ctx).controls.map(c => [c.action, c.target]), [['resume_breaker', 'fix:failed:timeout']], 'a real halt key holds colons');
+  const longKey = 'review:no-verdict:postcondition_not_met';
+  assert.equal(decisionCard({ id: 'breaker-halt', text: 'x', scope: longKey, ref: null }, ctx).controls.length, 1, 'a per-cause key');
+  assert.equal(checkProposal({ kind: 'action', title: 't', action: 'resume_breaker', target: 'fix:failed:timeout', reason: 'r' }).ok, true, 'foreman_propose takes it');
+  assert.equal(validateItem({ kind: 'action', title: 't', action: 'resume_breaker', target: longKey, reason: 'r' }).ok, true);
   assert.deepEqual(decisionCard({ id: 'breaker-halt', text: 'x', ref: null }, ctx).controls, [], 'no scope, no control');
   assert.deepEqual(decisionCard({ id: 'breaker-halt', text: 'x', scope: 'bad scope!', ref: null }, ctx).controls, []);
   const html = decisionHtml({ id: 'fixlimit-38', card: fix });
-  assert.match(html, /<select class="decision-input" name="model"[^>]*><option value="">Foreman chooses<\/option><option>claude<\/option><option>codex<\/option>/);
+  assert.doesNotMatch(html, /<select/, 'the worker is always the branch author, so no choice is offered');
   assert.match(html, /name="superseded_by" required/);
   const view = { panels: { needsYou: [{ id: 'fixlimit-38', card: fix }] } };
   assert.equal(resolveClick(view, { card: 'fixlimit-38', control: 'close_superseded', supersededBy: 'x' }).status, 400);
   assert.equal(resolveClick(view, { card: 'fixlimit-38', control: 'close_superseded', supersededBy: '12; rm' }).status, 400);
-  assert.equal(resolveClick(view, { card: 'fixlimit-38', control: 'extra_fix_round', model: 'gpt' }).status, 409);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine1157-inbox-')); removeLater(dir);
   const sup = resolveClick(view, { card: 'fixlimit-38', control: 'close_superseded', supersededBy: '12, 13' });
   assert.equal(recordClick(dir, sup, 5000).ok, true);
-  const mod = resolveClick(view, { card: 'fixlimit-38', control: 'extra_fix_round', model: 'codex' });
+  const mod = resolveClick(view, { card: 'fixlimit-38', control: 'extra_fix_round' });
   assert.equal(recordClick(dir, mod, 5000).ok, true);
   const sts = allStatuses(dir);
   assert.equal(sts.length, 2); assert.ok(sts.every(s => s.state === 'approved' && s.kind === 'action' && s.click.by === 'homeowner' && s.decidedAt === 5000));
@@ -206,7 +206,7 @@ test('end to end: a clicked extra_fix_round and a clicked close_superseded are a
   const inboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine1157-e2e-')); removeLater(inboxDir);
   const w = churned(t, false, inboxDir);
   w.gh.pulls.push(pull(55, 'codex/issue-2-z', H(6))); w.gh.getPull = async n => ({ number: n });
-  const ctx = { workers: ['claude', 'codex'], parked: new Set(), appConfigured: false };
+  const ctx = { parked: new Set(), appConfigured: false };
   const view = { panels: { needsYou: [{ id: 'fixlimit-38', card: decisionCard({ id: 'fixlimit-38', text: 'x', ref: { kind: 'pull', n: 38 } }, ctx) }, { id: 'fixlimit-55', card: decisionCard({ id: 'fixlimit-55', text: 'x', ref: { kind: 'pull', n: 55 } }, ctx) }] } };
   assert.equal(recordClick(inboxDir, resolveClick(view, { card: 'fixlimit-38', control: 'extra_fix_round' }), 5000).ok, true);
   assert.equal(recordClick(inboxDir, resolveClick(view, { card: 'fixlimit-55', control: 'close_superseded', supersededBy: '38' }), 5000).ok, true);
@@ -228,6 +228,6 @@ test('the published foreman_propose schema lists the routine actions and their f
   const tool = { name: 'foreman_propose', description: 'd', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['reopen'] }, target: { type: 'string', maxLength: 12 } } } };
   const out = withRoutineActions(tool);
   assert.deepEqual(out.inputSchema.properties.action.enum, ['reopen', 'extra_fix_round', 'close_superseded', 'resume_breaker']);
-  assert.equal(out.inputSchema.properties.target.maxLength, 40); assert.ok(out.inputSchema.properties.model); assert.ok(out.inputSchema.properties.superseded_by);
+  assert.equal(out.inputSchema.properties.target.maxLength, 160); assert.ok(out.inputSchema.properties.model); assert.ok(out.inputSchema.properties.superseded_by);
   assert.equal(withRoutineActions({ name: 'other' }).name, 'other');
 });

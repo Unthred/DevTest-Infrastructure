@@ -6,50 +6,75 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
+import { matchesInboxSearch } from './inbox-search.mjs';
+import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
+import { afterFormatRefusal, afterLabels, resolveAfter } from './draft-after.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40, superseded_by: 60, model: 30 };
-const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
+// issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
+const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;   // a halt key is `${type}:${cause}` (breaker.wasteOf), so it holds colons
+const BREAKER_SCOPE_MAX = 160;
+const NUMBER = /^[1-9]\d{0,8}$/, JOB = /^[a-f0-9]{8}$/;
+const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: NUMBER, close_job: JOB, stop_job: JOB, resume_job: JOB, clear_latch: /^latch$/ };
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
 // Issue #1157: the routine actions; extra_fix_round and close_superseded take a PR or issue number, resume_breaker a breaker scope.
-const ROUTINE = { extra_fix_round: ACTIONS.reopen, close_superseded: ACTIONS.reopen, resume_breaker: /^(?:@global|all|[A-Za-z0-9_.-]{1,40})$/ };
-const ALL_ACTIONS = { ...ACTIONS, ...ROUTINE, unpark: ACTIONS.reopen };
+const ROUTINE = { extra_fix_round: NUMBER, close_superseded: NUMBER, resume_breaker: BREAKER_SCOPE };
+const ALL_ACTIONS = { ...ACTIONS, ...ROUTINE, unpark: NUMBER, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
+const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
+const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
-  const a = args && typeof args === 'object' ? args : {};
+  const given = args && typeof args === 'object' ? args : {};
+  // Issue #1160: clear_latch has no target; the stored item carries the fixed word "latch" so every later step sees the same shape.
+  const a = given.kind === 'action' && given.action === 'clear_latch' && given.target === undefined ? { ...given, target: 'latch' } : given;
   const kind = a.kind;
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
+  if (kind === 'issue_draft') allowed.push('after');   // issue #1259: earlier drafts this one is posted after
+  if (kind === 'prompt') allowed.push('effect');   // issue #1238: optional, read_only or report_only
   if (kind === 'action') allowed.push('model', 'superseded_by');   // issue #1157: optional, one action each
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && (k === 'model' || (k === 'superseded_by' && a.action !== 'close_superseded'))) continue;
-    if (v === undefined && k === 'why') continue;
+    const optional = ['why', 'effect', 'after', 'model'].includes(k) || (k === 'superseded_by' && a.action !== 'close_superseded');
+    if (v === undefined && optional) continue;
+    if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
+    if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
-    if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
+    const cap = k === 'target' && a.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : LIMITS[k] ?? 40;   // a halt key is longer than a number
+    if (v.length > cap) return { ok: false, error: `${k} is longer than ${cap} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
     if (redact(v) !== v) return { ok: false, error: `${k} contains secret-shaped text; remove it` };
     if (ATTRIBUTION.some(re => re.test(v))) return { ok: false, error: `${k} contains AI attribution text, which this project does not allow` };
     item[k] = v;
   }
   if (/[\r\n]/.test(item.title)) return { ok: false, error: 'title must be one line' };
+  if (kind === 'issue_draft') {
+    const parsed = parseDependsOn(item.body);
+    if (parsed.malformed) return { ok: false, error: dependencyRefusal(parsed) };
+  }
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, or the 8-character job id' };
+    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, a breaker scope, or an agent name (clear_latch takes none)' };
     if (item.model && item.action !== 'extra_fix_round') return { ok: false, error: 'model is only accepted with extra_fix_round' };
     if (item.superseded_by && item.action !== 'close_superseded') return { ok: false, error: 'superseded_by is only accepted with close_superseded' };
   }
   return { ok: true, item };
 }
 
+// Issue #1259: what an issue draft waits for, as the titles of the drafts named in `after` (Foreman records them while it holds the draft back).
+const waitsForOf = (dir, s, item) => {
+  const labels = s.waitsFor ?? (item?.after && ['pending', 'approved'].includes(s.state) ? afterLabels(dir, item.after) : null);
+  return labels ? { waitsFor: labels } : {};
+};
 export function createInbox({ dir, baseUrl = null }) {
   // Issue #977: the dashboard link for an item, so the overseer can pass it on. Absent when no dashboard address is configured.
   const linkFor = id => { try { return baseUrl ? new URL(`/inbox/${id}`, baseUrl).href : null; } catch { return null; } };
@@ -68,11 +93,12 @@ export function createInbox({ dir, baseUrl = null }) {
     return { pending, unpicked, total: pending + unpicked, limit };
   }
   return {
-    enabled: !!dir,
+    enabled: !!dir, dir,   // dir: read by foreman_inbox (issue #1197)
     propose(args) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);
       if (!c.ok) throw new Error(c.error);
+      if (c.item.after) { const known = resolveAfter(dir, 'none', c.item.after); if (!known.ok) throw new Error(known.reason); }
       const w = waiting(), full = c.item.kind !== 'control' && w.total >= w.limit;   // a stop is never held back by a full queue (issue #1115)
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
@@ -97,7 +123,55 @@ export function createInbox({ dir, baseUrl = null }) {
         if (!fs.existsSync(path.join(items, `${id}.json`))) throw new Error('no such item');
         return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
+      return {
+        id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null,
+        decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null,
+        updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
+        issue: s.issue ?? null, job: s.job ?? null,
+        ...waitsForOf(dir, s, readJson(path.join(items, `${id}.json`))),
+      };
+    },
+    list({ search = '', kind = '', state = '', limit = 50 } = {}) {
+      if (!dir) throw new Error('the inbox is not configured on this server');
+      if (typeof search !== 'string' || search.length > 200) throw new Error('search must be text of at most 200 characters');
+      if (kind && !['prompt', 'issue_draft', 'action', 'host_value'].includes(kind)) throw new Error('kind is not recognised');
+      const states = ['pending', 'approved', 'rejected', 'running', 'posting', 'done', 'failed', 'refused'];
+      if (state && !states.includes(state)) {
+        throw new Error('state is not recognised');
+      }
+      const cap = Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : 50;
+      const records = [];
+      let names = []; try { names = fs.readdirSync(status); } catch { throw new Error('the inbox directory is not available'); }
+      for (const name of names.sort()) {
+        if (!/^([a-f0-9]{32})\.json$/.test(name)) continue;
+        const s = readJson(path.join(status, name));
+        if (!s || !ID_RE.test(s.id || '')) continue;
+        let item = null;
+        const file = path.join(items, name);
+        try { if (fs.lstatSync(file).isFile()) item = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* final items have no item file */ }
+        const record = {
+          id: s.id,
+          shortId: s.id.slice(0, 8),
+          title: item?.title ?? s.title ?? null,
+          body: item?.body ?? null,
+          prompt: item?.prompt ?? null,
+          why: item?.why ?? null,
+          reason: item?.reason ?? s.reason ?? null,
+          target: item?.target ?? null,
+          result: s.result ?? null,
+          kind: item?.kind ?? s.kind ?? null,
+          state: s.state ?? 'unknown',
+          issue: s.issue ?? null,
+          pr: s.pr ?? null,
+          link: linkFor(s.id),
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
+          updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
+        };
+        if ((!state && record.state === 'refused') || (kind && record.kind !== kind) || (state && record.state !== state)) continue;
+        if (matchesInboxSearch(record, search)) records.push(record);
+      }
+      records.sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''));
+      return { search, kind: kind || null, state: state || null, count: records.length, shown: Math.min(records.length, cap), items: records.slice(0, cap) };
     },
   };
 }

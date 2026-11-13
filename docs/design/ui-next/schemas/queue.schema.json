@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "queue.schema.json",
+  "title": "Read model: queue (GET /api/v1/queue)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "queue" },
+    "data": {
+      "type": "object",
+      "required": ["summary", "stages", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "object",
+          "required": ["ranked", "held", "parked", "open_changes", "max_open_changes"],
+          "additionalProperties": false,
+          "properties": {
+            "ranked": { "type": "integer" },
+            "held": { "type": "integer" },
+            "parked": { "type": "integer" },
+            "open_changes": { "type": "integer" },
+            "max_open_changes": { "type": ["integer", "null"] }
+          }
+        },
+        "stages": { "type": "array", "items": { "type": "string" }, "description": "Board columns, in order." },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/queue_item" } }
+      }
+    }
+  },
+  "$defs": {
+    "queue_item": {
+      "type": "object",
+      "required": ["key", "type", "number", "title", "source", "project", "url", "rank", "rank_of", "stage", "condition", "agent", "prerequisites", "estimated_start_at", "change", "parent_key", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string" },
+        "type": { "type": "string", "enum": ["issue", "change"] },
+        "number": { "type": "integer" },
+        "title": { "type": "string" },
+        "source": { "type": "string" },
+        "project": { "type": "string" },
+        "url": { "type": ["string", "null"] },
+        "rank": { "type": ["integer", "null"] },
+        "rank_of": { "type": ["integer", "null"] },
+        "stage": { "type": "string", "enum": ["queued", "implementing", "in_review", "fixing", "rebasing", "ready_to_merge", "merged", "installed", "verified", "parked"] },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "agent": { "type": ["string", "null"] },
+        "prerequisites": {
+          "type": "object",
+          "required": ["line_state", "raw_line", "declared", "open"],
+          "additionalProperties": false,
+          "properties": {
+            "line_state": { "type": "string", "enum": ["none", "ok", "malformed"] },
+            "raw_line": { "type": ["string", "null"] },
+            "declared": { "type": "array", "items": { "type": "integer" } },
+            "open": { "type": "array", "items": { "type": "integer" } }
+          }
+        },
+        "estimated_start_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+        "change": {
+          "type": ["object", "null"],
+          "required": ["review_rounds", "fix_rounds", "fix_limit", "rebase_attempts", "verdict", "checks", "head"],
+          "additionalProperties": false,
+          "properties": {
+            "review_rounds": { "type": "integer" },
+            "fix_rounds": { "type": "integer" },
+            "fix_limit": { "type": ["integer", "null"] },
+            "rebase_attempts": { "type": "integer" },
+            "verdict": { "type": ["string", "null"], "enum": ["pass", "changes", null] },
+            "checks": { "type": "string", "enum": ["passing", "failing", "pending", "unknown"] },
+            "head": { "type": ["string", "null"] }
+          }
+        },
+        "parent_key": { "type": ["string", "null"], "description": "For a change: the work item it implements." },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+      }
+    }
+  }
+}
