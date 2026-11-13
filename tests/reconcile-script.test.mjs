@@ -67,7 +67,10 @@ function cronWorld(t, { nodeBody } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-cron35-'));
   t.after(() => {
     for (const h of holders) { try { process.kill(-h.pid, 'SIGKILL'); } catch { try { h.kill('SIGKILL'); } catch { /* already gone */ } } }
+    spawnSync('pkill', ['-KILL', '-f', root]);   // a straggler still running a script from this folder would recreate it after the removal
     removeFolder(root);
+    spawnSync('sleep', ['0.3']);
+    removeFolder(root);   // second pass: catches anything a straggler wrote while the first removal ran
   });
   const bin = path.join(root, 'fakebin'), plugin = path.join(root, 'plugin');
   fs.mkdirSync(bin); fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
