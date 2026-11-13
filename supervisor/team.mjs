@@ -45,7 +45,7 @@ import { repairInbox } from './inboxrepair.mjs';
 import { orderSensitive, orderGuardReason, checkHolds, holdItems } from './orderguard.mjs';
 import { ORIGIN_PATTERN, applyHostValue, readRefusedOrigins } from './hostvalue.mjs';
 import { raiseGithubAppOffer } from './githubappoffer.mjs';
-import { enforceNoDeferredSteps } from './homeownersteps.mjs';
+import { enforceNoDeferredSteps, syncPendingSteps } from './homeownersteps.mjs';
 import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
@@ -181,8 +181,7 @@ export function latestChecks(rollup) {
   });
   return [...latest.values()];
 }
-// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once.
-// Must equal the --limit of listPulls in github.mjs.
+// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once. Must equal the --limit of listPulls in github.mjs.
 const OPEN_PULLS_CAP = 100;
 // Issue #188: the one-rerun-settled flag from a cancelWatch map, so status views agree with the dispatcher.
 export function retriedIn(cancelWatch, pr, now) { const w = cancelWatch?.[`${pr.number}:${pr.headRefOid}`], at = w?.rerunAt ?? w?.timeoutAt; return !!at && now - at >= RERUN_SETTLE_MS; }
@@ -1530,7 +1529,7 @@ export class Team {
     if (!dryRun) await guard('temp sweep', () => this.sweepTemp(report));
     if (!dryRun && this.root) await guard('disk samples', async () => recordDiskSample({ root: this.root, now: this.clock.now(), volumes: this.c.health?.volumes ?? DEFAULT_VOLUMES }));
     if (!dryRun) await guard('idle check', () => this.trackIdle(actions));
-    if (!dryRun) await guard('self-check', () => this.runSelfCheck(report));
+    if (!dryRun) { await guard('self-check', () => this.runSelfCheck(report)); await guard('homeowner steps', () => syncPendingSteps(this, report)); }   // #1155
     // A pending supervisor upgrade (issue #134): no new job starts, so running jobs drain; merges are not jobs and still go ahead.
     if (hold) {
       report.held = { reason: `upgrade to ${String(hold.to || '').slice(0, 7) || 'a newer supervisor'} pending`, actions: actions.filter(a => a.type !== 'merge').length,

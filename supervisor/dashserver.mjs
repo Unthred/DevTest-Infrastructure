@@ -49,6 +49,7 @@ import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOL
 import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
 import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
+import { stepDoneRoute } from './personclickroutes.mjs';
 import { limitResetsRoute } from './resetswrite.mjs';
 import { withLimitResets } from './resetsentries.mjs';
 import { JOBS_STATIC } from './jobs-page.mjs';
@@ -279,8 +280,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   };
   const decision = decisionRoute({ root, source, cachedView, store, wake, now, guard: { allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, refuseWith, esc } });
   // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
-  // the browser marks a click on a form button as a same-origin user navigation (Sec-Fetch-Site and Sec-Fetch-User), which a script does
-  // not send unless it forges them, and a dashboard that runs under a supervised job refuses. It only leaves a request; the tick clears the halt.
+  // a form button sets Sec-Fetch-Site and Sec-Fetch-User, which a script does not send unless it forges them. It only leaves a request.
   const breakerResume = async (req, res, send) => {
     if (req.headers.host !== allowedHost) return refuseHost(req, send);
     if (!originAllowed(req)) return refuseOrigin(req, send);
@@ -310,11 +310,12 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     store.invalidate();
     return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
   };
+  const stepDone = stepDoneRoute({ root, allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, supervised, peerPid, now, wake, source, store });   // issue #1155
   return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source, store, originAllowed, wake }, async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store });
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume, '/limit-resets': limitResets };
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume, '/limit-resets': limitResets, '/step-done': stepDone };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // Issue #110: "Refresh allowance" runs one minimal probe for a configured agent and stores its record. Same-origin post only; it changes no mode or job.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;

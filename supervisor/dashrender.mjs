@@ -10,7 +10,7 @@ import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
-import { approvals, decisionHtml } from './approvals-ui.mjs';
+import { approvals, decisionHtml, stepDoneForm } from './approvals-ui.mjs';
 import { inboxPage } from './inbox-page.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
@@ -425,7 +425,7 @@ function decidedBlock(view) {
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<h3 class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</h3>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a, `att-${a.id}`)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : ''}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<h3 class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</h3>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a, `att-${a.id}`)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : stepDoneForm(a)}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }

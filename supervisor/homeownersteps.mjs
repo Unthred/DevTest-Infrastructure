@@ -1,6 +1,7 @@
 // Issue #855: a change is done when it is installed and working, so "the homeowner can do X after deploy" is never an accepted resolution.
 // Pure text rules for the pull request description. A step that truly cannot be automated is listed under a "Homeowner steps" heading
 // (and shows in Needs you); anything else that defers work to the homeowner after deploy draws CHANGES.
+export { syncPendingSteps } from './pendingstepssync.mjs';   // issue #1155: the tick pass, re-exported so team.mjs needs no new import line
 export const HEADING = /^#{1,6}\s*homeowner steps\b.*$/im;
 const DEFERRAL = [
   /\b(?:for|to be done by|left (?:to|for)|up to) the homeowner\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployed|deployment|install|installed|merge|merged|release|released)/i,
@@ -30,6 +31,16 @@ const negatedBefore = x => { const h = /\bhomeowner\b/i.exec(x); return NEGATED.
 const defers = l => sentences(l).some(x => DEFERRAL.some(re => re.test(x)) && !negatedBefore(x));
 export const deferredSteps = body => splitSteps(body).rest.split('\n').map(l => l.trim()).filter(l => l && defers(l)).map(l => l.slice(0, 300));
 export const homeownerSteps = body => splitSteps(body).steps.map(s => s.slice(0, 300));
+// Issue #1155: the steps to track for a merged PR. When the section has list items only those are steps; a trailing paragraph (for example the
+// completion states line) is not. A section with no list items keeps its lines.
+export function listedSteps(body) {
+  const text = String(body ?? '').replace(/\r/g, ''), m = HEADING.exec(text);
+  if (!m) return [];
+  const after = text.slice(m.index + m[0].length), next = /^#{1,6}\s/m.exec(after);
+  const lines = (next ? after.slice(0, next.index) : after).split('\n');
+  const items = lines.filter(l => /^\s*(?:[-*]|\d+[.)])\s+\S/.test(l)).map(l => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim());
+  return (items.length ? items : homeownerSteps(body)).filter(l => !/^_?none\.?_?$/i.test(l)).map(s => s.slice(0, 300));
+}
 
 const MARK = 'Deferred homeowner step (issue #855):';
 // Only ever tightens: PASS (or any verdict that did not name it) becomes CHANGES with a blocking finding per deferred step.

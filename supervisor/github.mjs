@@ -1,5 +1,6 @@
 // GitHub access for the dispatcher: the gh CLI with argument arrays (no shell), GitHub API only, no model call.
 import { spawnSync } from 'node:child_process';
+import { mergedReaders } from './githubmerged.mjs';
 import { SupervisorError } from './core.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { citeFacts } from './github-cite-facts.mjs';
@@ -43,8 +44,7 @@ export function githubClient(config, gh = ghRunner()) {
   return { ...citeFacts(repo, gh),
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
-    listMergedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'merged', '--limit', '100', '--json', 'number,title,headRefName,mergedAt,mergeCommit,closingIssuesReferences']),
-    listClosedPulls: async () => json(['pr', 'list', '--repo', repo, '--state', 'closed', '--limit', '100', '--json', 'number,headRefName,mergedAt']),   // closed, not merged (issue #521)
+    ...mergedReaders(json, repo),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.
     listCheckRuns: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); return json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}/check-runs`, '-f', 'per_page=100'])?.check_runs || []; },
