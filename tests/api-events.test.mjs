@@ -224,16 +224,32 @@ test('HEAD answers 200 with no body and holds no stream open', async t => {
 
 test('valid: heartbeats keep to the 15 second limit (here 120 ms) even while other events are sent between them', async t => {
   const { open, root } = await serve(t);
+  // The longest stall of this process's event loop widens the time allowance, so a busy host cannot fail the test (issue #1321).
+  let stall = 0;
+  let last = Date.now();
+  const watch = setInterval(() => { const n = Date.now(); stall = Math.max(stall, n - last); last = n; }, 10);
+  t.after(() => clearInterval(watch));
   const openedAt = Date.now();
   const s = await open();
-  for (let i = 0; i < 12; i++) { append(root, { type: 'model_changed', models: ['meta'] }); await sleep(40); }
-  // Events must not reset the heartbeat timer: several beats arrive during the 480 ms burst itself (about 4 expected).
-  assert.ok(ofType(s, 'heartbeat').length >= 2, 'heartbeats were sent during the burst of other events');
-  await until(() => ofType(s, 'heartbeat').length >= 4);
+  // Order and count: events keep arriving 20 ms apart, well inside the 120 ms limit. If an event reset the heartbeat timer no beat could ever arrive,
+  // so keep sending until three beats have arrived between the events (the long deadline only ends a failing run).
+  const deadline = Date.now() + 20000;
+  let sent = 0;
+  while (ofType(s, 'heartbeat').length < 3 && Date.now() < deadline) {
+    append(root, { type: 'model_changed', models: ['meta'] });
+    sent += 1;
+    await sleep(20);
+  }
+  clearInterval(watch);
+  assert.ok(ofType(s, 'heartbeat').length >= 3, `three heartbeats arrived while ${sent} other events were being sent`);
+  const order = s.events.map(e => e.type);
+  assert.ok(order.indexOf('heartbeat') < order.lastIndexOf('model_changed'), 'a heartbeat arrived before the last of the other events');
   const times = ofType(s, 'heartbeat').map(e => Date.parse(e.data.at));
-  assert.ok(times.length >= 4, 'several heartbeats arrived');
-  const firstBeat = Date.parse(ofType(s, 'heartbeat')[0].data.at) - openedAt;
-  assert.ok(firstBeat <= 300, `first heartbeat ${firstBeat} ms after opening is within the limit`);
-  // 100 ms of allowance for timer jitter under load (gaps of 124 and 188 ms failed in full runs); a missed beat would be 240 ms.
-  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 220, `gap ${times[i] - times[i - 1]} ms is within the limit`);
+  const firstBeat = times[0] - openedAt;
+  assert.ok(firstBeat <= 300 + stall, `first heartbeat ${firstBeat} ms after opening is within the limit (event loop stall ${stall} ms)`);
+  // A missed beat is a gap of 240 ms or more; 60 ms of jitter plus the measured stall is allowed on top of the 120 ms limit.
+  for (let i = 1; i < times.length; i++) {
+    const gap = times[i] - times[i - 1];
+    assert.ok(gap <= 180 + stall, `gap ${gap} ms is within the limit (stall ${stall} ms)`);
+  }
 });
