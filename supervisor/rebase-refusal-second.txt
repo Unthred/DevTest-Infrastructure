@@ -1,0 +1,1 @@
+This is the second refusal for the fetched head {head} of {branch}, so the run ends here; do not push another way and do not retry. Only the homeowner or a reviewer may accept the resolution, by a deliberate push with force-with-lease against that head.

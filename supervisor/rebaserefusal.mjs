@@ -13,10 +13,10 @@ const gitDir = worktree => {
 };
 
 // Best effort: a failure to write the note only means the old retry behaviour.
-export function recordRefusal(worktree, { oldHead, reason, message }) {
+export function recordRefusal(worktree, { oldHead, reason, message, attempts }) {
   try {
     const dir = gitDir(worktree);
-    if (dir) fs.writeFileSync(path.join(dir, FILE), JSON.stringify({ oldHead, reason, message: String(message).slice(0, 600) }), { mode: 0o600 });
+    if (dir) fs.writeFileSync(path.join(dir, FILE), JSON.stringify({ oldHead, reason, message: String(message).slice(0, 600), ...(attempts ? { attempts } : {}) }), { mode: 0o600 });
   } catch { /* see above */ }
 }
 
@@ -24,6 +24,8 @@ export function recordRefusal(worktree, { oldHead, reason, message }) {
 // reported only in chat, so the planner ran the same prompt again and got the same stop. The agent now records it with rebase-stop.
 export const STOPPED = 'agent-stop';
 // The prompt sentence that tells the agent to call rebase-stop.
+export const PUSH_STEP_TEXT = fs.readFileSync(new URL('./rebase-push-step.txt', import.meta.url), 'utf8').trim();
+export const pushStep = base => PUSH_STEP_TEXT.replace('{base}', () => base);
 export const STOP_STEP = fs.readFileSync(new URL('./rebase-stop-step.txt', import.meta.url), 'utf8').trim();
 export function recordStop(worktree, { oldHead, message }) {
   recordRefusal(worktree, { oldHead, reason: STOPPED, message });
