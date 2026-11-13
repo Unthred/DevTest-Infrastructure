@@ -11,6 +11,8 @@ import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
 import { afterFormatRefusal, afterLabels, resolveAfter } from '../foreman-mcp/draft-after.mjs';
+import { checkReplacement, replacesFormatRefusal } from '../foreman-mcp/inbox-replace.mjs';
+import { completeReplacement, withdrawnText } from './inbox-withdraw.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
@@ -39,7 +41,7 @@ const BREAKER_SCOPE_REFUSAL = 'target must be @global, all or a halt key of lett
 const targetMax = raw => (raw.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : 12);
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
-export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
+export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' }, withdraw: { target: 'job' } };   // issue #1316: withdraw takes the 8-character item id
 const TARGET_RE = { latch: /^latch$/, breaker: BREAKER_SCOPE, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
@@ -50,11 +52,12 @@ export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 FIELDS.prompt.push('effect');
 FIELDS.issue_draft.push('after');   // issue #1259
-FIELDS.control = FIELDS.action;
+FIELDS.control = [...FIELDS.action];
+for (const kind of ['prompt', 'issue_draft', 'action']) FIELDS[kind].push('replaces');   // issue #1316: the pending item this one takes the place of
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
 // status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
-const FINAL_NOW = ['done', 'failed', 'refused'];
+const FINAL_NOW = ['done', 'failed', 'refused', 'withdrawn'];
 export const limitsFile = inboxDir => path.join(dirs(inboxDir).status, 'limits.json');
 
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
@@ -100,7 +103,8 @@ export function validateItem(raw, { internal = false } = {}) {
   const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw), key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || k === 'replaces')) continue;
+    if (k === 'replaces') { const bad = replacesFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1316
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
@@ -192,9 +196,21 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
       setStatus(inboxDir, id, { state: 'approved', kind: 'control', hash, createdAt: now, title: v.item.title, control: { action: v.item.action, target: v.item.target, reason: v.item.reason, by: 'overseer' } }, now);
       audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
     }
-    if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
-    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now, title: redactLong(v.item.title, LIMITS.title, ' [cut]').trim() }, now);
-    audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
+    // Issue #1316: a replacement is accepted only when the item it names is still pending; the pending limit then counts the new item and not the old.
+    const refuseNew = reason => { setStatus(inboxDir, id, { state: 'refused', reason, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason }, now); picked++; };
+    const replacing = v.item.replaces ? checkReplacement(inboxDir, v.item) : null;
+    if (replacing && !replacing.ok) { refuseNew(replacing.reason); continue; }
+    const open = pending - (replacing ? 1 : 0);   // the item it replaces leaves the pending list, so the limit counts the new item only
+    if (open >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
+    const title = redactLong(v.item.title, LIMITS.title, ' [cut]').trim();
+    let replaced = null;
+    if (replacing) {
+      replaced = completeReplacement(io, inboxDir, id, title, replacing.old, now);
+      if (!replaced.ok) { refuseNew(replaced.reason); continue; }
+      pending--;
+    }
+    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now, title, ...(replaced ? { replaced: { id: replaced.old.id, title: replaced.old.title, linksMoved: replaced.moved } } : {}) }, now);
+    audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash, ...(replaced ? { replaces: replaced.old.id, replacesTitle: replaced.old.title, title } : {}) }, now);
     pending++; picked++;
   }
   prune(inboxDir, now);
@@ -206,10 +222,23 @@ function sweepFinished(inboxDir, now) {
     try { fs.unlinkSync(path.join(dirs(inboxDir).items, `${s.id}.json`)); } catch { /* none */ }
   }
 }
+// A withdrawn record is the only place a draft's link to its replacement is kept (issue #1316), so it stays while that replacement chain is live.
+function replacementIsLive(byId, status) {
+  const seen = new Set();
+  let cur = status;
+  while (cur && cur.state === 'withdrawn' && cur.replacedBy && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = byId.get(cur.replacedBy);
+  }
+  return Boolean(cur) && cur !== status && LIVE.includes(cur.state);
+}
 function prune(inboxDir, now) {
   const d = dirs(inboxDir);
-  for (const s of allStatuses(inboxDir)) {
+  const all = allStatuses(inboxDir);
+  const byId = new Map(all.map(s => [s.id, s]));
+  for (const s of all) {
     if (LIVE.includes(s.state) || !(now - (s.updatedAt || 0) > LIMITS.keepDays * 86400000)) continue;
+    if (replacementIsLive(byId, s)) continue;
     for (const f of [path.join(d.items, `${s.id}.json`), path.join(d.status, `${s.id}.json`)]) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
   }
 }
@@ -281,6 +310,7 @@ export function decide(inboxDir, id, decision, now = Date.now()) {
   if (!['approve', 'reject'].includes(decision)) return { ok: false, reason: 'unknown decision' };
   const s = statusOf(inboxDir, id);
   if (!s) return { ok: false, reason: 'unknown item' };
+  if (s.state === 'withdrawn') return { ok: false, reason: withdrawnText(s) };   // issue #1316
   if (s.state !== 'pending') return { ok: false, reason: `the item is already ${s.state}` };
   if (decision === 'approve') {
     const l = loadItem(inboxDir, id);
@@ -299,6 +329,7 @@ export function undo(inboxDir, id, now = Date.now()) {
   const r = withLock(inboxDir, id, () => {
     const file = path.join(dirs(inboxDir).status, `${id}.json`), s = readJson(file);
     if (!s) return { ok: false, reason: 'unknown item' };
+    if (s.state === 'withdrawn') return { ok: false, reason: withdrawnText(s) };   // issue #1316
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
     const { decision, decidedAt, title, result, ...rest } = s;
@@ -366,4 +397,6 @@ export function raiseHostValue(inboxDir, { key, value, why }, now = Date.now()) 
   audit(inboxDir, { id, event: 'proposed', kind: 'host_value', hash: hashOf(v.item) }, now);
   return { raised: true, id };
 }
+// Issue #1316: what inbox-withdraw.mjs needs of this module.
+export const io = { statusOf, setStatus, audit, withLock };
 export const marker = id => `<!-- devtest-inbox v1 ${id} -->`;

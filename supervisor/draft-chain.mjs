@@ -13,7 +13,7 @@ export function chainOutcome(ids, statusOf) {
   for (const id of ids) {
     const status = statusOf(id);
     if (!status) return { action: 'fail', reason: `the named draft ${id.slice(0, 8)} is no longer known, so this draft was not posted` };
-    if (['rejected', 'refused', 'failed'].includes(status.state)) return { action: 'fail', reason: `the named draft ${label(id, status)} was ${status.state}, so this draft was not posted` };
+    if (['rejected', 'refused', 'failed', 'withdrawn'].includes(status.state)) return { action: 'fail', reason: `the named draft ${label(id, status)} was ${status.state}, so this draft was not posted` };
     if (status.state === 'done' && Number.isSafeInteger(status.issue) && status.issue > 0) numbers.push(status.issue);
     else waiting.push(label(id, status));
   }

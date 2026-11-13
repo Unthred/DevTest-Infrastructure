@@ -87,6 +87,14 @@ test('valid: the state filter waiting_for_approval returns the 12 waiting items 
   assert.match(raw.text, /"facets"/);
 });
 
+test('valid: a withdrawn record is served as state withdrawn and validates against the closed schema (issue #1316)', async t => {
+  const at = NOW - 60000;
+  const rec = { id: idOf(900), state: 'withdrawn', kind: 'prompt', createdAt: at, updatedAt: at, title: 'Item withdrawn', reason: 'replaced by Item new', replacedBy: idOf(901) };
+  const get = await serve(t, { statuses: [rec] });
+  const data = await ask(get, '');
+  assert.equal(data.items.find(i => i.full_id === rec.id).state, 'withdrawn');
+});
+
 test('valid: q finds the Driftcheck item by title, by 8 character id and by full id, case ignored', async t => {
   const get = await serve(t, { statuses: records() });
   const byTitle = await ask(get, '?q=driftcheck');
