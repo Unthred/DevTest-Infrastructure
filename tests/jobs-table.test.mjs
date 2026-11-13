@@ -322,3 +322,28 @@ test('the CSV of the current table is built from the filtered rows in the addres
   assert.equal(all.trimEnd().split('\r\n').length, 5);
   await assert.rejects(() => currentCsv(async () => ({ ok: false, status: 500 }), '?view=jobs', ['id']), /500/);
 });
+
+test('the Jobs table still resizes a column after a column was hidden (regression: bindResize kept a stale widths object)', () => {
+  const listeners = {};
+  const ths = {};
+  const doc = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    querySelector: sel => {
+      const m = /th\.c-(\w+)$/.exec(sel);
+      if (m) return (ths[m[1]] ??= { style: {}, getBoundingClientRect: () => ({ width: 116 }) });
+      return sel === 'main' ? {} : null;
+    },
+    querySelectorAll: () => [],
+  };
+  const OriginalObserver = globalThis.MutationObserver;
+  globalThis.MutationObserver = class { observe() {} };
+  const store = fakeStore();
+  try { bindJobs({ loc: { search: '?view=jobs&status=blocked' }, store, doc }); } finally { globalThis.MutationObserver = OriginalObserver; }
+  listeners.change({ target: { dataset: { colToggle: 'agent' }, checked: false } });
+  const grip = { dataset: { grip: 'kind' }, closest: () => ths.kind };
+  const press = () => listeners.keydown({ key: 'ArrowRight', target: { closest: () => grip }, preventDefault() {} });
+  press();
+  press();
+  assert.equal(ths.kind.style.width, '148px');
+  assert.equal(JSON.parse(store.m.get(KEYS.cols)).widths.kind, 148);
+});

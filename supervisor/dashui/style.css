@@ -566,3 +566,20 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .overseer-note{white-space:pre-wrap;overflow-wrap:anywhere;max-height:16em;overflow:auto}
 @media(max-width:639px){.jobs-table .col-grip{display:none}}
 .jobs-views label,.jobs-views+.sub,.inbox-search label{display:inline-flex;align-items:center;gap:var(--sp2)}
+/* Issue #1219: Inbox view switch (Cards, Table, Compact list). Only the table scrolls sideways, inside its own container. */
+.iv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin:var(--sp2) 0}
+.iv-switch{display:flex;flex-wrap:wrap;gap:var(--sp1)}.iv-view[aria-pressed=true]{border-color:var(--link);font-weight:600}
+.iv-cols summary{cursor:pointer;min-height:36px;display:flex;align-items:center}.iv-colmenu{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+.iv-tablewrap{overflow-x:auto;max-width:100%}.iv-table{border-collapse:collapse;table-layout:fixed;min-width:640px;width:100%}
+.iv-table th,.iv-table td{border-bottom:1px solid var(--line);padding:var(--sp1) var(--sp2);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.iv-table th{position:relative;white-space:nowrap}.iv-sort{font:inherit;font-weight:600;background:none;border:0;padding:0;color:inherit;cursor:pointer;min-height:24px}
+.iv-grip{position:absolute;top:0;right:0;bottom:0;width:8px;cursor:col-resize;touch-action:none}.iv-grip:hover,.iv-grip:focus-visible{background:var(--line)}
+.iv-compact{list-style:none;margin:0;padding:0;min-width:0}.iv-crow{border-bottom:1px solid var(--line);min-width:0}
+.iv-crow summary{display:flex;align-items:baseline;gap:var(--sp2);min-height:36px;cursor:pointer;min-width:0}
+.iv-crow .iv-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.iv-crow .iv-kind,.iv-crow .iv-age{flex:none;color:var(--mut);font-size:.9em}
+.iv-mark{flex:none;width:1.4em;text-align:center}.iv-crow[data-state=failed] .iv-mark{color:var(--action)}.iv-crow[data-state=done] .iv-mark{color:var(--ok)}
+.iv-more{padding:0 var(--sp2) var(--sp2) 1.8em;overflow-wrap:anywhere}.iv-more p{margin:var(--sp1) 0;white-space:pre-wrap}
+/* The phone rule above turns every table into stacked blocks; the Inbox table stays a real table and scrolls inside .iv-tablewrap. */
+.iv-table{display:table}.iv-table thead{display:table-header-group;position:static}.iv-table tbody{display:table-row-group}
+.iv-table tr{display:table-row;border:0;border-radius:0;margin:0;padding:0;background:none}.iv-table th,.iv-table td{display:table-cell;text-align:left;gap:0}.iv-table td::before{content:none}
+.iv[data-view=cards] .iv-cols,.iv[data-view=compact] .iv-cols{display:none}

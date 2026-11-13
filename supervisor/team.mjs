@@ -107,7 +107,6 @@ export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''
 export const overallCap = L => (Number.isSafeInteger(L?.overall) && L.overall >= 1 ? L.overall : OVERALL_ROLES.reduce((n, r) => n + roleCount(L, r), 0));
 export const touchesPaths = (files, globs) => files.some(f => globs.some(g => globToRegExp(g).test(f)));
 
-
 // The access decision must be homeowner-approved in the register, or the dispatcher refuses to launch anything.
 export function decisionApproved(registerText, id) {
   return entryApproved(String(registerText || ''), id);

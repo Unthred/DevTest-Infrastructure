@@ -9,6 +9,7 @@ import { failCauseLabel } from './jobs-fields.mjs';
 export const JOBS_STATIC = {
   '/static/jobs-table.mjs': ['jobs-table.mjs', 'text/javascript; charset=utf-8'],
   '/static/jobs-ui.mjs': ['jobs-ui.mjs', 'text/javascript; charset=utf-8'],
+  '/static/table-columns.mjs': ['table-columns.mjs', 'text/javascript; charset=utf-8'],
 };
 const href = (f, change) => `/work?${jobsQuery(f, { page: 1, job: '', ...change })}`;
 
