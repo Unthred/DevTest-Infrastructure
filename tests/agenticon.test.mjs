@@ -43,6 +43,12 @@ test('each listed unsafe kind is refused with its own reason', () => {
     ['a url in a presentation attribute', withBody('<path fill="url(https://example.invalid/p)" d="M0 0"/>'), /url points outside/],
     ['a style import', withBody('<style>@import "https://example.invalid/a.css";</style>'), /style element/],
     ['a style url', withBody('<style>path{fill:url(#p)}</style>'), /style element/],
+    ['a prefixed script element', '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:script>alert(1)</s:script></svg>', /script/],
+    ['a prefixed foreignObject', '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:foreignObject/></svg>', /foreignObject/],
+    ['a set that writes an href', withBody('<a><set attributeName="href" to="javascript:alert(1)"/></a>'), /animation/],
+    ['an animate that writes an xlink href', withBody('<use href="#a"><animate attributeName="xlink:href" values="http://e/x.svg#a"/></use>'), /animation/],
+    ['a css escape spelling url in a style element', withBody('<style>path{fill:\\75rl(http://e/x)}</style>'), /style element/],
+    ['an import in a style attribute', withBody('<path style="@import \'http://e\'" d="M0 0"/>'), /style attribute/],
     ['an entity declaration', '<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg"/>', /entity/],
   ];
   for (const [label, text, reason] of cases) {

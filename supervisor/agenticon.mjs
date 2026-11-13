@@ -9,7 +9,13 @@ const HREF = /(?:^|[\s"'/])(?:[\w-]+:)?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]
 const URL_CALL = /url\(\s*(["']?)\s*([^)]*)\)/gi;
 const STYLE_BLOCK = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
 
-const unsafeStyle = css => /@import/i.test(css) || /url\s*\(/i.test(css);
+const ANIMATION = new Set(['set', 'animate']);
+const ANIMATED_REFERENCE = /(?:^|[\s"'/])attributeName\s*=\s*["']?\s*(?:[\w-]+:)?(?:href|on[\w-]*)\b/i;
+const STYLE_ATTRIBUTE = /(?:^|[\s"'/])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+// A backslash in CSS can spell url( or @import another way, so it is refused rather than decoded.
+const unsafeStyle = css => /@import/i.test(css) || /url\s*\(/i.test(css) || css.includes('\\');
+const unsafeStyleAttribute = attrs => [...attrs.matchAll(STYLE_ATTRIBUTE)].some(m => /@import/i.test(m[1] ?? m[2]) || (m[1] ?? m[2]).includes('\\'));
+const localName = tag => tag.slice(tag.lastIndexOf(':') + 1).toLowerCase();
 const nonFragmentHref = attrs => [...attrs.matchAll(HREF)].some(m => !(m[1] ?? m[2] ?? m[3] ?? '').trim().startsWith('#'));
 const nonFragmentUrl = text => [...text.matchAll(URL_CALL)].some(m => !m[2].trim().startsWith('#'));
 
@@ -23,9 +29,11 @@ export function checkIcon(text) {
   const styles = [...text.matchAll(STYLE_BLOCK)];
   if (styles.some(m => unsafeStyle(m[1]))) return { ok: false, reason: 'a style element has an import or a url' };
   for (const [, tag, attrs] of text.matchAll(TAG)) {
-    const lower = tag.toLowerCase();
+    const lower = localName(tag);
     if (lower === 'script') return { ok: false, reason: 'the file has a script element' };
     if (lower === 'foreignobject') return { ok: false, reason: 'the file has a foreignObject element' };
+    if (ANIMATION.has(lower) && ANIMATED_REFERENCE.test(attrs)) return { ok: false, reason: 'an animation changes a reference or an event attribute' };
+    if (unsafeStyleAttribute(attrs)) return { ok: false, reason: 'a style attribute has an import or an escape' };
     if (ON_ATTRIBUTE.test(attrs)) return { ok: false, reason: 'an attribute name begins with on' };
     if (nonFragmentHref(attrs)) return { ok: false, reason: 'a reference points outside the file' };
     if (nonFragmentUrl(attrs)) return { ok: false, reason: 'a url points outside the file' };
