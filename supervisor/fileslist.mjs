@@ -1,6 +1,7 @@
 // Issue #1227: the files an item expects to edit. One standing line, `Files: a/b.mjs, c.md`, defines them alone; without it the paths
 // named in the prose are the fallback, minus those that appear only in a sentence that tells the agent to stay away from them.
 // Pure: no I/O.
+import { pullOverlapText } from './overlaptext.mjs';
 export const MAX_FILES = 8;
 const FILES_LINE = /^[ \t]*Files:[ \t]*(.*?)[ \t]*$/gim;
 const PATH_SHAPE = /^[\w.@+-]+(?:\/[\w.@+-]+)*$/;
@@ -68,4 +69,26 @@ export function filesDrift({ prs, filesOf, issueOfPr, allowed = 2 }) {
 export function filesDriftText({ pr, issue, extra }) {
   const shown = extra.slice(0, 10).join(', ') + (extra.length > 10 ? `, and ${extra.length - 10} more` : '');
   return `PR #${pr} changes ${extra.length} files that the Files: line of issue #${issue} does not list: ${shown}`;
+}
+
+// Does the predicted name `want` (a repository path, or a bare file name from prose) name the changed repository path `path`?
+const namesPath = (want, path) => path === want || path.endsWith(`/${want}`);
+
+// Requirement 3: the hold text when an open pull request of another item edits one of `mine`, else null.
+// prs: the pull requests of the view; filesOf(pr) -> array of paths or null; itemOf(pr) -> the issue number of the pull request.
+export function openPullOverlap({ mine, item, type, prs, filesOf, itemOf }) {
+  for (const open of prs) {
+    const changed = filesOf(open);
+    if (itemOf(open) === item || !Array.isArray(changed) || ['MERGED', 'CLOSED'].includes(String(open.state || '').toUpperCase())) continue;
+    const file = [...mine].find(want => changed.some(c => namesPath(want, c)));
+    if (file) return pullOverlapText({ type, issue: item, file, pr: open.number });
+  }
+  return null;
+}
+
+// Requirement 5: the Needs you items (action severity) for the pull requests that drifted from their item's Files line.
+export function filesDriftItems({ issues, itemOf, ...rest }) {
+  const byNo = new Map(issues.map(i => [i.number, i]));
+  return filesDrift({ ...rest, issueOfPr: pr => byNo.get(itemOf(pr)) }).map(d => ({ id: `files-drift-${d.pr}`, text: filesDriftText(d), ref: { kind: 'pull', n: d.pr }, severity: 'action',
+    action: `Correct the Files: line of issue #${d.issue} (or move the extra files to their own item) so the next item is planned from the real file list.` }));
 }

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Team, expectedFiles } from '../supervisor/team.mjs';
+import { Team, expectedFiles, driftItemsOf } from '../supervisor/team.mjs';
 import { filesLineRefusal, parseFilesLine } from '../supervisor/fileslist.mjs';
 import { validateItem } from '../supervisor/inbox.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
@@ -109,10 +109,20 @@ test('a PR changing 3 unlisted files raises an action item naming them; 2 does n
   const w = world(t, { issues: [issue(30, 'Files: a/one.mjs'), issue(31, 'Files: a/one.mjs'), issue(32, 'prose only a/one.mjs')],
     pulls, files: { 30: ['a/one.mjs', 'x/1.mjs', 'x/2.mjs', 'x/3.mjs'], 31: ['a/one.mjs', 'x/1.mjs', 'x/2.mjs'], 32: ['a/one.mjs', 'x/1.mjs', 'x/2.mjs', 'x/3.mjs'] } });
   await w.team.tick();
-  const items = w.team.filesDriftItems();
+  const items = driftItemsOf(w.team);
   assert.equal(items.length, 1);
   assert.equal(items[0].severity, 'action');
   assert.deepEqual(items[0].ref, { kind: 'pull', n: 30 });
   for (const f of ['x/1.mjs', 'x/2.mjs', 'x/3.mjs']) assert.ok(items[0].text.includes(f), f);
   assert.ok(!items[0].text.includes('a/one.mjs,'), 'the listed file is not reported as extra');
+});
+
+test('a prose item that names a file by its bare name is held by an open PR on that file path', async t => {
+  const held = world(t, { issues: [issue(20, 'Change the dashboard in dashrender.mjs to add buttons.')], pulls: [pr(5)], files: { 5: ['supervisor/dashrender.mjs'] } });
+  await held.team.tick();
+  assert.deepEqual(held.implemented(), [], 'dashrender.mjs matches supervisor/dashrender.mjs');
+  assert.match(JSON.stringify(held.team.held), /issue #20 waits: .*dashrender\.mjs.*open PR #5/);
+  const other = world(t, { issues: [issue(20, 'Change the dashboard in dashrender.mjs to add buttons.')], pulls: [pr(5)], files: { 5: ['supervisor/xdashrender.mjs'] } });
+  await other.team.tick();
+  assert.deepEqual(other.implemented(), [20], 'a different file whose name ends the same does not hold');
 });
