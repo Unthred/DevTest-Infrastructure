@@ -23,7 +23,7 @@ export { pendingProposals };
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
-import { consolidateNeedsYou } from './needsyou.mjs';
+import { consolidateNeedsYou, splitFacts } from './needsyou.mjs';
 import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { faultAttention } from './dashassign.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
@@ -915,7 +915,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     const key = p ? `${n}:${p.headRefOid}` : null;
     return { number: n, name: redact(names.pr(n).text, 300), full: redact(names.pr(n).full, 400), title: names.titleOf(names.issueOfPr(n)?.number) ?? p?.title ?? `PR #${n}`, issue: names.issueOfPr(n)?.number ?? null, agent: p ? agentOfBranch(config, p.headRefName) : (m?.agent || null), status: m ? 'merged' : p ? (p.isDraft ? 'draft' : 'open') : 'closed', stage: m ? stageOf({ merged: true, installed: installedPrs.has(n) || verifiedPrs.has(n), verified: verifiedPrs.has(n) }) : null, awaitingReview: reviewing.has(n),
       checks: p ? checksState(p.statusCheckRollup, retriedIn(state.cancelWatch, p, now)) : null, verdict: key && state.verdicts?.[key] ? state.verdicts[key].verdict : (vs[0]?.verdict ?? null), reviewRounds: vs.length, carry: p && key ? carryRecordOf(state.verdicts?.[key], p) : null,
-      fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n),
+      fixRounds: sumKeys(state.fixAttempts, n), rebaseRounds: sumKeys(state.rebaseAttempts, n), split: splitFacts(state, n),
       // Issue #717: second-opinion reviews (kept apart from verdicts, one per pr:head) and the implement time from the merge log, for foreman_rebase_stats.
       secondOpinionRounds: secondOpinionsOf(state, n).filter(o => !(o && (o.carry || o.carriedFrom))).length, secondOpinionCarried: secondOpinionsOf(state, n).filter(o => o && (o.carry || o.carriedFrom)).length, startedAt: Number.isFinite(m?.startedAt) ? m.startedAt : null,
       openedAt: (() => { const t = Date.parse(p?.createdAt); if (Number.isFinite(t)) return t; const f = costJobs.filter(j => (state.jobs?.[j.id]?.kind || j.kind) === 'implement' && Number.isFinite(j.updatedAt)).map(j => j.updatedAt); return f.length ? Math.min(...f) : null; })(),
@@ -939,7 +939,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const consolidated = consolidateNeedsYou(attention, { cache, pendingSteps: state.pendingSteps, repository: config.repository });
+  const consolidated = consolidateNeedsYou(attention, { cache, state, names, repo, pendingSteps: state.pendingSteps, repository: config.repository });
   const needsYou = consolidated.needsYou.map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);

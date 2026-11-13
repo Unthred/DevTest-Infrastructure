@@ -28,6 +28,8 @@ export const ACTIONS = {
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
   clear_latch: { target: 'latch', noun: 'upgrade', will: 'Clear the upgrade latch so the next tick may install merged work under the usual rules (issue #1160). Refused when no latch is set or an install is running. Nothing is merged or approved.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
+  approve_split: { target: 'pr', noun: 'pull request', will: 'File the split of this parked pull request as the proposed smaller items, once, and link them to it. The pull request stays parked until they have merged (issue #1240).' },
+  reject_split: { target: 'pr', noun: 'pull request', will: 'Reject the proposed split of this parked pull request. Nothing is filed and the pull request stays parked (issue #1240).' },
   release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
 };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
