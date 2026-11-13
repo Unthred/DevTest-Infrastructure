@@ -35,9 +35,10 @@ export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) 
   const counts = countButtons(records);
   const current = parseFilters(query, counts);
   const visible = applyFilters(records, current);
-  const cardsHtml = `<ul class="panel-list">${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join("")}</ul>`;
+  const highlight = text => highlighted(text, current.search, esc);
+  const cardsHtml = `<ul class="panel-list">${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join('')}</ul>`;
   const result = visible.length
-    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? "" : "s"}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight: text => highlighted(text, current.search, esc), cardsHtml })}`
+    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml })}`
     : emptyResult(describeFilters(current), esc);
   const body = chipRows(current, counts, esc) + filterForm(current, esc) + result + decided(view) + '<script type="module" src="/static/inbox-filter.mjs"></script>';
   return {
