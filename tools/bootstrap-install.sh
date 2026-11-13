@@ -3,7 +3,8 @@
 # card, because it is the one part that cannot install itself. Everything else, including the main upgrader, installs through it.
 #   bootstrap-install.sh check   REPO_URL SHA   clean copy from the remote, verify it is exactly SHA, run validator and full tests
 #   bootstrap-install.sh install REPO_URL SHA   the same copy and verification, then the atomic swap (tools/upgrade-supervisor.sh)
-# Exit codes: 0 ok; 2 bad usage; 10 transient (clone, fetch or checkout failed: retry with backoff, never latch the commit);
+# Exit codes: 0 ok (stdout "flaky tests: ..." when a failed first run passed file by file, issue #1322); 2 bad usage;
+#             10 transient (clone, fetch or checkout failed: retry with backoff, never latch the commit);
 #             11 validator or tests failed (blocks only this commit); 12 payload differs from the reviewed commit; 13 swap failed.
 set -uo pipefail
 umask 077
@@ -37,7 +38,30 @@ report_failed_tests() {
       for (k = 1; k <= m && lines < 40; k++) for (j = at[leaf[k]]; j <= NR && lines < 40; j++) { print line[j]; lines++; if (line[j] ~ /^ *\.\.\.$/) break }
     }' "$1" | head -c 3000
 }
-node --test --test-reporter=tap 'tests/**/*.test.mjs' >"$scratch/tests.log" 2>&1 || { report_failed_tests "$scratch/tests.log" >&2; printf '\n' >&2; exit 11; }
+# Repeat of failed files (issue #1322). A failure that goes away when its file runs alone is a fault of the test or the host, not of the
+# commit. Prints the distinct test files (relative to the copy) holding a failure, one per line; prints "?" when a failure names no file.
+failed_files() {
+  awk -v root="$PWD/" '
+    function add(f) { if (index(f, root) == 1) f = substr(f, length(root) + 1); if (!(f in seen)) { seen[f] = 1; order[++n] = f } }
+    /^ *not ok [0-9]+ - / { if (open) bad = 1; open = 1; nm = $0; sub(/^ *not ok [0-9]+ - /, "", nm); next }
+    open && /^ *location: / { f = $0; sub(/^ *location: .?/, "", f); sub(/(:[0-9]+)+.?$/, "", f); add(f); open = 0; next }
+    open && nm ~ /\.test\.mjs$/ { add(nm); open = 0 }
+    END { if (open || bad || n == 0) print "?"; for (i = 1; i <= n; i++) print order[i] }' "$1"
+}
+max_repeat=10
+if ! node --test --test-reporter=tap 'tests/**/*.test.mjs' >"$scratch/tests.log" 2>&1; then
+  mapfile -t failed < <(failed_files "$scratch/tests.log")
+  if [ "${#failed[@]}" -eq 0 ] || [[ " ${failed[*]} " == *" ? "* ]] || [ "${#failed[@]}" -gt "$max_repeat" ]; then
+    report_failed_tests "$scratch/tests.log" >&2; printf '\n' >&2; exit 11   # too many or unplaceable failures: real, no repeat
+  fi
+  : >"$scratch/alone.log"; alone_failed=0
+  for f in "${failed[@]}"; do
+    node --test --test-reporter=tap "$f" >"$scratch/one.log" 2>&1 || { alone_failed=1; cat "$scratch/one.log" >>"$scratch/alone.log"; }
+  done
+  [ "$alone_failed" = 0 ] || { report_failed_tests "$scratch/alone.log" >&2; printf '\n' >&2; exit 11; }
+  # Every failed file passed alone: flaky. The upgrade code reads this stdout block and records the names.
+  report_failed_tests "$scratch/tests.log" | sed '1s/^tests failed:/flaky tests:/'
+fi
 [ "$mode" = install ] || exit 0
 # Re-verify immediately before the swap: the validator and tests must not have changed the copy.
 [ "$(git rev-parse HEAD)" = "$sha" ] && [ -z "$(git status --porcelain)" ] || { printf 'payload differs from the reviewed commit\n' >&2; exit 12; }

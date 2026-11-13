@@ -658,11 +658,11 @@ test('#380: only running or queued jobs hold an upgrade in drain, not a paused_l
 // ---- issue #412: failing tests are named, and a failed test run is repeated once in a fresh copy before the commit is latched
 const failedTests = (over = {}) => ({ ok: false, blocked: true, kind: 'tests', tests: ['alpha works', 'beta works'], excerpt: 'not ok 2 - alpha works\n  error: boom', reason: 'tests failed: alpha works; beta works', ...over });
 
-test('issue #412: pre-check tests fail then pass: the install goes ahead and the flaky test is recorded by name', async t => {
-  const w = world(t); const runs = [failedTests(), { ok: true }];
-  w.deps.preChecks = async sha => { w.log.push(['pre', sha]); return runs.shift(); };
+test('issue #1322: the installer reports a flaky pass: the install goes ahead, one run only, the flaky names are recorded', async t => {
+  const w = world(t); let runs = 0;
+  w.deps.preChecks = async sha => { runs++; w.log.push(['pre', sha]); return { ok: true, flaky: failedTests() }; };
   assert.equal(await w.up.step(), 'upgraded');
-  assert.deepEqual(w.log.map(x => x[0]), ['pre', 'pre', 'alert', 'upgrade', 'dry', 'alert']);
+  assert.equal(runs, 1); assert.deepEqual(w.log.map(x => x[0]), ['pre', 'alert', 'upgrade', 'dry', 'alert']);
   assert.match(w.alerts()[0], /flaky: alpha works; beta works/);
   assert.equal(w.up.s.flaky.sha, TO); assert.deepEqual(w.up.s.flaky.tests, ['alpha works', 'beta works']);
   const rec = w.records(); assert.equal(rec[0].result, 'flaky_test'); assert.deepEqual(rec[0].tests, ['alpha works', 'beta works']);
@@ -670,19 +670,18 @@ test('issue #412: pre-check tests fail then pass: the install goes ahead and the
   assert.equal(w.up.s.prechecked[TO], undefined);
 });
 
-test('issue #412: pre-check tests fail twice: latched as before, names and excerpt in the record, alert and install state', async t => {
+test('issue #1322: pre-check tests refused by the installer: no second whole-suite run here; latched with names and excerpt', async t => {
   const w = world(t); let runs = 0;
   w.deps.preChecks = async () => { runs++; return failedTests(); };
   assert.equal(await w.up.step(), 'precheck-failed');
-  assert.equal(runs, 2);
-  assert.equal(w.up.s.install.result, 'blocked'); assert.equal(w.up.s.install.retried, true);
+  assert.equal(runs, 1); assert.equal(w.up.s.install.result, 'blocked');
   assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.match(w.up.s.install.excerpt, /error: boom/);
-  assert.match(w.alerts()[0], /tests failed: alpha works; beta works/);
-  assert.equal(w.records()[0].reason, 'tests failed: alpha works; beta works');
-  assert.deepEqual(w.records()[0].tests, ['alpha works', 'beta works']); assert.match(w.records()[0].excerpt, /error: boom/); assert.equal(w.records()[0].retried, true);
-  assert.match(w.alerts()[0], /error: boom/);
+  assert.match(w.alerts()[0], /tests failed: alpha works; beta works/); assert.match(w.alerts()[0], /error: boom/);
+  assert.deepEqual(w.records()[0].tests, ['alpha works', 'beta works']); assert.match(w.records()[0].excerpt, /error: boom/);
   w.state.now += PRECHECK_RETRY_MS - 1;
-  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2); assert.equal(w.alerts().length, 1);   // latched inside the delay: no third run
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 1); assert.equal(w.alerts().length, 1);   // latched inside the delay
+  w.state.now += 2;
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(runs, 2);   // the 30 minute retry stays
 });
 
 test('issue #412: tests pass the first time: one run only, nothing recorded as flaky', async t => {
@@ -698,15 +697,16 @@ test('issue #412: a validator failure, a payload refusal and an environmental fa
   }
 });
 
-test('issue #412: install-time tests fail then pass: installs; fail then fail: latched with names; no swap in between', async t => {
-  let w = world(t); let runs = [failedTests(), { ok: true }];
-  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return runs.shift(); };
+test('issue #1322: install-time flaky pass is recorded by name; an install-time test refusal is not repeated here and nothing is swapped', async t => {
+  let w = world(t);
+  w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return { ok: true, flaky: failedTests() }; };
   assert.equal(await w.up.step(), 'upgraded');
-  assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 2); assert.equal(w.up.s.flaky.stage, 'install');
+  assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1); assert.equal(w.up.s.flaky.stage, 'install');
+  assert.deepEqual(w.up.s.flaky.tests, ['alpha works', 'beta works']);
   assert.equal(w.records().find(r => r.result === 'upgraded').checks.installChecks, 'ok-after-retry');
   w = world(t); w.deps.upgrade = async sha => { w.log.push(['upgrade', sha]); return failedTests(); };
-  assert.equal(await w.up.step(), 'precheck-failed');
-  assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 2); assert.equal(w.log.some(x => x[0] === 'rollback' || x[0] === 'dry'), false);
+  assert.equal(await w.up.step(), 'precheck-failed'); assert.equal(w.log.filter(x => x[0] === 'upgrade').length, 1);
+  assert.equal(w.log.some(x => x[0] === 'rollback' || x[0] === 'dry'), false);
   assert.equal(w.up.s.install.result, 'blocked'); assert.deepEqual(w.up.s.install.tests, ['alpha works', 'beta works']); assert.equal(w.up.s.lastUpgradeAt, undefined);
   const rec = w.records().find(r => r.result === 'precheck_failed'); assert.deepEqual(rec.tests, ['alpha works', 'beta works']); assert.match(rec.excerpt, /error: boom/); assert.match(w.alerts()[0], /error: boom/);
 });
