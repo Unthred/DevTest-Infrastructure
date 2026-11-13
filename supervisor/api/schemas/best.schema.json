@@ -1,0 +1,58 @@
+{
+  "$id": "best.schema.json",
+  "title": "The best model: reply of GET /api/v1/best (issue #1325)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "rate": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+    "window": {
+      "type": "object",
+      "required": ["start", "end", "approved", "reviewed", "merged", "rate", "verdicts", "verdicts_per_merged"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "end": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "approved": { "$ref": "#/$defs/count" },
+        "reviewed": { "$ref": "#/$defs/count" },
+        "merged": { "$ref": "#/$defs/count" },
+        "rate": { "$ref": "#/$defs/rate" },
+        "verdicts": { "$ref": "#/$defs/count" },
+        "verdicts_per_merged": { "type": ["number", "null"], "minimum": 0 },
+        "qualifies": { "type": "boolean" }
+      }
+    },
+    "record": { "anyOf": [{ "$ref": "#/$defs/window" }, { "type": "null" }] }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "best" },
+        "data": {
+          "type": "object",
+          "required": ["built", "min_first_reviews", "basis", "records", "current", "distance", "updated_at"],
+          "additionalProperties": false,
+          "properties": {
+            "built": { "type": "boolean" },
+            "min_first_reviews": { "type": "integer", "minimum": 1 },
+            "basis": { "type": "string" },
+            "records": {
+              "type": "object",
+              "required": ["approval", "merges"],
+              "additionalProperties": false,
+              "properties": { "approval": { "$ref": "#/$defs/record" }, "merges": { "$ref": "#/$defs/record" } }
+            },
+            "current": { "allOf": [{ "$ref": "#/$defs/window" }, { "type": "object", "required": ["qualifies"] }] },
+            "distance": {
+              "type": "object",
+              "required": ["approval", "merges"],
+              "additionalProperties": false,
+              "properties": { "approval": { "type": ["number", "null"] }, "merges": { "type": ["integer", "null"] } }
+            },
+            "updated_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] }
+          }
+        }
+      }
+    }
+  ]
+}

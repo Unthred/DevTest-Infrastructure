@@ -267,7 +267,10 @@ function world(t, { prs = [], issues = [] } = {}) {
   const cli = path.join(code, 'supervisor', 'cli.mjs');
   const run = (args = ['reconcile']) => spawnSync(process.execPath, [cli, ...args, '--state-root', root, '--registry', registry], { encoding: 'utf8', timeout: 120000, env });
   const calls = () => (fs.existsSync(path.join(gh, 'calls')) ? fs.readFileSync(path.join(gh, 'calls'), 'utf8').split('\n').filter(Boolean) : []);
-  const issueReads = () => calls().filter(l => /^issue list.*title,state/.test(l)).length, probes = () => calls().filter(l => /^api /.test(l)).length;
+  const issueReads = () => calls().filter(l => /^issue list.*title,state/.test(l)).length;
+  // Issue #1325: the paged reads of verdict comments for the best 24 hours are not conditional probes.
+  const pagedComments = /issues\/comments -f per_page=100 -f page=/;
+  const probes = () => calls().filter(l => /^api /.test(l) && !pagedComments.test(l)).length;
   const set = (f, v) => fs.writeFileSync(path.join(gh, f), v);
   // One pass; `full` says the planner read the issue list, `probes` how many conditional requests the check made.
   const pass = args => { const i0 = issueReads(), p0 = probes(); const r = run(args); return { r, full: issueReads() > i0, probes: probes() - p0, snap: readSnapshots(root).at(-1) }; };
