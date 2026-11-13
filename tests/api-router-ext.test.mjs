@@ -173,12 +173,12 @@ test('meta lists events and commands from route modules and the envelope cursor 
   assert.equal(meta.cursor, 'e-42');
 });
 
-test('regression: GET /api/v1/meta and GET /api/view.json answer as before, and meta is empty without route exports', async t => {
+test('regression: GET /api/v1/meta and GET /api/view.json answer as before, and meta lists only what the route exports', async t => {
   const get = await serve(t, { sample: false });
   const meta = await get('/api/v1/meta');
   assert.equal(meta.status, 200);
   const body = JSON.parse(meta.body);
-  assert.deepEqual([body.data.commands, body.data.events, body.cursor], [[], [], 'e-0']);
+  assert.deepEqual([body.data.commands, body.data.events, body.cursor], [[], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name })), 'e-0']);   // issue #1254: only the events route exports events
   assert.equal((await get('/api/v1/meta', 'POST')).status, 405);
   assert.equal((await get('/api/view.json')).status, 200);
 });

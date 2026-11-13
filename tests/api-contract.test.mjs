@@ -60,7 +60,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
     { name: 'appbar', path: '/api/v1/appbar', schema: 'appbar.schema.json' },   // issue #1253
     { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
   ]);
-  assert.deepEqual([body.data.commands, body.data.events], [[], []]);
+  assert.deepEqual([body.data.commands, body.data.events], [[], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
 });
 
 test('freshness reads the last finished tick: fresh when recent, stale when old, null times stay null', async t => {
