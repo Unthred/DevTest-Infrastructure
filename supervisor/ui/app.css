@@ -23,7 +23,10 @@ button { font: inherit; color: inherit; }
 .appbar::-webkit-scrollbar { display: none; }
 .appbar > * { flex: none; }
 .appbar .spacer { flex: 1 0 0; min-width: 0; }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); cursor: default; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface); cursor: default;
+}
 button.chip { cursor: pointer; }
 button.chip:hover { background: var(--surface-2); }
 button.chip[aria-expanded="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
