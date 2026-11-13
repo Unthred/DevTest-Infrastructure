@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "overview.schema.json",
+  "title": "Read model: overview (GET /api/v1/overview)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "overview" },
+    "data": {
+      "type": "object",
+      "required": ["verdict", "stalls", "needs_you", "faults", "slots", "planned", "pipeline", "headline", "waste", "host"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": { "$ref": "common.schema.json#/$defs/condition" },
+        "stalls": {
+          "type": "array",
+          "description": "Agents idle while work is planned for them. Empty when nothing is stalled.",
+          "items": {
+            "type": "object",
+            "required": ["agent", "idle_seconds", "condition", "planned", "actions"],
+            "additionalProperties": false,
+            "properties": {
+              "agent": { "type": "string" },
+              "idle_seconds": { "type": "integer", "minimum": 0 },
+              "condition": { "$ref": "common.schema.json#/$defs/condition" },
+              "planned": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/planned_action" } },
+              "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+            }
+          }
+        },
+        "needs_you": { "type": "array", "items": { "$ref": "#/$defs/attention_item" } },
+        "faults": { "type": "array", "items": { "$ref": "#/$defs/attention_item" } },
+        "slots": {
+          "type": "object",
+          "required": ["max", "in_use", "by_role"],
+          "additionalProperties": false,
+          "properties": {
+            "max": { "type": "integer" },
+            "in_use": { "type": "integer" },
+            "by_role": {
+              "type": "array",
+              "items": {
+                "type": "object", "required": ["role", "max", "in_use"], "additionalProperties": false,
+                "properties": { "role": { "type": "string" }, "max": { "type": "integer" }, "in_use": { "type": "integer" } }
+              }
+            }
+          }
+        },
+        "planned": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/planned_action" } },
+        "pipeline": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["stage", "count"], "additionalProperties": false,
+            "properties": { "stage": { "type": "string" }, "count": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "headline": {
+          "type": "object",
+          "required": ["window_seconds", "first_pass", "merges", "jobs_run"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": { "type": "integer" },
+            "first_pass": {
+              "type": "object", "required": ["approved", "reviewed", "fraction"], "additionalProperties": false,
+              "properties": { "approved": { "type": "integer" }, "reviewed": { "type": "integer" }, "fraction": { "type": ["number", "null"] } }
+            },
+            "merges": { "type": "integer" },
+            "jobs_run": { "type": ["integer", "null"] }
+          }
+        },
+        "waste": {
+          "type": "object",
+          "required": ["window_seconds", "jobs", "tokens", "top_cause"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": { "type": "integer" },
+            "jobs": { "type": "integer" },
+            "tokens": { "type": "integer" },
+            "top_cause": {
+              "type": ["object", "null"],
+              "required": ["code", "text", "fraction", "tokens", "changes"],
+              "additionalProperties": false,
+              "properties": {
+                "code": { "type": "string" }, "text": { "type": "string" }, "fraction": { "type": "number" },
+                "tokens": { "type": "integer" }, "changes": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "host": { "$ref": "common.schema.json#/$defs/condition" }
+      }
+    }
+  },
+  "$defs": {
+    "attention_item": {
+      "type": "object",
+      "description": "One thing that waits for the homeowner (needs_you) or is wrong (faults). An item whose attention is homeowner must carry at least one enabled action or a step_text; the contract tests check this.",
+      "required": ["id", "kind", "title", "condition", "target", "actions", "step_text", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string", "enum": ["decision", "inbox_item", "homeowner_step", "stuck_change", "held_item", "idle_agent", "waste", "stale_reading", "install", "breaker", "host", "other"] },
+        "title": { "type": "string" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "target": { "anyOf": [{ "$ref": "common.schema.json#/$defs/ref" }, { "type": "null" }] },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } },
+        "step_text": { "type": ["string", "null"], "description": "For a homeowner step: what only he can do (credentials, approval, physical action)." },
+        "count": { "type": "integer", "minimum": 1 },
+        "list": {
+          "type": ["object", "null"],
+          "description": "The list behind this item or its count: a read model name and the filter to open it with.",
+          "required": ["model", "filter"],
+          "additionalProperties": false,
+          "properties": { "model": { "type": "string" }, "filter": { "type": "object" } }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "appbar.schema.json",
+  "title": "Read model: appbar (GET /api/v1/appbar)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "appbar" },
+    "data": {
+      "type": "object",
+      "required": ["system", "counts", "slots", "tick", "agents", "breaker", "direct_control", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "system": { "$ref": "common.schema.json#/$defs/condition" },
+        "counts": {
+          "type": "object",
+          "required": ["needs_you", "faults", "stalled_agents", "planned_held", "running_jobs", "inbox_waiting"],
+          "additionalProperties": false,
+          "properties": {
+            "needs_you": { "type": "integer", "minimum": 0 },
+            "faults": { "type": "integer", "minimum": 0 },
+            "stalled_agents": { "type": "integer", "minimum": 0 },
+            "planned_held": { "type": "integer", "minimum": 0 },
+            "running_jobs": { "type": "integer", "minimum": 0 },
+            "inbox_waiting": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "slots": {
+          "type": "object", "required": ["max", "in_use"], "additionalProperties": false,
+          "properties": { "max": { "type": "integer", "minimum": 0 }, "in_use": { "type": "integer", "minimum": 0 } }
+        },
+        "tick": {
+          "type": "object",
+          "required": ["state", "last_at", "next_at", "interval_seconds"],
+          "additionalProperties": false,
+          "properties": {
+            "state": { "type": "string", "enum": ["scheduled", "starting", "running", "overdue", "off", "unknown"] },
+            "last_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+            "next_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+            "interval_seconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "agents": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/agent_brief" } },
+        "breaker": { "$ref": "common.schema.json#/$defs/condition" },
+        "direct_control": {
+          "type": "object",
+          "required": ["enabled", "changed_at", "changed_by"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "changed_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+            "changed_by": { "type": ["string", "null"] }
+          }
+        },
+        "version": {
+          "type": "object",
+          "required": ["installed", "running", "main", "behind_commits", "latched"],
+          "additionalProperties": false,
+          "properties": {
+            "installed": { "type": ["string", "null"] },
+            "running": { "type": ["string", "null"] },
+            "main": { "type": ["string", "null"] },
+            "behind_commits": { "type": ["integer", "null"] },
+            "latched": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

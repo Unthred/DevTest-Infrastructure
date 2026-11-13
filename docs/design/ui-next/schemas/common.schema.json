@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "title": "Foreman contract v1: shared definitions",
+  "$defs": {
+    "timestamp": { "type": "string", "format": "date-time", "description": "UTC, ISO 8601, always ending in Z. The client converts to its own zone." },
+    "nullable_timestamp": { "type": ["string", "null"], "format": "date-time" },
+    "short_id": { "type": "string", "pattern": "^[a-f0-9]{8}$", "description": "The 8 character id shown to people. Unique within its kind; the full id is given beside it." },
+    "attention": {
+      "type": "string",
+      "enum": ["none", "homeowner", "fault", "unknown"],
+      "description": "Who or what this state waits for. none: normal. homeowner: waits for a person, by design. fault: something is wrong and no person was asked. unknown: the core cannot tell (stale or missing data). A client must never draw unknown as fine and must never mix homeowner with fault."
+    },
+    "condition": {
+      "type": "object",
+      "description": "The one status language. state is a named value from the vocabulary in the meta model; reason_code is stable and machine readable; reason_text is the sentence only the core can write.",
+      "required": ["state", "attention", "reason_code", "reason_text", "since"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "attention": { "$ref": "#/$defs/attention" },
+        "reason_code": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]*$" },
+        "reason_text": { "type": ["string", "null"] },
+        "since": { "$ref": "#/$defs/nullable_timestamp" }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "description": "A pointer to any entity, general enough for any source and project.",
+      "required": ["kind", "key", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["work_item", "change", "job", "inbox_item", "agent", "decision", "incident", "report", "install"] },
+        "key": { "type": "string", "description": "Stable key used in API paths, for example issue-1169, change-1192, 60b46719." },
+        "label": { "type": "string", "description": "Short name as the source shows it, for example #1169 or PR #1192." },
+        "title": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"], "description": "The source adapter, for example github or azure_devops." },
+        "project": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] }
+      }
+    },
+    "action": {
+      "type": "object",
+      "description": "A control that applies to an entity right now. The client draws one button per action. A disabled action carries the refusal the command would return, so a button is never a dead end.",
+      "required": ["command", "input", "enabled", "tier", "reversible"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string", "pattern": "^[a-z_]+\\.[a-z_]+$" },
+        "input": { "type": "object", "description": "Inputs already known for this entity; the client adds the rest (for example a reason)." },
+        "enabled": { "type": "boolean" },
+        "tier": { "type": "string", "enum": ["direct", "approval", "person_only"], "description": "direct: the overseer may run it while direct control is on. approval: the overseer may only propose it; the homeowner runs it. person_only: needs a person's click." },
+        "reversible": { "type": "boolean" },
+        "primary": { "type": "boolean" },
+        "refusal_code": { "type": ["string", "null"] },
+        "refusal_text": { "type": ["string", "null"] }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "required": ["state", "tick_at", "age_seconds", "stale_after_seconds", "reason_code", "reason_text"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["fresh", "stale", "unknown"] },
+        "tick_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "age_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "stale_after_seconds": { "type": "integer", "minimum": 1 },
+        "reason_code": { "type": ["string", "null"] },
+        "reason_text": { "type": ["string", "null"] }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": ["contract", "model", "generated_at", "freshness", "cursor", "data"],
+      "properties": {
+        "contract": { "type": "string", "pattern": "^1\\.[0-9]+$" },
+        "model": { "type": "string" },
+        "generated_at": { "$ref": "#/$defs/timestamp" },
+        "freshness": { "$ref": "#/$defs/freshness" },
+        "cursor": { "type": "string", "description": "The id of the last event already reflected in this model. A client that opens the event stream with this as Last-Event-ID misses nothing." },
+        "data": { "type": "object" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "description": "One allowance window. An expired or unread window is unknown, never zero.",
+      "required": ["state", "used_fraction", "level", "resets_at", "window_seconds", "reason_code", "reason_text"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["known", "unknown"] },
+        "used_fraction": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "level": { "type": ["string", "null"], "enum": ["normal", "high", "near", null] },
+        "resets_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "window_seconds": { "type": "integer", "minimum": 1 },
+        "reason_code": { "type": ["string", "null"] },
+        "reason_text": { "type": ["string", "null"] }
+      }
+    },
+    "reading": {
+      "type": "object",
+      "required": ["read_at", "age_seconds", "stale", "max_age_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "read_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "age_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "stale": { "type": "boolean" },
+        "max_age_seconds": { "type": ["integer", "null"] }
+      }
+    },
+    "agent_brief": {
+      "type": "object",
+      "required": ["id", "display_name", "provider", "roles", "condition", "weekly", "short", "reading", "running_jobs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "provider": { "type": "string" },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "condition": { "$ref": "#/$defs/condition" },
+        "weekly": { "$ref": "#/$defs/window" },
+        "short": { "$ref": "#/$defs/window" },
+        "reading": { "$ref": "#/$defs/reading" },
+        "running_jobs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tokens": {
+      "type": ["object", "null"],
+      "required": ["input", "output", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "planned_action": {
+      "type": "object",
+      "required": ["type", "agent", "target", "condition"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "description": "implement, continue, review, fix, cifix, rebase, merge, inbox." },
+        "agent": { "type": ["string", "null"] },
+        "target": { "$ref": "#/$defs/ref" },
+        "condition": { "$ref": "#/$defs/condition" },
+        "held_by": { "type": ["object", "null"], "description": "What holds it, when the core knows: another entity." }
+      }
+    }
+  }
+}

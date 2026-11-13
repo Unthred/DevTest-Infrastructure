@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "event.schema.json",
+  "title": "One event on the change stream (GET /api/v1/events, text/event-stream). The SSE id is the event id; the SSE event name is type; the SSE data is this object.",
+  "type": "object",
+  "required": ["id", "type", "at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "description": "Monotonic, for example e-000413. Sent as Last-Event-ID on reconnect." },
+    "type": {
+      "type": "string",
+      "enum": ["hello", "heartbeat", "model_changed", "entity_changed", "command_applied", "resync_required", "freshness_changed"]
+    },
+    "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "models": { "type": "array", "items": { "type": "string" }, "description": "model_changed: which read models to refetch (or patch from entity)." },
+    "entity": {
+      "type": ["object", "null"],
+      "description": "entity_changed: the entity in its read model shape, so a list row is replaced in place.",
+      "required": ["ref", "condition"],
+      "properties": {
+        "ref": { "$ref": "common.schema.json#/$defs/ref" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" }
+      }
+    },
+    "audit_id": { "type": ["string", "null"], "description": "command_applied: the audit entry." },
+    "actor": { "type": ["string", "null"] },
+    "command": { "type": ["string", "null"] },
+    "freshness": { "anyOf": [{ "$ref": "common.schema.json#/$defs/freshness" }, { "type": "null" }] },
+    "reason_code": { "type": ["string", "null"], "description": "resync_required: why, for example cursor_too_old." },
+    "contract": { "type": ["string", "null"], "description": "hello: the contract version being served." }
+  }
+}

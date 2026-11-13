@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "command-result.schema.json",
+  "title": "Command result (the reply to POST /api/v1/commands/{name}); HTTP 200 for applied or no_change, 409 for refused, 400 for a malformed request, 403 for an actor that may not send it",
+  "type": "object",
+  "required": ["ok", "command", "outcome", "audit_id", "refusal_code", "refusal_text", "result", "undo", "cursor"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "type": "boolean" },
+    "command": { "type": "string" },
+    "outcome": { "type": "string", "enum": ["applied", "accepted", "no_change", "refused"], "description": "applied: done now. accepted: recorded, the next tick applies it (the result says so). no_change: already in that state. refused: nothing changed." },
+    "audit_id": { "type": ["string", "null"] },
+    "refusal_code": { "type": ["string", "null"] },
+    "refusal_text": { "type": ["string", "null"] },
+    "result": {
+      "type": ["object", "null"],
+      "description": "The resulting state of the entity, in the same shape the read models use, so the client updates in place without a refetch.",
+      "properties": {
+        "target": { "$ref": "common.schema.json#/$defs/ref" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" }
+      }
+    },
+    "undo": {
+      "type": ["object", "null"],
+      "required": ["command", "input", "until"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "input": { "type": "object" },
+        "until": { "$ref": "common.schema.json#/$defs/nullable_timestamp" }
+      }
+    },
+    "cursor": { "type": ["string", "null"] }
+  }
+}

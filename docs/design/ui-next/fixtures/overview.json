@@ -1,0 +1,269 @@
+{
+  "contract": "1.0",
+  "model": "overview",
+  "generated_at": "2026-11-12T22:04:00Z",
+  "freshness": { "state": "fresh", "tick_at": "2026-11-12T22:00:07Z", "age_seconds": 233, "stale_after_seconds": 600, "reason_code": null, "reason_text": null },
+  "cursor": "e-000412",
+  "data": {
+    "verdict": {
+      "state": "stalled",
+      "attention": "fault",
+      "reason_code": "idle_with_planned_work",
+      "reason_text": "All 4 slots are idle and 4 planned actions are held. Nothing has started for 3 hours 23 minutes.",
+      "since": "2026-11-12T18:41:00Z"
+    },
+    "stalls": [
+      {
+        "agent": "claude",
+        "idle_seconds": 12180,
+        "condition": {
+          "state": "idle",
+          "attention": "fault",
+          "reason_code": "unrecorded",
+          "reason_text": "Foreman planned 2 actions for this agent and started neither. No hold reason was recorded.",
+          "since": "2026-11-12T18:41:00Z"
+        },
+        "planned": [
+          {
+            "type": "fix", "agent": "claude",
+            "target": { "kind": "change", "key": "change-1180", "label": "PR #1180", "title": "Keep homeowner steps of merged PRs in Needs you until done", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/pull/1180" },
+            "condition": { "state": "held", "attention": "fault", "reason_code": "unrecorded", "reason_text": "No reason recorded.", "since": "2026-11-12T18:41:00Z" },
+            "held_by": null
+          },
+          {
+            "type": "fix", "agent": "claude",
+            "target": { "kind": "change", "key": "change-1175", "label": "PR #1175", "title": "Diagnose and resolve failed Inbox jobs instead of letting them expire (#1154)", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/pull/1175" },
+            "condition": { "state": "held", "attention": "fault", "reason_code": "unrecorded", "reason_text": "No reason recorded.", "since": "2026-11-12T18:41:00Z" },
+            "held_by": null
+          }
+        ],
+        "actions": [
+          { "command": "job.start", "input": { "type": "fix", "target": "change-1180", "agent": "claude" }, "enabled": true, "tier": "direct", "reversible": true, "primary": true },
+          { "command": "job.start", "input": { "type": "fix", "target": "change-1175", "agent": "claude" }, "enabled": true, "tier": "direct", "reversible": true }
+        ]
+      },
+      {
+        "agent": "codex",
+        "idle_seconds": 11520,
+        "condition": {
+          "state": "paused",
+          "attention": "fault",
+          "reason_code": "file_overlap_hold",
+          "reason_text": "Both planned actions are held by a file overlap hold: they would edit files that the planned fixes of PR #1180 and PR #1175 claim, and those fixes have not started.",
+          "since": "2026-11-12T18:52:00Z"
+        },
+        "planned": [
+          {
+            "type": "rebase", "agent": "codex",
+            "target": { "kind": "change", "key": "change-1139", "label": "PR #1139", "title": "Address supervisor review follow-ups (#1127)", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/pull/1139" },
+            "condition": { "state": "held", "attention": "none", "reason_code": "file_overlap_hold", "reason_text": "Held by a file overlap hold.", "since": "2026-11-12T18:52:00Z" },
+            "held_by": { "kind": "change", "key": "change-1180", "label": "PR #1180" }
+          },
+          {
+            "type": "fix", "agent": "codex",
+            "target": { "kind": "change", "key": "change-1142", "label": "PR #1142", "title": "Address review follow-ups for issue #1133", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/pull/1142" },
+            "condition": { "state": "held", "attention": "none", "reason_code": "file_overlap_hold", "reason_text": "Held by a file overlap hold.", "since": "2026-11-12T18:52:00Z" },
+            "held_by": { "kind": "change", "key": "change-1175", "label": "PR #1175" }
+          }
+        ],
+        "actions": [
+          { "command": "agent.refresh_allowance", "input": { "agent": "codex" }, "enabled": true, "tier": "direct", "reversible": false }
+        ]
+      }
+    ],
+    "needs_you": [
+      {
+        "id": "decision-prop-1192",
+        "kind": "decision",
+        "title": "Decision proposal in PR #1192 awaits your approval",
+        "condition": { "state": "waiting_for_homeowner", "attention": "homeowner", "reason_code": "decision_proposal_pending", "reason_text": "PR #1192 adds a decision register entry. It cannot merge until you approve or reject the proposal.", "since": "2026-11-12T16:20:00Z" },
+        "target": { "kind": "decision", "key": "prop-direct-queue-control", "label": "Proposal: direct queue control", "title": "The overseer may change the queue directly once a change has been discussed" },
+        "actions": [
+          { "command": "decision.approve", "input": { "key": "prop-direct-queue-control" }, "enabled": true, "tier": "person_only", "reversible": false, "primary": true },
+          { "command": "decision.reject", "input": { "key": "prop-direct-queue-control" }, "enabled": true, "tier": "person_only", "reversible": false }
+        ],
+        "step_text": null,
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "fixlimit-1192",
+        "kind": "stuck_change",
+        "title": "PR #1192 reached the fix limit (3) after 4 review rounds",
+        "condition": { "state": "stuck_at_fix_limit", "attention": "homeowner", "reason_code": "fix_limit_reached", "reason_text": "1 blocking finding remains and it is about the description only: the description gives a wrong line count. The rebase is also capped after 2 attempts with the same cause.", "since": "2026-11-12T17:05:00Z" },
+        "target": { "kind": "change", "key": "change-1192", "label": "PR #1192", "title": "Overseer controls the queue directly over the MCP (#1164)", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/pull/1192" },
+        "actions": [
+          { "command": "work_item.fix_description", "input": { "key": "change-1192" }, "enabled": true, "tier": "approval", "reversible": false, "primary": true },
+          { "command": "work_item.accept_split", "input": { "key": "change-1192" }, "enabled": false, "tier": "approval", "reversible": false, "refusal_code": "no_split_proposed", "refusal_text": "No split has been proposed for this PR yet." },
+          { "command": "work_item.allow_fix_round", "input": { "key": "change-1192" }, "enabled": true, "tier": "approval", "reversible": false },
+          { "command": "work_item.clear_retry_cap", "input": { "key": "change-1192" }, "enabled": true, "tier": "approval", "reversible": false },
+          { "command": "work_item.park", "input": { "key": "change-1192" }, "enabled": true, "tier": "direct", "reversible": true }
+        ],
+        "step_text": null,
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "inbox-waiting",
+        "kind": "inbox_item",
+        "title": "12 Inbox items wait for approval",
+        "condition": { "state": "waiting_for_homeowner", "attention": "homeowner", "reason_code": "inbox_waiting_for_approval", "reason_text": "Overseer proposals that run only after you approve them.", "since": "2026-11-12T14:30:00Z" },
+        "target": null,
+        "actions": [],
+        "step_text": null,
+        "count": 12,
+        "list": { "model": "inbox", "filter": { "state": "waiting_for_approval" } }
+      },
+      {
+        "id": "step-issue-1154",
+        "kind": "homeowner_step",
+        "title": "#1154 V2 item 24 Failed Inbox jobs are diagnosed and resolved never left to expire Inboxfix",
+        "condition": { "state": "waiting_for_homeowner", "attention": "homeowner", "reason_code": "needs_homeowner_label", "reason_text": "The issue is labelled needs-homeowner.", "since": null },
+        "target": { "kind": "work_item", "key": "issue-1154", "label": "#1154", "title": "V2 item 24 Failed Inbox jobs are diagnosed and resolved never left to expire Inboxfix", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/issues/1154" },
+        "actions": [
+          { "command": "homeowner_step.mark_done", "input": { "id": "step-issue-1154" }, "enabled": true, "tier": "person_only", "reversible": true }
+        ],
+        "step_text": "Open the issue and answer the question it states.",
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "step-issue-1158",
+        "kind": "homeowner_step",
+        "title": "#1158 V2 item 28 Strong decision actions merge approve and review verdict that really apply Cards",
+        "condition": { "state": "waiting_for_homeowner", "attention": "homeowner", "reason_code": "needs_homeowner_label", "reason_text": "The issue is labelled needs-homeowner.", "since": null },
+        "target": { "kind": "work_item", "key": "issue-1158", "label": "#1158", "title": "V2 item 28 Strong decision actions merge approve and review verdict that really apply Cards", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/issues/1158" },
+        "actions": [
+          { "command": "homeowner_step.mark_done", "input": { "id": "step-issue-1158" }, "enabled": true, "tier": "person_only", "reversible": true }
+        ],
+        "step_text": "Open the issue and answer the question it states.",
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "step-issue-1162",
+        "kind": "homeowner_step",
+        "title": "#1162 V2 item 29 Limit resets in the allowance with advice on when to use them Resets",
+        "condition": { "state": "waiting_for_homeowner", "attention": "homeowner", "reason_code": "needs_homeowner_label", "reason_text": "The issue is labelled needs-homeowner.", "since": null },
+        "target": { "kind": "work_item", "key": "issue-1162", "label": "#1162", "title": "V2 item 29 Limit resets in the allowance with advice on when to use them Resets", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/issues/1162" },
+        "actions": [
+          { "command": "homeowner_step.mark_done", "input": { "id": "step-issue-1162" }, "enabled": true, "tier": "person_only", "reversible": true }
+        ],
+        "step_text": "Open the issue and answer the question it states.",
+        "count": 1,
+        "list": null
+      }
+    ],
+    "faults": [
+      {
+        "id": "held-malformed-1185",
+        "kind": "held_item",
+        "title": "#1185 is held: its prerequisite line is malformed",
+        "condition": { "state": "held", "attention": "fault", "reason_code": "malformed_prerequisite_line", "reason_text": "The prerequisite declaration is inside a sentence, so Foreman cannot read it and will never pick the issue up.", "since": "2026-11-12T15:10:00Z" },
+        "target": { "kind": "work_item", "key": "issue-1185", "label": "#1185", "title": "V2 item 36 Decision card actions apply in place with no page reload or lost view Inplace", "source": "github", "project": "Unthred/devtest-infrastructure", "url": "https://github.com/Unthred/devtest-infrastructure/issues/1185" },
+        "actions": [
+          { "command": "work_item.edit_prerequisites", "input": { "key": "issue-1185", "prerequisites": [1156] }, "enabled": true, "tier": "direct", "reversible": true, "primary": true },
+          { "command": "work_item.park", "input": { "key": "issue-1185" }, "enabled": true, "tier": "direct", "reversible": true }
+        ],
+        "step_text": null,
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "waste-rebase-lost-changes",
+        "kind": "waste",
+        "title": "Rebase jobs wasted 67.1M tokens in 7 days on one refusal",
+        "condition": { "state": "wasting", "attention": "fault", "reason_code": "rebase_refused_lost_changes", "reason_text": "78% of the tokens wasted by 59 rebase jobs came from one refusal (lost changes) across 28 PRs.", "since": "2026-11-05T22:04:00Z" },
+        "target": null,
+        "actions": [],
+        "step_text": null,
+        "count": 1,
+        "list": { "model": "jobs", "filter": { "kind": "rebase", "cause": "rebase_refused_lost_changes" } }
+      },
+      {
+        "id": "stale-reading-codex",
+        "kind": "stale_reading",
+        "title": "codex allowance reading is 9 hours old",
+        "condition": { "state": "stale", "attention": "unknown", "reason_code": "allowance_reading_stale", "reason_text": "The last reading is from 13:02 UTC. The 5 hour window has reset since and no new reading has arrived, so its use is unknown.", "since": "2026-11-12T14:02:00Z" },
+        "target": { "kind": "agent", "key": "codex", "label": "codex" },
+        "actions": [
+          { "command": "agent.refresh_allowance", "input": { "agent": "codex" }, "enabled": true, "tier": "direct", "reversible": false, "primary": true }
+        ],
+        "step_text": null,
+        "count": 1,
+        "list": null
+      },
+      {
+        "id": "job-60b46719",
+        "kind": "other",
+        "title": "Rebase of PR #1180 is blocked: postcondition not met",
+        "condition": { "state": "blocked", "attention": "fault", "reason_code": "postcondition_not_met", "reason_text": "The rebase job ended without meeting its postcondition. It used 3,427,984 tokens.", "since": "2026-11-12T18:36:00Z" },
+        "target": { "kind": "job", "key": "60b46719", "label": "job 60b46719", "title": "Rebase of PR #1180" },
+        "actions": [
+          { "command": "job.resume", "input": { "id": "60b46719" }, "enabled": true, "tier": "direct", "reversible": true },
+          { "command": "job.close", "input": { "id": "60b46719" }, "enabled": true, "tier": "approval", "reversible": false }
+        ],
+        "step_text": null,
+        "count": 1,
+        "list": null
+      }
+    ],
+    "slots": {
+      "max": 4,
+      "in_use": 0,
+      "by_role": [
+        { "role": "implementer", "max": 2, "in_use": 0 },
+        { "role": "reviewer", "max": 1, "in_use": 0 },
+        { "role": "inbox", "max": 1, "in_use": 0 }
+      ]
+    },
+    "planned": [
+      {
+        "type": "fix", "agent": "claude",
+        "target": { "kind": "change", "key": "change-1180", "label": "PR #1180", "title": "Keep homeowner steps of merged PRs in Needs you until done" },
+        "condition": { "state": "held", "attention": "fault", "reason_code": "unrecorded", "reason_text": "No reason recorded.", "since": "2026-11-12T18:41:00Z" },
+        "held_by": null
+      },
+      {
+        "type": "fix", "agent": "claude",
+        "target": { "kind": "change", "key": "change-1175", "label": "PR #1175", "title": "Diagnose and resolve failed Inbox jobs instead of letting them expire (#1154)" },
+        "condition": { "state": "held", "attention": "fault", "reason_code": "unrecorded", "reason_text": "No reason recorded.", "since": "2026-11-12T18:41:00Z" },
+        "held_by": null
+      },
+      {
+        "type": "rebase", "agent": "codex",
+        "target": { "kind": "change", "key": "change-1139", "label": "PR #1139", "title": "Address supervisor review follow-ups (#1127)" },
+        "condition": { "state": "held", "attention": "none", "reason_code": "file_overlap_hold", "reason_text": "Held by a file overlap hold.", "since": "2026-11-12T18:52:00Z" },
+        "held_by": { "kind": "change", "key": "change-1180", "label": "PR #1180" }
+      },
+      {
+        "type": "fix", "agent": "codex",
+        "target": { "kind": "change", "key": "change-1142", "label": "PR #1142", "title": "Address review follow-ups for issue #1133" },
+        "condition": { "state": "held", "attention": "none", "reason_code": "file_overlap_hold", "reason_text": "Held by a file overlap hold.", "since": "2026-11-12T18:52:00Z" },
+        "held_by": { "kind": "change", "key": "change-1175", "label": "PR #1175" }
+      }
+    ],
+    "pipeline": [
+      { "stage": "queued", "count": 21 },
+      { "stage": "implementing", "count": 0 },
+      { "stage": "in_review", "count": 0 },
+      { "stage": "fixing", "count": 4 },
+      { "stage": "rebasing", "count": 1 },
+      { "stage": "ready_to_merge", "count": 0 },
+      { "stage": "parked", "count": 10 }
+    ],
+    "headline": {
+      "window_seconds": 86400,
+      "first_pass": { "approved": 5, "reviewed": 23, "fraction": 0.217 },
+      "merges": 17,
+      "jobs_run": null
+    },
+    "waste": {
+      "window_seconds": 604800,
+      "jobs": 59,
+      "tokens": 86000000,
+      "top_cause": { "code": "rebase_refused_lost_changes", "text": "Rebase refused: lost changes", "fraction": 0.78, "tokens": 67080000, "changes": 28 }
+    },
+    "host": { "state": "ok", "attention": "none", "reason_code": null, "reason_text": null, "since": null }
+  }
+}
