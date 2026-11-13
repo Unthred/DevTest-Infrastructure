@@ -1,5 +1,6 @@
 // The implementer's visible PR checklist is deliberately separate from reviewer verdicts.
 // It makes the author account for every issue requirement before the dispatcher accepts work.
+import fs from 'node:fs';
 import { cells, requirementsRows, REQUIREMENTS_TABLE_HEADING, tableSection } from './requirements-table-rows.mjs';
 import { citeGateError } from './requirements-cite-gate.mjs';
 import { isSecretScanner } from './secret-scanner.mjs';
@@ -56,7 +57,9 @@ export async function continuedPostcondition(postcondition, job, pr, pullBody, g
   return progressed && await tablePostcondition(postcondition, job, pr, pullBody, gh);
 }
 
-const tableInstruction = action => ` Before ${action}, add or update a visible \`## Requirements check\` table in the pull request description with exactly \`Requirement | Status | Evidence\` columns and one row for every issue requirement. Every row from the issue's before-the-PR list must be \`Met\`, with a file and line plus a test or command that proves it; the only other statuses for it are \`Homeowner-only\`, whose evidence states the specific required homeowner credentials, approval or physical action, and \`Not applicable\`, only for a conditional requirement (for example "when #1148 is merged") whose condition is not met, whose evidence names the item (#N) and says it is still open or not merged. A row from the issue's after-install list, or any acceptance bullet such as "on Tower after install ..." (a check that can only be made once the change is installed on Tower) uses \`After install\`, and its evidence names who checks it, homeowner or overseer; never try to finish it before the PR. Write the pull request and its table as docs/work-items.md says. Do not open or push when a before-the-PR row is not met: finish it first. Check every PR-description claim against the diff; remove or fix any claim the code does not support. Quote sizes, line counts and test counts from the output of the checks you ran (node tools/ci/check-size.mjs and the test run), never from memory. For runtime behaviour, test the real entry point and relevant links, parent processes or concurrent passes rather than only a convenient direct call. As the very last step before opening or pushing, save the description and the issue body to files in $TMPDIR and run \`node tools/check-requirement-cites.mjs --body <description file> --issue <issue file>\`: every cited file must exist, every cited line must be inside a changed hunk (or in a test file), every named test must appear in its test file, every command must be a verification command, the row count must equal the issue's acceptance items, and any stated count of new files, modules or tests must match the diff. Fix everything it lists.`;
+// The long instruction text lives in its own file (AGENTS.md: prompts are not inline); {action} is the step it precedes.
+const TABLE_INSTRUCTION = fs.readFileSync(new URL('./requirements-table-instruction.txt', import.meta.url), 'utf8').trimEnd();
+const tableInstruction = action => TABLE_INSTRUCTION.replace('{action}', action);
 
 export const SCOPE_INSTRUCTION = ' Give every finding a "scope" field next to kind and text: "description" only when the problem is in the pull request text and nothing in the diff has to change (for example a wrong number or claim), "tests" when only tests must change, otherwise "code"; a blocking finding with no scope counts as code. Check every numeric claim in the description (sizes, line counts, test counts, file counts) against the diff and the checks output, not from memory.';
 

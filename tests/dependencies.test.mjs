@@ -259,3 +259,9 @@ test('an edited issue #1169 body is an action alert, stalls after 15 minutes, an
   assert.match(excluded.text, /offending line: "V2 item 33\. Cards\. Depends on: #1156, #1157"/);
   assert.match(dependencySkips([{ kind: 'dependency', number: 1169, reason: excluded.text }])[0].reason, /offending line/);
 });
+
+test('parseDependsOn: bold before the colon is read like the standalone form (issue #1204)', () => {
+  assert.match(parseDependsOn('Batch 1. **Depends on**: #5').malformed, /own line/, 'inline bold is held');
+  assert.deepEqual(parseDependsOn('**Depends on**: #5').numbers, [5], 'standalone bold');
+  assert.equal(parseDependsOn('see "`Depends on:` #5" for the format').malformed, null, 'example in backticks');
+});
