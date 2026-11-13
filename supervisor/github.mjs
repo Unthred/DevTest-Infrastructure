@@ -4,6 +4,7 @@ import { mergedReaders } from './githubmerged.mjs';
 import { SupervisorError } from './core.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { citeFacts } from './github-cite-facts.mjs';
+import { closeFacts } from './github-close.mjs';
 import { redactTopology } from './redact.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
@@ -41,7 +42,7 @@ export function githubClient(config, gh = ghRunner()) {
   const json = args => JSON.parse(gh(args) || 'null');
   const PR_FIELDS = PULL_FIELDS;
   const withLabels = prs => (Array.isArray(prs) ? prs.map(p => ({ ...p, labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l.name)) })) : prs);
-  return { ...citeFacts(repo, gh),
+  return { ...citeFacts(repo, gh), ...closeFacts(repo, gh),
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
     ...mergedReaders(json, repo),

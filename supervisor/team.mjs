@@ -52,6 +52,8 @@ import { scanInboxNow } from './wake.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
 import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { stuckSplitPass, ingestStuckSplit, approveStuckSplit, rejectStuckSplit } from './splitstuck.mjs';
+import { readStuckDraft, splitChildBody, splitAcceptedText } from './splitstuck-draft.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -1988,6 +1990,8 @@ export class Team {
       const { handInstallHold } = await import('./handinstall.mjs');
       return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
     }
+    if (action === 'approve_split') return approveStuckSplit(this, n);   // issue #1240
+    if (action === 'reject_split') return rejectStuckSplit(this, n);
     if (action === 'release_agent') return releaseAgentApproved(target, this.faults);   // issue #1179
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
@@ -2250,7 +2254,7 @@ export class Team {
           if (j.key) { this.s.reviewFaults[j.key] = { pr: j.pr, head: j.head, job: id, error: redact(detail, 120), file: path.join(this.root, 'team', 'inbox', String(j.ticket || ''), 'verdict.json'), kept: salvageFindings(this.root, j.ticket) || undefined, at: this.clock.now() }; this.save(); }
         }
       }
-      if (j.kind === 'split') await this.ingestSplit(id, j, job, report);
+      if (j.kind === 'split') await (j.stuckPr ? ingestStuckSplit(this, id, j, job, report) : this.ingestSplit(id, j, job, report));   // issue #1240
       if (j.kind === 'inbox') this.ingestInbox(id, j, job);
       if (job.status === 'completed') await (j.description ? finishDescriptionRound(this, id, j, report) : j.escalated && this.processSplit(id, j, report));   // a description round is never escalated
       if (j.kind === 'rebase' && job.status !== 'completed') { this.recordIncompleteRebase(id, j, job, report); await holdRefusedRebase(this, id, j, job); }
@@ -2721,12 +2725,12 @@ export class Team {
     for (const [i, c] of sp.children.entries()) {
       if (c.issue) continue;
       const marker = `<!-- devtest-split-child v1 parent=${issue} idx=${i} -->`;
-      c.issue = await this.gh.findIssueByMarker(marker) || await this.gh.createIssue(c.title, `${marker}\nPart ${i + 1} of ${sp.children.length} of #${issue}, split by Foreman after #${issue} ran out of context (accepted by the homeowner).\n\n**Scope:** ${c.scope}\n\nRead #${issue} for the full requirements; deliver only this part.`);
+      c.issue = await this.gh.findIssueByMarker(marker) || await this.gh.createIssue(c.title, splitChildBody(marker, c, sp, i, issue));
       if (!q.includes(c.issue)) q.push(c.issue);
       this.save();
     }
     sp.status = 'accepted'; sp.acceptedAt = this.clock.now(); this.save();
-    await this.postNotice(issue, `split-accepted`, `**Split accepted.** Filed ${sp.children.map(c => `#${c.issue}`).join(', ')} and queued them for \`${sp.agent}\`. This issue is not started again; close it when the children are done.`);
+    await this.postNotice(issue, `split-accepted`, splitAcceptedText(sp));
     return sp.children.map(c => c.issue);
   }
   // Issue #521: an "implemented" mark whose pull request is gone. implementable() skips a marked issue for ever, so when its PR was
@@ -2931,6 +2935,7 @@ export class Team {
   // A PR that is still rejected (CHANGES verdict or red CI on its current head) after max_fix_attempts fix rounds gets exactly one
   // needs-homeowner notice and no further fix jobs. Recorded before posting, like the other notices.
   async notifyFixLimit(report, guard = (_, fn) => fn()) {
+    await guard('split stuck', () => stuckSplitPass(this, report, guard));   // issue #1240: park the stuck PR and propose a split
     for (const pr of await this.gh.listPulls()) {
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || this.fixCount(pr.number) < this.c.limits.max_fix_attempts || descriptionRoundFor(this, pr)) continue;
@@ -3507,6 +3512,7 @@ export class Team {
       }
       if (p.kind === 'inbox_result') { try { return fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'inbox-result.txt'), 'utf8').trim().length > 0; } catch { return false; } }
       if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
+      if (p.kind === 'stuck_split_drafted') return !readStuckDraft(this.root, p.ticket).error;
       if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();
