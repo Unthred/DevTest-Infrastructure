@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foreman contract check</title>
+<link rel="stylesheet" href="app.css">
+<style>body { padding: 16px; } li { margin: 4px 0; } .bad { color: var(--fault); } .good { color: var(--ok); } pre { white-space: pre-wrap; }</style>
+</head>
+<body>
+<h1>Contract check: read models against their schemas</h1>
+<p class="muted">The same checks as <code>node ui-next/contract-test.mjs</code>, run in the browser against the core this page was served from.</p>
+<ul id="out"></ul>
+<p id="sum"></p>
+<script type="module">
+import { createValidator, INVARIANTS } from '/api/v1/schemas/validate.mjs';
+const get = async p => { const r = await fetch(p); if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.json(); };
+const out = document.getElementById('out'); let failed = 0, passed = 0;
+const report = (name, errors) => { const li = document.createElement('li'); li.className = errors.length ? 'bad' : 'good'; li.textContent = `${errors.length ? 'FAIL' : 'ok'}  ${name}`; if (errors.length) { failed++; const pre = document.createElement('pre'); pre.textContent = errors.slice(0, 15).join('\n'); li.append(pre); } else passed++; out.append(li); };
+try {
+  const files = ['common', 'meta', 'appbar', 'overview', 'queue', 'work-item', 'inbox', 'jobs', 'allowance', 'audit', 'command-request', 'command-result', 'event'].map(n => `${n}.schema.json`);
+  const schemas = Object.fromEntries(await Promise.all(files.map(async f => [f, await get(`/api/v1/schemas/${f}`)])));
+  const validate = createValidator(schemas);
+  const meta = await get('/api/v1/meta');
+  report('meta', validate('meta.schema.json', meta));
+  for (const m of meta.data.models.filter(x => x.name !== 'meta')) {
+    try {
+      const data = await get(m.path.replace('{key}', 'change-1192') + (m.name === 'inbox' ? '?limit=500' : ''));
+      report(`${m.name} matches ${m.schema}`, validate(m.schema, data));
+      if (INVARIANTS[m.name]) report(`${m.name} invariants`, INVARIANTS[m.name](data));
+    } catch (e) { report(`${m.name} can be read`, [String(e.message)]); }
+  }
+  const events = await get('/api/v1/fixtures/events');
+  report('event fixtures match event.schema.json', events.flatMap((e, i) => validate('event.schema.json', e).map(x => `event ${i}: ${x}`)));
+} catch (e) { report('contract check could start', [String(e.message)]); }
+document.getElementById('sum').textContent = `${passed} passed, ${failed} failed`;
+window.contractResult = { passed, failed };
+</script>
+</body>
+</html>

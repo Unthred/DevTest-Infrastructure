@@ -1,0 +1,58 @@
+{
+  "contract": "1.0",
+  "model": "appbar",
+  "generated_at": "2026-11-12T22:04:00Z",
+  "freshness": { "state": "fresh", "tick_at": "2026-11-12T22:00:07Z", "age_seconds": 233, "stale_after_seconds": 600, "reason_code": null, "reason_text": null },
+  "cursor": "e-000412",
+  "data": {
+    "system": {
+      "state": "stalled",
+      "attention": "fault",
+      "reason_code": "idle_with_planned_work",
+      "reason_text": "All 4 slots are idle and 4 planned actions are held. Nothing has started for 3 hours 23 minutes.",
+      "since": "2026-11-12T18:41:00Z"
+    },
+    "counts": { "needs_you": 6, "faults": 4, "stalled_agents": 2, "planned_held": 4, "running_jobs": 0, "inbox_waiting": 12 },
+    "slots": { "max": 4, "in_use": 0 },
+    "tick": { "state": "scheduled", "last_at": "2026-11-12T22:00:07Z", "next_at": "2026-11-12T22:05:00Z", "interval_seconds": 300 },
+    "agents": [
+      {
+        "id": "claude",
+        "display_name": "claude",
+        "provider": "claude",
+        "roles": ["implementer", "reviewer", "rebaser"],
+        "condition": {
+          "state": "idle",
+          "attention": "fault",
+          "reason_code": "unrecorded",
+          "reason_text": "Idle with 2 planned actions held. Foreman recorded no reason for the hold.",
+          "since": "2026-11-12T18:41:00Z"
+        },
+        "weekly": { "state": "known", "used_fraction": 0.14, "level": "normal", "resets_at": "2026-11-19T04:00:00Z", "window_seconds": 604800, "reason_code": null, "reason_text": null },
+        "short": { "state": "known", "used_fraction": 0.01, "level": "normal", "resets_at": "2026-11-13T02:10:00Z", "window_seconds": 18000, "reason_code": null, "reason_text": null },
+        "reading": { "read_at": "2026-11-12T21:58:00Z", "age_seconds": 360, "stale": false, "max_age_seconds": 3600 },
+        "running_jobs": 0
+      },
+      {
+        "id": "codex",
+        "display_name": "codex",
+        "provider": "codex",
+        "roles": ["implementer"],
+        "condition": {
+          "state": "paused",
+          "attention": "fault",
+          "reason_code": "file_overlap_hold",
+          "reason_text": "Paused with 2 planned actions held by a file overlap hold.",
+          "since": "2026-11-12T18:52:00Z"
+        },
+        "weekly": { "state": "known", "used_fraction": 0.31, "level": "normal", "resets_at": "2026-11-16T09:00:00Z", "window_seconds": 604800, "reason_code": null, "reason_text": null },
+        "short": { "state": "unknown", "used_fraction": null, "level": null, "resets_at": null, "window_seconds": 18000, "reason_code": "window_expired_no_reading", "reason_text": "5 hour window has reset; no new reading yet" },
+        "reading": { "read_at": "2026-11-12T13:02:00Z", "age_seconds": 32520, "stale": true, "max_age_seconds": 3600 },
+        "running_jobs": 0
+      }
+    ],
+    "breaker": { "state": "clear", "attention": "none", "reason_code": null, "reason_text": null, "since": null },
+    "direct_control": { "enabled": true, "changed_at": "2026-11-12T09:15:00Z", "changed_by": "homeowner" },
+    "version": { "installed": "82806c99", "running": "82806c99", "main": "82806c99", "behind_commits": 0, "latched": false }
+  }
+}

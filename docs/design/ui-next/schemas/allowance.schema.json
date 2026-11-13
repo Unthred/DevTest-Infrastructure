@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "allowance.schema.json",
+  "title": "Read model: allowance (GET /api/v1/allowance?days=7)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "allowance" },
+    "data": {
+      "type": "object",
+      "required": ["agents", "limit_resets", "credit", "waste", "currency"],
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["brief", "mode", "mode_reason_code", "mode_reason_text", "projected_fraction", "runs_out_at", "tokens_window", "cost_pence_window", "actions"],
+            "additionalProperties": false,
+            "properties": {
+              "brief": { "$ref": "common.schema.json#/$defs/agent_brief" },
+              "mode": { "type": "string", "description": "The scheduling mode the planner applies, for example normal, conserve, review_only, paused, unknown." },
+              "mode_reason_code": { "type": ["string", "null"] },
+              "mode_reason_text": { "type": ["string", "null"] },
+              "projected_fraction": { "type": ["number", "null"], "description": "Projected weekly use at the reset, 0 to 1 or above." },
+              "runs_out_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+              "tokens_window": { "type": ["integer", "null"] },
+              "cost_pence_window": { "type": ["integer", "null"] },
+              "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+            }
+          }
+        },
+        "limit_resets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "agent", "limit", "scope", "count", "expires_at", "advice_code", "advice_text"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "agent": { "type": "string" },
+              "limit": { "type": "string", "enum": ["weekly", "five_hour"] },
+              "scope": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 },
+              "expires_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+              "advice_code": { "type": ["string", "null"] },
+              "advice_text": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "credit": {
+          "type": ["object", "null"],
+          "description": "The monthly credit agent. Null when none is configured.",
+          "required": ["agent", "condition", "budget_pence", "spent_pence", "cycle_ends_at"],
+          "additionalProperties": false,
+          "properties": {
+            "agent": { "type": "string" },
+            "condition": { "$ref": "common.schema.json#/$defs/condition" },
+            "budget_pence": { "type": ["integer", "null"] },
+            "spent_pence": { "type": ["integer", "null"] },
+            "cycle_ends_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" }
+          }
+        },
+        "waste": {
+          "type": "object",
+          "required": ["window_seconds", "jobs", "tokens", "cost_pence", "by_cause"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": { "type": "integer" },
+            "jobs": { "type": "integer" },
+            "tokens": { "type": "integer" },
+            "cost_pence": { "type": ["integer", "null"] },
+            "by_cause": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["code", "text", "job_kind", "jobs", "tokens", "cost_pence", "changes", "fraction"],
+                "additionalProperties": false,
+                "properties": {
+                  "code": { "type": "string" },
+                  "text": { "type": "string" },
+                  "job_kind": { "type": ["string", "null"] },
+                  "jobs": { "type": "integer" },
+                  "tokens": { "type": "integer" },
+                  "cost_pence": { "type": ["integer", "null"] },
+                  "changes": { "type": ["integer", "null"], "description": "How many distinct changes this cause hit." },
+                  "fraction": { "type": "number", "description": "Share of the window's wasted tokens." }
+                }
+              }
+            }
+          }
+        },
+        "currency": {
+          "type": "object",
+          "required": ["code", "minor_unit", "usd_rate"],
+          "additionalProperties": false,
+          "properties": { "code": { "const": "GBP" }, "minor_unit": { "const": "pence" }, "usd_rate": { "type": "number" } }
+        }
+      }
+    }
+  }
+}

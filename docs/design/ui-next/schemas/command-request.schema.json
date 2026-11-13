@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "command-request.schema.json",
+  "title": "Command request body (POST /api/v1/commands/{name})",
+  "type": "object",
+  "required": ["input", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "input": { "type": "object", "description": "The inputs the command catalogue in the meta model lists for this command." },
+    "reason": { "type": ["string", "null"], "description": "Required when the catalogue says reason_required, and always for the overseer." },
+    "idempotency_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$", "description": "The same key sent twice returns the first result and changes nothing more." },
+    "expected": { "type": ["object", "null"], "description": "Optional: the state the client saw. If the entity has moved on, the command is refused with stale_view and nothing changes." },
+    "dry_run": { "type": "boolean", "description": "Validate and answer what would happen; change nothing; still audited as a dry run only when refused." }
+  }
+}
