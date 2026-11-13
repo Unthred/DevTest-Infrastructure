@@ -13,6 +13,7 @@ import { createReports } from './reports.mjs';
 import { redact } from './redact.mjs';
 import { stopDirsFrom } from './stoprecord.mjs';
 import { createInbox } from './inbox.mjs';
+import { createSelfCheck } from './selfcheck.mjs';   // issue #1314
 
 function loadConfig(env = process.env) {
   let cfg = {};
@@ -20,7 +21,7 @@ function loadConfig(env = process.env) {
   return { viewUrl: env.FOREMAN_MCP_VIEW_URL || cfg.viewUrl || null, logFile: env.FOREMAN_MCP_LOG || cfg.logFile || null, reportsDir: env.FOREMAN_MCP_REPORTS || cfg.reportsDir || null, inboxDir: env.FOREMAN_MCP_INBOX || cfg.inboxDir || null };
 }
 
-export function buildServer(config) {
+export function buildServer(config, selfCheck = null) {
   const callLog = createCallLog(config.logFile);
   const getPath = config.viewUrl ? p => getJson(new URL(p, config.viewUrl).href) : null;   // same dashboard, same GET-only reader
   const tools = createTools({
@@ -30,12 +31,13 @@ export function buildServer(config) {
     reports: createReports(config.reportsDir, { redact }),
     inbox: createInbox({ dir: config.inboxDir, baseUrl: config.viewUrl }),
     stopDirs: stopDirsFrom(process.env),   // issue #1161
+    selfCheck,
   });
-  return createProtocol({ tools, log: e => callLog.record(e) });
+  return createProtocol({ tools, log: e => callLog.record(e), version: selfCheck?.version });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const protocol = buildServer(loadConfig());
+  const protocol = buildServer(loadConfig(), createSelfCheck({ dir: import.meta.dirname }));   // fingerprint and start time taken once, here
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   let chain = Promise.resolve();   // replies keep the order of the requests
   rl.on('line', line => { chain = chain.then(async () => { const reply = await protocol.handleLine(line); if (reply) process.stdout.write(JSON.stringify(reply) + '\n'); }).catch(() => {}); });

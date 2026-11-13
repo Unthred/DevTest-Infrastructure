@@ -20,6 +20,7 @@ const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
+const OPTIONAL = ['why', 'effect', 'after'];
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
@@ -94,7 +95,9 @@ export function createInbox({ dir, baseUrl = null }) {
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
+      // Issue #1314: which optional fields were stored, so a dropped one is visible in this reply.
+      const stored = OPTIONAL.filter(k => c.item[k] !== undefined);
+      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', stored, ...(c.item.after ? { waitsFor: afterLabels(dir, c.item.after) } : {}), note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
