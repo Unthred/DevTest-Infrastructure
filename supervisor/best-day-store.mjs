@@ -46,18 +46,21 @@ export function verdictsOfComments(comments) {
   return out;
 }
 
-// fetchPage(n) synchronously returns one page of repository issue comments, oldest first; a short page is the last. Throws when GitHub refuses a page.
-export function readVerdictHistory(fetchPage) {
+// fetchPage(n, since) synchronously returns one page of repository issue comments, oldest first (since: an ISO time, only comments updated at
+// or after it; undefined for all); a short page is the last. Throws when GitHub refuses a page. Verdicts are always the posted comments, never
+// Foreman's state, which overwrites a second verdict on the same head and holds carried verdicts that were never posted.
+export function readVerdictHistory(fetchPage, since) {
   const verdicts = [];
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const comments = fetchPage(page);
+    const comments = fetchPage(page, since);
     verdicts.push(...verdictsOfComments(comments));
     if (!Array.isArray(comments) || comments.length < PAGE_SIZE) return verdicts;
   }
   throw new Error(`verdict history is longer than ${MAX_PAGES} pages`);
 }
 
-const timelineVerdicts = entries => entries.filter(e => e.kind === 'verdict' && Number.isSafeInteger(e.pr) && e.verdict).map(e => ({ pr: e.pr, at: e.at, verdict: e.verdict }));
+const latest = (verdicts, floor = 0) => verdicts.reduce((m, v) => Math.max(m, v.at), floor);
+const sameVerdict = (a, b) => a.pr === b.pr && a.at === b.at && a.verdict === b.verdict;
 const timelineMerges = entries => entries.filter(e => e.kind === 'merge' && Number.isSafeInteger(e.pr)).map(e => ({ pr: e.pr, at: e.at }));
 
 function dedupeMerges(merges) {
@@ -81,16 +84,26 @@ function settle(stored, now, previous) {
   return { ...stored, ...ledger, records: keepBest(previous?.records, ledger), updatedAt: now };
 }
 
-// What the tick calls. timeline is the retained timeline entries; fetchPage reads GitHub only when nothing is stored.
+// What the tick calls. timeline is the retained timeline entries; fetchPage reads GitHub when nothing is stored, and then only the comments newer than the last one taken in when the timeline holds a new verdict or merge.
 // Returns 'built', 'updated', 'unchanged', 'waiting' (a failed build is not retried yet) or 'failed'.
 export function refreshBestDay({ root, now, timeline, fetchPage }) {
   const stored = readBest(root);
   if (!stored?.built) return rebuild({ root, now, timeline, fetchPage, previous: stored });
   const fresh = timeline.filter(e => (e.kind === 'verdict' || e.kind === 'merge') && e.at > stored.through);
   if (!fresh.length) return 'unchanged';
+  // The timeline only says that something happened; the verdict counts come from the posted comments newer than the last one taken in.
+  const taken = stored.commentsThrough ?? 0;
+  let posted;
+  try {
+    posted = readVerdictHistory(fetchPage, new Date(taken).toISOString()).filter(v => v.at > taken);
+  } catch {
+    return 'failed';
+  }
   const known = new Set(stored.merges.map(m => m.pr));
   const merges = timelineMerges(fresh).filter(m => !known.has(m.pr));
-  writeBest(root, settle({ ...stored, through: Math.max(...fresh.map(e => e.at)), verdicts: [...stored.verdicts, ...timelineVerdicts(fresh)], merges: [...stored.merges, ...merges] }, now, stored));
+  const added = posted.filter(v => !stored.verdicts.some(w => sameVerdict(v, w)));
+  writeBest(root, settle({ ...stored, through: Math.max(...fresh.map(e => e.at)), commentsThrough: latest(posted, taken),
+    verdicts: [...stored.verdicts, ...added], merges: [...stored.merges, ...merges] }, now, stored));
   return 'updated';
 }
 
@@ -98,7 +111,7 @@ function rebuild({ root, now, timeline, fetchPage, previous }) {
   if (previous?.retryAfter > now) return 'waiting';
   try {
     const verdicts = readVerdictHistory(fetchPage);
-    writeBest(root, settle({ version: VERSION, built: true, through: now, verdicts, merges: timelineMerges(timeline), records: previous?.records }, now, previous));
+    writeBest(root, settle({ version: VERSION, built: true, through: now, commentsThrough: latest(verdicts), verdicts, merges: timelineMerges(timeline), records: previous?.records }, now, previous));
     return 'built';
   } catch {
     // Keep what was stored; a failed read must never blank a record. Try again after a pause, not on every tick.
