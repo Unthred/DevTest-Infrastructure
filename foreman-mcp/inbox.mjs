@@ -15,7 +15,10 @@ export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 
 const NUMBER = /^[1-9]\d{0,8}$/, JOB = /^[a-f0-9]{8}$/;
 const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: NUMBER, close_job: JOB, stop_job: JOB, resume_job: JOB, clear_latch: /^latch$/ };
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
+// Issue #1332: a copy of BREAKER_SCOPE in supervisor/inbox.mjs (this module imports nothing from supervisor/); a test compares the two.
+export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
+export const BREAKER_SCOPE_MAX = 160;
+const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/, resume_breaker: BREAKER_SCOPE };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
@@ -43,7 +46,8 @@ export function checkProposal(args) {
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
-    if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
+    const max = k === 'target' && a.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : (LIMITS[k] ?? 40);   // issue #1332: only this action's target may be long
+    if (v.length > max) return { ok: false, error: `${k} is longer than ${max} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
     if (redact(v) !== v) return { ok: false, error: `${k} contains secret-shaped text; remove it` };
     if (ATTRIBUTION.some(re => re.test(v))) return { ok: false, error: `${k} contains AI attribution text, which this project does not allow` };
@@ -57,7 +61,7 @@ export function checkProposal(args) {
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name (clear_latch takes none)' };
+    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name, or for resume_breaker @global, all or a halt key of at most 160 characters (clear_latch takes none)' };
   }
   return { ok: true, item };
 }

@@ -29,11 +29,18 @@ export const ACTIONS = {
   clear_latch: { target: 'latch', noun: 'upgrade', will: 'Clear the upgrade latch so the next tick may install merged work under the usual rules (issue #1160). Refused when no latch is set or an install is running. Nothing is merged or approved.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
   release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
+  resume_breaker: { target: 'breaker', noun: 'breaker scope', will: 'Resume this tripped circuit breaker scope exactly as `team breaker resume` does, recorded with who and why (issue #1332). Refused when the scope is not halted. Nothing is merged or approved.' },
 };
+// Issue #1332: the one breaker scope shape: @global, all, or a halt key (the breaker writes causes up to 120 characters). The decision table and
+// inbox validation import it; the MCP server cannot import from the supervisor, so foreman-mcp/inbox.mjs keeps a copy and a test compares them.
+export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
+export const BREAKER_SCOPE_MAX = 160;
+const BREAKER_SCOPE_REFUSAL = 'target must be @global, all or a halt key of letters, digits and _ . : - (at most 160 characters)';
+const targetMax = raw => (raw.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : 12);
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
 export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
-const TARGET_RE = { latch: /^latch$/, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
+const TARGET_RE = { latch: /^latch$/, breaker: BREAKER_SCOPE, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
@@ -89,7 +96,8 @@ export function validateItem(raw, { internal = false } = {}) {
   const named = raw.kind === 'action' || raw.kind === 'control';
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
-  const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
+  const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body';
+  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw), key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
@@ -115,6 +123,7 @@ export function validateItem(raw, { internal = false } = {}) {
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };
     if (spec.target === 'latch' && raw.target !== 'latch') return { ok: false, reason: 'target must be latch' };   // issue #1160
     if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
+    if (spec.target === 'breaker' && !BREAKER_SCOPE.test(raw.target)) return { ok: false, reason: BREAKER_SCOPE_REFUSAL };   // issue #1332
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
   if (raw.kind === 'host_value') {

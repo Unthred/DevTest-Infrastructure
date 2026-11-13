@@ -47,7 +47,15 @@ test('invariant: every Needs you rank and every id the source raises has a table
 test('every control the table offers is an existing action; none is a slice 2 or 3 action', () => {
   const known = new Set([...Object.keys(ACTIONS), ...Object.keys(INBOX_CONTROLS)]);
   for (const a of Object.keys(CONTROLS)) assert.ok(known.has(a), `${a} is not an existing action`);
-  for (const later of ['extra_fix_round', 'close_superseded', 'resume_breaker', 'merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
+  for (const later of ['extra_fix_round', 'close_superseded', 'merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
+});
+test('the breaker entry offers resume_breaker with the halt cause carried as the item scope, and no longer says the control is to come', () => {
+  assert.ok('resume_breaker' in CONTROLS);
+  const card = decisionCard({ id: 'breaker-halt', text: 'Work halted', scope: 'fix:blocked:postcondition_not_met', ref: null });
+  assert.deepEqual(card.controls.map(c => [c.action, c.target]), [['resume_breaker', 'fix:blocked:postcondition_not_met']]);
+  assert.doesNotMatch(card.later, /arrives with slice 2/);
+  assert.match(card.later, /only the top halt cause/);
+  assert.deepEqual(decisionCard({ id: 'breaker-halt', text: 'x', ref: null }).controls, [], 'no scope, no control');
 });
 test('longest type wins and unmapped ids have no type', () => {
   assert.equal(typeOf('homeowner-pr-12'), 'homeowner-pr'); assert.equal(typeOf('homeowner-12'), 'homeowner');

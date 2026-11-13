@@ -2,6 +2,7 @@
 // routine controls the card offers. Pure: no I/O. An id that matches no entry is an explicit error card, never a silent default.
 // Controls are limited to actions that already exist (inbox ACTIONS plus park); strong actions belong to later slices and are only named.
 import { redact } from './redact.mjs';
+import { BREAKER_SCOPE } from './inbox.mjs';
 
 // What a control needs from the item, how it is labelled, and what it does in one sentence (the button's tooltip).
 export const CONTROLS = {
@@ -13,6 +14,7 @@ export const CONTROLS = {
   reopen: { label: 'Reopen issue', target: 'issue', does: 'Clears the implemented mark so Foreman can start the issue again.' },
   unpark: { label: 'Unpark', target: 'any', does: 'Removes the parked label so the planner may take it again.' },
   clear_latch: { label: 'Clear upgrade latch', target: 'latch', does: 'Clears the upgrade latch so the next tick may install merged work. Refused when no latch is set or an install is running.' },
+  resume_breaker: { label: 'Resume breaker', target: 'scope', does: 'Resumes this halted breaker cause exactly as `team breaker resume` does, recorded with who and why. Refused when it is no longer halted.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };
 
@@ -25,8 +27,8 @@ const T = {
   'no-tick': { clears: 'clears when the dispatcher records its first tick', actions: [] },
   'tick-failed': { clears: 'clears when a tick succeeds; nothing is dispatched until then', actions: [] },
   'tick-stale': { clears: 'clears when the next tick is recorded', actions: [] },
-  breaker: { clears: 'clears when a later job of the halted type completes, or when you press Resume on the breaker card', actions: [],
-    later: 'Resume stays on the breaker card; the same control on this card arrives with slice 2 of #1111.' },
+  breaker: { clears: 'clears when a later job of the halted type completes, or when you resume the breaker with the control on this card', actions: ['resume_breaker'],
+    later: 'The control resumes only the top halt cause; a second, lower halt is resumed with the Resume button on the breaker card or ai-supervisor team breaker resume.' },
   fixlimit: { clears: 'clears when a new head is reviewed PASS; no more fix jobs start', actions: ['park'], later: LATER_FIX },
   churn: { clears: 'clears when the current head is no longer a CHANGES verdict (a new head reviewed PASS); no more fix jobs start', actions: ['park'], later: LATER_FIX },
   retrycap: { clears: 'clears when you clear the retry cap or the head changes; Foreman starts no more of that job until then', actions: ['clear_retry_cap', 'park'] },
@@ -103,6 +105,7 @@ const JOB_ID = /^(?:job|selfcheck-job)-([a-f0-9]{8})/;
 // The target is always taken from the item, never from the request.
 function targetFor(item, spec) {
   if (spec.target === 'latch') return item.id === 'upgrade-latched' ? 'latch' : null;   // no target: a fixed word
+  if (spec.target === 'scope') return typeof item.scope === 'string' && BREAKER_SCOPE.test(item.scope) ? item.scope : null;   // issue #1332: the top halt cause
   if (spec.target === 'job') return JOB_ID.exec(String(item.id))?.[1] ?? null;
   const ref = item.ref;
   if (!ref || !Number.isSafeInteger(ref.n) || ref.n < 1) return null;

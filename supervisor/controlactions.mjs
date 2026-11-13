@@ -30,6 +30,7 @@ async function liveJobsFor(n, { jobs, records }) {
 // Issue #1155: when the refusal is because a homeowner step is outstanding, it names the step and its PR.
 const stepNote = deps => { const note = refusalNote(deps.pendingSteps, 'github_app'); return note ? `; ${note}` : ''; };
 
+export { resumeBreakerApproved } from './resumebreakeraction.mjs';   // issue #1332: the team imports it through here
 export async function park(n, deps) {
   const found = await findItem(deps.gh, n);
   if (!found) return refused(`no open issue or pull request #${n}`);
