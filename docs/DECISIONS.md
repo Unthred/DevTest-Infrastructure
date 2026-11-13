@@ -2,6 +2,7 @@
 
 Binding architecture and governance decisions for DevTest Infrastructure. Format and rules follow the shared AI-Rules *decision governance* policy.
 
+- This register is frozen (issue #1229): the entries below keep their numbers and are not rewritten. A new decision is proposed as its own file under `docs/decisions/`; see [`decisions/INDEX.md`](decisions/INDEX.md) (generated) and [`ai/decision-proposals.md`](ai/decision-proposals.md).
 - Only `homeowner-approved` entries bind. `agent-proposal` entries are the current best design and stay open to review; `temporary-note` entries carry a retirement condition.
 - Never delete an entry. Replace it by adding a new dated entry and setting `Superseded-by` on the old one.
 - Before significant work, read this file and check the plan against every entry. A change that revives a **Rejected** alternative is blocked until a new dated entry is approved.
@@ -366,4 +367,22 @@ Binding architecture and governance decisions for DevTest Infrastructure. Format
 - Decision: The private key of Foreman's GitHub App is kept in a file on Tower outside Git, mode 600, a regular file and not a link; Foreman refuses to read it otherwise. The App needs Issues and Pull requests write only. The installation token is minted per call and never stored or logged.
 - Rationale: Foreman signs a JWT on every park, and the supervisor has no scoped OpenBao identity yet (docs/secrets.md: none exists). A file with the same owner-only rule as the OpenBao token file is the same exposure that token already has. Moving the key into OpenBao is a follow-up once a scoped read identity exists.
 - Rejected: The owner's gh login (it is the owner account); the key in an environment variable or argument (visible to other processes).
+- Superseded-by: none
+
+## D-040 — A parked item holds the cancelled-CI watch, the transient resume and the owner re-review
+- Status: agent-proposal
+- Date: 2026-11-12
+- Source: issue #1171 (slice 3 of 3 of #1127, split from PR #1139); builds on D-038
+- Decision: A pull request or issue with the `parked` label holds three more behaviours, in addition to the planner's rebase, fix, review and merge. (1) `watchCancelled` makes no rerun and posts no cancelled-CI notice for a parked PR; a watch already begun is kept and acts again once the PR is unparked. (2) `resumeTransient` does not resume a stopped job whose pull request or issue is parked; the job's one resume is kept (it is not marked stale) and is used after release. (3) A re-review of a parked PR is refused, both by the `team` command and by an owner comment: nothing is recorded, the verdict is not set aside, and the comment is not used up, so it counts once the PR is unparked. Each of these starts or repeats work or spends allowance, which is what parking holds back; none of them is lost by waiting.
+- Rationale: D-038 made park the way to hold an item back. A parked PR that still got CI reruns, job resumes or fresh reviews would spend allowance behind the hold. Nothing here is destroyed by holding: the watch, the resume and the comment are all kept.
+- Rejected: Letting the three run for a parked item; dropping the watch, the resume or the decision when an item is parked.
+- Superseded-by: none
+
+## D-041 — A stopped job is never a fault; a parked agent can be released by an approved action
+- Status: agent-proposal
+- Date: 2026-11-12
+- Source: issue #1179; extends D-033 and builds on the fault rules of issues #1107 and #1109
+- Decision: A job carrying a stop marker (written by an approved `stop_job`, a homeowner stop or a close) is a deliberate stop whatever status or event a dying worker wrote afterwards: it is classified as a stop with its own cause and who stopped it, never as an infrastructure fault, and it does not park the agent, count towards the circuit breaker or the failure causes, or use an attempt. Restarting a job clears its marker. The hold text of a parked agent says it is parked after an infrastructure fault and names the cause, job, time and next probe; it never says "out of allowance". The overseer view lists each parked agent with cause, job, time and probe schedule. D-033's fixed action list gains `release_agent` (target: an agent name): the homeowner approves it on the dashboard, it only removes the park of an agent that is parked, and a real fault parks the agent again.
+- Rationale: 12 Nov 2026: an approved stop of review job a888b4fb was recorded as an `other_infra` fault, parked Claude and held every Claude review, with a hold text claiming the agent was out of allowance.
+- Rejected: Releasing by MCP without an approval; a release that also probes or clears the fault counts.
 - Superseded-by: none

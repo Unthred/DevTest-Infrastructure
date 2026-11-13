@@ -7,12 +7,15 @@
 import http from 'node:http';
 import { SupervisorError } from './core.mjs';
 import { readTimeline, computeGaps, allSnapshots, storageReport } from './history.mjs';
+import { hostPressureView } from './hostpressure.mjs';
 import { readCache, readEvents, readLastSeen, writeLastSeen, readJobs, readSnapshots, readTeamState, redact } from './dashdata.mjs';
 import { applyAction, readWatchlist } from './watchlist.mjs';
 import { createViewStore, VIEW_STALE_MS } from './viewstore.mjs';
 import { createWorkerBuild } from './viewworker.mjs';
 import { buildView } from './dashboard.mjs';
 import { withApprovals } from './approvals.mjs';
+import { withDecisionCards } from './decisioncards.mjs';
+import { decisionRoute } from './decisionroute.mjs';
 import { approvalsStream } from './approvals-stream.mjs';
 import { defaultZone } from './clocktext.mjs';
 import { readRegister } from './planning.mjs';
@@ -25,6 +28,7 @@ import { readTranscript } from './transcript.mjs';
 import { jobOutcome, discarded } from './joboutcome.mjs';
 import { installs, breakerHistory } from './installs.mjs';
 import { readIndex, searchIndex } from './issueindex.mjs';
+import { withApi } from './api/dashwire.mjs';
 import { wasteByCause, configView, testRunsView, ticksView } from './mcpreads.mjs';
 import { alertsView } from './alertsview.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
@@ -36,14 +40,20 @@ import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_RO
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
 import * as inboxStore from './inbox.mjs';
+import { inboxApiReply } from './inbox-api.mjs';
 import { controlsOf } from './controlactions.mjs';
 import { fileURLToPath } from 'node:url';
 import { recordRefusedOrigin } from './hostvalue.mjs';
 import { decide as decideInbox, undo as undoInbox, ID_RE as INBOX_ID, allStatuses as inboxStatuses } from './inbox.mjs';
 import { proofValid, withProof, reserveCooldown, releaseCooldown, MARK_READ_COOLDOWN_MS, INBOX_COOLDOWN_MS } from './dashwrite.mjs';
-import { personClickRoutes } from './personclickroutes.mjs';
+import { BREAKER_RESUME_COOLDOWN_MS, requestBreakerResume } from './breakerresume.mjs';
 import { underSupervisedJob } from './breaker.mjs';
-import { peerPid as defaultPeerPid } from './peerpid.mjs';
+import { isLocalPeer, peerPid as defaultPeerPid } from './peerpid.mjs';
+import { stepDoneRoute } from './personclickroutes.mjs';
+import { limitResetsRoute } from './resetswrite.mjs';
+import { withLimitResets } from './resetsentries.mjs';
+import { JOBS_STATIC } from './jobs-page.mjs';
+import { INBOX_VIEWS_STATIC } from './inbox-views.mjs';
 
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
@@ -108,13 +118,16 @@ export async function currentView({ root, config, now = Date.now(), tz = default
     config: checked, root, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), cache: readCache(root),
     snapshots: hot, history, now, tz, configError, lastSeen: readLastSeen(root), watchlist: readWatchlist(root), register, registerUnreadable: !register,
   });
-  return withApprovals(view, checked);
+  return withLimitResets(withApprovals(withDecisionCards(view, checked, readCache(root)), checked), { root, config: checked, snapshots: history.chartSnapshots || hot, now });
 }
 
 // The only files served besides pages: fixed names, read from this package, never a path taken from the request. Tests and the smoke scripts derive what to stage from this list (issues #447, #455).
 export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=utf-8'], '/static/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/static/logic.mjs': ['logic.mjs', 'text/javascript; charset=utf-8'], '/static/legend.mjs': ['legend.mjs', 'text/javascript; charset=utf-8'], '/static/refresh.mjs': ['refresh.mjs', 'text/javascript; charset=utf-8'], '/static/chartopts.mjs': ['chartopts.mjs', 'text/javascript; charset=utf-8'], '/static/grid.mjs': ['grid.mjs', 'text/javascript; charset=utf-8'], '/static/appbar.mjs': ['appbar.mjs', 'text/javascript; charset=utf-8'], '/static/lists.mjs': ['lists.mjs', 'text/javascript; charset=utf-8'], '/static/lists-ui.mjs': ['lists-ui.mjs', 'text/javascript; charset=utf-8'], '/static/early.js': ['early.js', 'text/javascript; charset=utf-8'], '/static/layout-early.js': ['layout-early.js', 'text/javascript; charset=utf-8'],
+  '/static/inbox-filter.mjs': ['inbox-filter.mjs', 'text/javascript; charset=utf-8'],
   '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
+  '/static/decision-ui.mjs': ['decision-ui.mjs', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
+Object.assign(STATIC, JOBS_STATIC, INBOX_VIEWS_STATIC);
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
 
 const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY',
@@ -162,8 +175,10 @@ const pageData = p => ({ builtAt: p.builtAt, ageMs: p.ageMs, stale: p.stale, beh
 // Issue #1093: the Health page's data. Disk samples and the recorder are bounded reads of local files; no model or GitHub call.
 export function healthData({ root, config, now, recorderDir }) {
   if (typeof config === 'function') config = config();
-  const h = { ...HEALTH_DEFAULTS, ...validateTeamConfig(config).health };
+  const checked = validateTeamConfig(config);
+  const h = { ...HEALTH_DEFAULTS, ...checked.health };
   return { now, warn: h.disk_warn_percent, alert: h.disk_alert_percent, disk: readDiskSamples(nodePath.join(root, 'dashboard', 'disk-samples.jsonl'), now),
+    hostPressure: hostPressureView(readTeamState(root), checked, now),   // issue #1151
     recorder: recorderDir ? readRecorder(recorderDir, now - 7 * DAY_MS, now) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }
 export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
@@ -236,8 +251,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   };
   // Inbox (issue #124): Approve or Reject one pending overseer proposal. The same write protection as the other posts (D-029): host, origin, the
   // secret proof, and a short cooldown. The decision is recorded only; the next tick acts on an approval. This route is the only way to approve.
-  // Issue #856: the dashboard's script posts with Accept: application/json and gets the outcome as JSON, so a refusal shows on the card instead of a
-  // separate page. Every refusal (host, origin, proof, size, cooldown, item changed) keeps its status code and changes nothing; only the body differs.
+  // Issue #856: the script posts Accept: application/json and gets JSON, so a refusal shows on the card; every refusal changes nothing.
   const inbox = async (req, res, rawSend) => {
     const json = /application\/json/.test(req.headers.accept || '');
     const plainOf = html => String(html).replace(/<h1>[^]*?<\/h1>/, '').replace(/<p><a href[^]*$/, '').replace(/<[^>]*>/g, ' ').replace(/&#(\d+);/g, (m, c) => String.fromCharCode(Number(c))).replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -264,15 +278,46 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     if (json) return rawSend(200, 'application/json; charset=utf-8', JSON.stringify({ ok: true, state: r.state, decidedAt: r.decidedAt ?? null, undoUntil: r.undoUntil ?? null }));
     return send(303, 'text/plain; charset=utf-8', 'recorded', { location: '/' });
   };
-  // Resume (issue #626) and Mark done (issue #1155): the person-click posts that only leave a request file for the next tick (personclickroutes.mjs).
-  const { breakerResume, stepDone } = personClickRoutes({ root, allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, supervised, peerPid, now, wake, source, store });
-  return async (req, res) => {
+  const decision = decisionRoute({ root, source, cachedView, store, wake, now, guard: { allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, refuseWith, esc } });
+  // Resume (issue #626): the circuit breaker's button. Host, origin, the secret proof and a cooldown (D-029), and it must be a person's click:
+  // a form button sets Sec-Fetch-Site and Sec-Fetch-User, which a script does not send unless it forges them. It only leaves a request.
+  const breakerResume = async (req, res, send) => {
+    if (req.headers.host !== allowedHost) return refuseHost(req, send);
+    if (!originAllowed(req)) return refuseOrigin(req, send);
+    if (req.headers['sec-fetch-site'] !== 'same-origin' || req.headers['sec-fetch-user'] !== '?1' || supervised()) return send(403, 'text/plain; charset=utf-8', 'resume needs a person clicking the button');
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 1024) return tooLarge(send); chunks.push(c); }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    if (!proofValid(root, form.get('proof'))) return badProof(send);
+    const scope = form.get('scope') || '', halts = readTeamState(root)?.breaker || {};
+    const known = scope === 'all' ? !!(halts.global || Object.keys(halts.halts || {}).length) : scope === 'global' ? !!halts.global : !!(halts.halts || {})[scope];
+    if (!known) return send(409, 'text/plain; charset=utf-8', 'nothing halted for that scope');
+    const t = now(), slot = reserveCooldown(root, 'breaker-resume', t, BREAKER_RESUME_COOLDOWN_MS);
+    if (!slot.ok) return send(303, 'text/plain; charset=utf-8', 'too soon', { location: '/?notice=breaker-resume-cooldown', 'retry-after': String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000))) });
+    // Issue #737: a request from this machine must not come from a process that descends from a supervised job, as the CLI route checks
+    // its own caller. A caller that cannot be identified is refused rather than assumed to be a person. Issue #821: the lookup scans /proc
+    // synchronously (about 180 ms on Tower), so it runs only for a request with a valid proof, a halted scope and no cooldown in force.
+    // A refused caller gives the slot back so it cannot lock a person out.
+    if (isLocalPeer(req.socket)) {
+      const pid = peerPid(req.socket);
+      if (!pid || supervised({ env: {}, pid })) {
+        releaseCooldown(root, 'breaker-resume', t);
+        return send(403, 'text/plain; charset=utf-8', pid ? 'resume needs a person clicking the button' : 'resume refused: the calling process could not be identified');
+      }
+    }
+    requestBreakerResume(root, scope, t);
+    try { wake(root, 'approve', source()); } catch { /* the schedule is the fallback */ }   // the request is applied by the next pass
+    store.invalidate();
+    return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
+  };
+  const stepDone = stepDoneRoute({ root, allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, supervised, peerPid, now, wake, source, store });   // issue #1155
+  return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source, store, originAllowed, wake }, async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/breaker-resume': breakerResume, '/step-done': stepDone };
+    const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store });
+    const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume, '/limit-resets': limitResets, '/step-done': stepDone };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
-    // A second write the dashboard accepts (issue #110): "Refresh allowance" runs a single minimal probe for one configured agent and stores
-    // its allowance record. Same-origin form post only; it changes no mode, latch, job or repository.
+    // Issue #110: "Refresh allowance" runs one minimal probe for a configured agent and stores its record. Same-origin post only; it changes no mode or job.
     const probePath = req.method === 'POST' ? /^\/probe\/([A-Za-z0-9_-]{1,40})$/.exec(reqPath) : null;
     if (probePath) {
       if (req.headers.host !== allowedHost) return refuseHost(req, send);
@@ -310,7 +355,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const hits = inboxStatuses(dir).filter(s => s.id.startsWith(m[1]));
         if (hits.length !== 1) return refuseWith(send, hits.length ? 409 : 404, hits.length ? 'Ambiguous inbox id' : 'No such inbox item', hits.length ? 'More than one inbox item starts with that id; use the full id.' : 'No inbox item has that id. It may have been cleared after fourteen days.');
         const s = hits[0];
-        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/#att-inbox-${s.id}` });
+        if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/inbox#att-inbox-${s.id}` });
         const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
         return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
       }
@@ -322,10 +367,10 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const r = readTranscript(root, id, { after });
         return send(200, 'application/json; charset=utf-8', JSON.stringify({ job: jobInfo(jobRecord(root, id), now()), entries: r.entries, last: r.entries.at(-1)?.seq ?? after }));
       }
-      // Issue #623: two bounded, redacted, read-only records for the Foreman MCP tools (the account there cannot read the state root).
+      // Issues #623, #625, #1197: bounded, redacted, read-only records for the Foreman MCP account, which cannot read the state root.
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/outcome\.json$/.exec(path))) { const out = jobOutcome(root, m[1]); return out ? send(200, 'application/json; charset=utf-8', JSON.stringify(out)) : send(404, 'text/plain; charset=utf-8', 'not found'); }
+      if (path === '/api/inbox.json') return send(...inboxApiReply(source().inbox?.dir, now()));
       if (path === '/api/discarded.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(discarded(readTeamState(root), 200)));
-      // Issue #625: install history (with the version each process runs) and the circuit breaker's trip history, for the Foreman MCP tools.
       if (path === '/api/installs.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(installs(root, { now: now() })));
       if (path === '/api/breaker.json') return send(200, 'application/json; charset=utf-8', JSON.stringify(breakerHistory(readTeamState(root), 100)));
       // Issue #635: the Diagnostics data, the failure cost by cause, and the effective configuration, for the Foreman MCP tools.
@@ -370,7 +415,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
       console.error(`dashboard: ${error?.name || 'Error'}: ${redact(error?.message, 160)}`);
       return send(500, 'text/plain; charset=utf-8', 'dashboard could not read the supervisor state');
     }
-  };
+  });
 }
 
 export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot }) {

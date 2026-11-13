@@ -18,7 +18,7 @@ import { writeToken } from '../supervisor/dashwrite.mjs';
 import { createProtocol } from '../foreman-mcp/protocol.mjs';
 import { createTools } from '../foreman-mcp/tools.mjs';
 import { createInbox, checkProposal } from '../foreman-mcp/inbox.mjs';
-
+import { postIssueDraft } from '../supervisor/issue-drafts.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url)), mcpDir = path.join(here, '..', 'foreman-mcp');
 const tmp = (t, p = 'inbox-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 const hex = n => crypto.randomBytes(n).toString('hex');
@@ -28,7 +28,6 @@ const DRAFT = { kind: 'issue_draft', title: 'Add a retry note', body: 'The probe
 // an inbox directory as the installer lays it out: items/ (the proposing account), status/ (Foreman)
 function makeInbox(t) { const dir = tmp(t); fs.mkdirSync(path.join(dir, 'items')); fs.mkdirSync(path.join(dir, 'status')); return dir; }
 const drop = (dir, item, id = hex(16)) => { fs.writeFileSync(path.join(dir, 'items', `${id}.json`), typeof item === 'string' ? item : JSON.stringify(item)); return id; };
-
 // ---- validation: refused before any card
 test('validateItem: good prompt and issue draft pass; unknown kind, unknown field, oversize, empty and control characters are refused', () => {
   assert.equal(inbox.validateItem(GOOD).ok, true);
@@ -252,12 +251,12 @@ async function serve(t, inboxDir) {
 test('dashboard: a pending item is one Approve/Reject card that shows its exact text, escaped; a refused item shows no card', async t => {
   const dir = makeInbox(t), id = drop(dir, { ...GOOD, prompt: 'Do <b>this</b> & that', why: 'tidy' }); drop(dir, { ...GOOD, prompt: TOKEN });
   inbox.scan(dir, 1000);
-  const s = await serve(t, dir), page = (await s.get('/')).body;
+  const s = await serve(t, dir), page = (await s.get('/inbox')).body;
   assert.match(page, new RegExp(`data-inbox="${id}"`)); assert.match(page, /Do &lt;b&gt;this&lt;\/b&gt; &amp; that/); assert.ok(!page.includes('<b>this</b>'));
-  assert.equal((page.match(/data-inbox=/g) || []).length, 2, "the Needs you card and its row in the Waiting for approval dropdown (issue #1101)");
+  assert.equal((page.match(/data-inbox=/g) || []).length, 1, 'the Inbox page owns one proposal card');
   assert.match(page, /<form method="post" action="\/inbox"[^>]*><input type="hidden" name="proof"/);
   assert.ok(!page.includes(TOKEN));
-  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.needsYou.some(a => a.id === `inbox-${id}`));
+  const view = JSON.parse((await s.get('/api/view.json')).body); assert.ok(view.panels.inbox.some(c => c.id === id));
 });
 test('dashboard: no proof, wrong proof, a foreign origin, a bad id or decision approve nothing; the right proof records the decision', async t => {
   const dir = makeInbox(t), id = drop(dir, GOOD); inbox.scan(dir, 1000);
@@ -358,6 +357,7 @@ test('team: with every implementer slot busy and the overall cap reached, an app
   assert.equal(w.calls.created.length, 1); assert.equal(w.calls.created[0].kind, 'inbox');
   const st = inbox.statusOf(w.dir, id);
   assert.equal(st.state, 'running'); assert.equal(st.lane, 'inbox'); assert.equal(st.waitedMs, 5000 - st.decidedAt); assert.equal(st.startedAt, 5000);
+  assert.equal(st.activeJob, '00000000000000000000000000000001', 'the transient Inbox status records its created job ID');
   const card = inbox.decidedCards(w.dir, 5000).find(c => c.id === id); assert.equal(card.lane, 'inbox');
 });
 test('team: the inbox lane has its own count: a running prompt fills it, limits.roles.inbox raises it, and implementer work does not fill it', async t => {
@@ -752,7 +752,7 @@ test('team: an Undo between the tick snapshot and the effect wins; nothing is po
   const w = world(t); const id = approve(w, DRAFT);
   const stale = inbox.allStatuses(w.dir).find(s => s.id === id);   // the tick's snapshot: approved
   assert.equal(inbox.undo(w.dir, id, 3).ok, true);
-  await w.team.postIssueDraft(w.dir, stale, inbox.loadItem(w.dir, id).item, rep());
+  await postIssueDraft(w.team, w.dir, stale, inbox.loadItem(w.dir, id).item, rep());
   assert.equal(w.calls.issues.length, 0, 'the issue is not posted'); assert.equal(inbox.statusOf(w.dir, id).state, 'pending');
   const a = actionWorld(t); const aid = approve(a, act('stop_job', JOB.slice(0, 8)));
   const astale = inbox.allStatuses(a.dir).find(s => s.id === aid); inbox.undo(a.dir, aid, 3);

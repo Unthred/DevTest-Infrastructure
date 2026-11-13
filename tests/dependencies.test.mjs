@@ -6,10 +6,12 @@ import path from 'node:path';
 import { STATE_TEXT } from '../supervisor/dependencies.mjs';
 import { STATE_TEXT as MCP_TEXT } from '../foreman-mcp/dependencyview.mjs';
 import { parseDependsOn, prerequisiteState, findCycles, evaluateDependencies } from '../supervisor/dependencies.mjs';
+import { parseDependsOn as parseMcpDependsOn } from '../foreman-mcp/dependency-parser.mjs';
 import { dependencyView, dependencySkips } from '../foreman-mcp/dependencyview.mjs';
-import { dependencyPlain, dependencyAttention, enforceDependencies } from '../supervisor/teamdeps.mjs';
+import { dependencyPlain, dependencyAttention, enforceDependencies, malformedDependencyStalls } from '../supervisor/teamdeps.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
+import { severityOf } from '../supervisor/dashui/logic.mjs';
 
 const sha = c => c.repeat(40);
 const INSTALLED = sha('a'), MERGED_IN = sha('b'), MERGED_LATER = sha('c');
@@ -200,4 +202,60 @@ test('a prerequisite merged long ago, outside the cached merged list, is found t
 
 test('the supervisor and the MCP server say the same words for each state', () => {
   assert.deepEqual(STATE_TEXT, MCP_TEXT);
+});
+
+test('parseDependsOn: accepts only one standalone list and rejects ambiguous declarations', () => {
+  assert.deepEqual(parseDependsOn('Depends on: #1156, #1157').numbers, [1156, 1157]);
+  for (const [name, body] of [
+    ['none', 'Depends on: none'],
+    ['inline declaration', 'V2 item 33. Cards. Depends on: #1156, #1157'],
+    ['two lines', 'Depends on: #1156\nDepends on: #1157'],
+    ['self reference', 'Depends on: #1157'],
+  ]) {
+    const p = parseDependsOn(body, 1157);
+    assert.ok(p.malformed, name);
+    assert.deepEqual(p.numbers, [], name);
+  }
+  assert.equal(parseDependsOn('"V2 item 33. Cards. Depends on: #1156"').malformed, null, 'quoted title');
+  assert.match(parseDependsOn('V2 item 33. "Cards". Depends on: #1156').malformed, /own line/, 'balanced quote before declaration');
+  assert.equal(parseDependsOn('> V2 item 33. Cards. Depends on: #1156').malformed, null, 'quoted block');
+  assert.equal(parseDependsOn('see `Depends on: #5` in code').malformed, null, 'inline code');
+});
+
+test('Foreman imports the parser used by MCP proposals', () => {
+  assert.equal(parseDependsOn, parseMcpDependsOn);
+  for (const [body, self] of [
+    ['Depends on: #12, #15', null],
+    ['Depends on: none', null],
+    ['V2 item 33. Cards. Depends on: #1156, #1157', null],
+    ['"Depends on: #12"', null],
+    ['`Depends on: #12`', null],
+    ['V2 item 33. "Cards". Depends on: #1156', null],
+    ['Depends on: #9\nDepends on: #10', null],
+    ['Depends on: #9', 9],
+  ]) assert.deepEqual(parseMcpDependsOn(body, self), parseDependsOn(body, self), body);
+});
+
+test('evaluateDependencies: an inline Depends on holds the issue so no job starts (issue #1182)', () => {
+  const r = evaluateDependencies({ issues: [{ number: 1157, body: 'V2 item 27. Depends on: #1156' }], lookup: () => ({}), installedSha: INSTALLED, isAncestor: ancestor });
+  assert.equal(r.byIssue.get(1157).met, false);
+  assert.match(r.byIssue.get(1157).reasons[0], /own line/);
+});
+
+test('an edited issue #1169 body is an action alert, stalls after 15 minutes, and quotes its bad line to the planner', async t => {
+  // Issue #1169 before its correction began exactly this way; the declaration was inside the V2-item sentence.
+  const body = 'V2 item 33. Cards. Depends on: #1156, #1157\n\n## What happened\nThe card needs a control.';
+  const { team } = world(t, { issues: [issue(1169, body), issue(1156), issue(1157)] });
+  await team.plan();
+  const entry = team.dependencies.byIssue.get(1169);
+  assert.match(entry.malformed, /own line/);
+  const cache = { dependencies: dependencyPlain(team.dependencies) };
+  const [attention] = dependencyAttention(cache);
+  assert.equal(severityOf(attention.id), 'action');
+  assert.match(attention.text, /V2 item 33\. Cards\. Depends on: #1156, #1157/);
+  const stalled = malformedDependencyStalls(cache, entry.since + 15 * 60000 + 1);
+  assert.equal(stalled[0].id, 'stalled-dependency-1169');
+  const excluded = team.exclusion(1169, new Map([[1169, issue(1169, body)]]));
+  assert.match(excluded.text, /offending line: "V2 item 33\. Cards\. Depends on: #1156, #1157"/);
+  assert.match(dependencySkips([{ kind: 'dependency', number: 1169, reason: excluded.text }])[0].reason, /offending line/);
 });

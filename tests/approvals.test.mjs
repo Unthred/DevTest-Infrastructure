@@ -62,6 +62,7 @@ test('dropdown: button with count badge, rows with title, kind and age but no id
   assert.match(html, /Waiting for approval <span class="badge" data-approvals-count>1<\/span>/);
   const visible = html.replace(/<[^>]*>/g, ' ');
   assert.match(visible, /Tidy the docs/); assert.match(visible, /Prompt · 12 min ago/); assert.ok(!visible.includes(id) && !/[0-9a-f]{12}/.test(visible), 'no hex ids in what is read');
+  assert.match(html, /<h3 class="inbox-title t">Tidy the docs<\/h3>/);
   assert.match(html, /<details><summary>Why<\/summary>/); assert.match(html, /value="approve"/); assert.match(html, /value="reject"/);
   const empty = approvalsDropdown({ rows: [], esc, ago: () => '' });
   assert.match(empty, /Nothing waiting for you/); assert.match(empty, /data-approvals-count>0</); assert.ok(!empty.includes('data-approve-all'));
@@ -104,11 +105,11 @@ test('page: the Now card carries the dropdown; the same POST /inbox path decides
 test('shared path: the dropdown forms post exactly what the Inbox card forms post', async t => {
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
-  const page = (await s.get('/')).body;
-  const forms = [...page.matchAll(/<form method="post" action="([^"]*)" class="inbox-form">(.*?)<\/form>/g)].map(m => `${m[1]}|${m[2].replace(/value="[0-9a-f]{32}"/, 'value="ID"').replace(/<input type="hidden" name="proof"[^>]*>/, '')}`);
-  const approve = forms.filter(f => f.includes('value="approve"'));
-  assert.ok(approve.length >= 2, 'one in Needs you, one in the dropdown');
-  assert.equal(new Set(approve).size, 1, 'identical action and fields');
+  const forms = page => [...page.matchAll(/<form method="post" action="([^"]*)" class="inbox-form">(.*?)<\/form>/g)].map(m => `${m[1]}|${m[2].replace(/value="[0-9a-f]{32}"/, 'value="ID"').replace(/<input type="hidden" name="proof"[^>]*>/, '')}`).filter(f => f.includes('value="approve"'));
+  const card = forms((await s.get('/inbox')).body), dropdown = forms((await s.get('/')).body);
+  assert.equal(card.length, 1, 'the Inbox page owns the proposal card');
+  assert.equal(dropdown.length, 1, 'the Waiting for approval dropdown keeps the same decision');
+  assert.equal(card[0], dropdown[0], 'identical action and fields');
 });
 
 const DECISION = { id: 'fixlimit-77', text: 'PR #77 is still rejected after 2 fix rounds (limit 2)', tried: 'Two rounds ran.', action: 'Choose one: raise the limit, or close it.', links: [{ text: 'PR #77', url: 'https://github.com/o/r/pull/77' }], since: 500 };
@@ -121,7 +122,7 @@ test('list: decisions waiting on the homeowner are listed with their options; ot
   assert.equal(d.tier, 'decision'); assert.equal(d.kindLabel, 'Decision'); assert.match(d.options, /^Choose one: raise the limit/); assert.equal(d.link, 'https://github.com/o/r/pull/77');
   assert.deepEqual(approveAllIds(rows), [a], 'a decision is never in Approve all');
   const html = approvalsDropdown({ rows, esc, ago: () => '3 min ago' });
-  assert.match(html, /data-approvals-count>3</); assert.match(html, /Options: Choose one/); assert.match(html, /Decide it here/);
+  assert.match(html, /data-approvals-count>3</); assert.match(html, /Decision: Choose one/); assert.match(html, /Open it/);
   const decisionRow = html.split('<li ').find(x => x.includes('data-tier="decision"'));
   assert.ok(!/<form|value="approve"/.test(decisionRow), 'no Approve or Reject form on a decision row');
 });
@@ -130,7 +131,7 @@ test('list: an action never shows its target job id, in the title or the why', t
   const [r] = pendingApprovals(dir);
   assert.ok(r.why.length > 10); assert.ok(!/[0-9a-f]{8}/.test(r.why) && !r.why.includes('Target'), r.why);
   const html = approvalsDropdown({ rows: [r], esc, ago: () => '1 min ago' });
-  assert.ok(!/[0-9a-f]{8}/.test(html.replace(/data-inbox="[^"]*"|name="id" value="[^"]*"/g, '')), 'no hex id in what is read');
+  assert.ok(!/[0-9a-f]{8}/.test(html.replace(/data-inbox="[^"]*"|id="dec-[^"]*"|name="id" value="[^"]*"/g, '')), 'no hex id in what is read');
 });
 test('view: withApprovals puts the one list on the view the dropdown reads', t => {
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);

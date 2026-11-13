@@ -10,14 +10,18 @@ import { entryLink, entryText, filterTimeline } from './history.mjs';
 import { DEFAULT_SINCE, SECTIONS, SINCE_RANGES } from './since.mjs';
 import { fmtElapsed, renderEntries, renderTotals, totals } from './dashui/watch.mjs';
 import { DIRECTION_WORDS, SORT_LABELS, footerText, searchVisible, sortListRows, sortsVisible } from './dashui/lists.mjs';
-import { approvals, stepDoneForm } from './approvals-ui.mjs';
+import { approvals, decisionHtml, stepDoneForm } from './approvals-ui.mjs';
+import { inboxPage } from './inbox-page.mjs';
 import { agentLine } from './agentline.mjs';
 import { CAUSE_LABEL } from './idlecause.mjs';
 import { healthPage } from './healthpage.mjs';
 import { MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './diagnostics.mjs';
 import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
-
+import { resetsCard } from './resetscard.mjs';
+import { allowanceBody as allowanceCard } from './allowancecard.mjs';
+import { agentBarHtml } from './appbaragent.mjs';
+import { withWorkViews } from './jobs-page.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -36,10 +40,10 @@ const sha7 = s => esc(String(s || '').slice(0, 7));
 const AGENT_COLOUR = { claude: 'var(--claude)', codex: 'var(--codex)' };
 const EXTRA_COLOURS = ['var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--s6)'];
 const colourOf = (name, i = 0) => AGENT_COLOUR[name] || EXTRA_COLOURS[i % EXTRA_COLOURS.length];
-
 // ---- routes
 export const NAV = [
-  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
+  ['overview', '/', 'Overview', 'grid'], ['agents', '/agents', 'Agents', 'users'], ['work', '/work', 'Work', 'list'],
+  ['inbox', '/inbox', 'Inbox', 'list'], ['activity', '/activity', 'Activity', 'pulse'],
   ['usage', '/usage', 'Usage & cost', 'chart'], ['reviews', '/reviews', 'Reviews', 'review'], ['supervisor', '/supervisor', 'Supervisor', 'shield'], ['diagnostics', '/diagnostics', 'Diagnostics', 'clock'], ['health', '/health', 'Health', 'pulse'], ['system', '/system', 'System', 'gear']
 ];
 export function matchRoute(pathname) {
@@ -406,7 +410,6 @@ function robustnessCard(view) {
 const KIND_WORD = { prompt: 'prompt', issue_draft: 'issue draft', action: 'action', host_value: 'host value' };
 const inboxTag = (id, kind) => (/^[a-f0-9]{32}$/.test(String(id)) ? `<span class="inbox-tag"><a class="inbox-id" href="/inbox/${id}" title="Direct link to this item"><code>${id.slice(0, 8)}</code></a>${KIND_WORD[kind] ? ` <span class="inbox-kind">${KIND_WORD[kind]}</span>` : ''}<span class="inbox-fullid" hidden>${id}</span></span>` : '');
 const inboxForm = (id, decision, label, cls) => `<form method="post" action="/inbox" class="inbox-form"><input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="decision" value="${decision}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
-const inboxBlock = c => `<div class="inbox-item" data-inbox="${esc(c.id)}">${c.why ? `<div class="sub">Why: ${esc(c.why)}</div>` : ''}<pre class="inbox-text">${esc(c.text || '')}</pre><div class="sub">Content hash ${esc(c.hash || '')}</div><div class="acts">${c.broken ? '' : inboxForm(c.id, 'approve', 'Approve', 'inbox-approve')}${inboxForm(c.id, 'reject', 'Reject', 'inbox-reject')}</div><div class="inbox-err" role="alert" hidden></div></div>`;
 // Issue #856: what was chosen and when ("Approved 06:20"), shown beside the title. dashui/app.js rewrites the time in the viewer's zone from data-lms.
 const OUTCOME = { approve: ['Approved', 'approved', '✓'], reject: ['Rejected', 'rejected', '✗'] };
 // Issue #925: an approval nothing has acted on yet says it is waiting for a free slot; once the tick has taken it, it reads plainly "Approved".
@@ -415,14 +418,14 @@ const outcomeSpan = (decision, ms, state, c = {}) => { const [label, cls] = OUTC
 const undoForm = c => (c.undoUntil ? `<form method="post" action="/inbox" class="inbox-form inbox-undo" data-undo-until="${Math.round(c.undoUntil)}"><input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="decision" value="undo"><button class="linkbtn" type="submit">Undo</button></form>` : '');
 // The collapsed "Decided today" list (newest first). It is also rendered, hidden and empty, while a proposal is pending, so the script can move a decided card into it.
 function decidedBlock(view) {
-  const list = view.panels.inboxDecided || [], pending = view.panels.needsYou.some(a => a.inbox);
+  const list = view.panels.inboxDecided || [], pending = (view.panels.inbox || []).length > 0;
   if (!list.length && !pending) return '';
   const rows = list.map(c => `<li id="inbox-${esc(c.id)}" data-decided="${esc(c.id)}"><span class="inbox-title">${esc(c.title || 'Overseer proposal')}</span> ${inboxTag(c.id, c.kind)}${c.issue ? ` ${issueLink(c.issue)}` : ''} ${outcomeSpan(c.decision, c.decidedAt, c.state, c)} ${undoForm(c)}</li>`).join('');
   return `<details class="inbox-decided"${list.length ? '' : ' hidden'}><summary>Decided today (<span class="inbox-decided-n">${list.length}</span>)</summary><ul class="inbox-decided-list">${rows}</ul></details>`;
 }
 function needsPanel(view) {
   const items = view.panels.needsYou;
-  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<div class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</div>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}<div class="sub">Decision: ${esc(a.decision)}</div>${a.causes?.length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${a.links?.length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : stepDoneForm(a)}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
+  const rows = items.map(a => dli({ cls: 'sev-action', id: `att-${a.id}`, key: `att-${a.id}`, sev: 'action', num: a.ref?.n, name: a.text, inner: `<h3 class="t">${badge('action')} ${escT(a.text)} ${refOf(a.ref)}${a.inboxId ? ` ${inboxTag(a.inboxId, a.inboxKind)}` : ''}${a.inbox ? ' <span class="inbox-outcome" hidden></span>' : ''}</h3>${a.tried ? `<div class="sub">Tried: ${esc(a.tried)}</div>` : ''}${decisionHtml(a, `att-${a.id}`)}${(a.causes || []).length > 1 ? `<details class="causes"><summary>${a.causes.length} causes</summary><ul>${a.causes.map(c => `<li>${escT(c.text)}${c.action ? ` <span class="sub">Action: ${esc(c.action)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}${(a.links || []).length ? `<div class="sub">${a.links.map(l => (l.url.startsWith('/') ? `<a href="${esc(l.url)}">${esc(l.text)}</a>` : ext(l.url, l.text))).join(' · ')}</div>` : ''}${a.inbox ? inboxBlock(a.inbox) : ''}${a.command ? cmdBlock(a.command) : stepDoneForm(a)}${a.watch ? `<div class="acts">${watchLink(a.watch, 'Replay transcript')}</div>` : ''}${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` }));
   return (items.length ? `${copyAllBtn(items, 'Needs you items')}${dlist({ id: 'needs', label: 'Needs you', noun: 'items', rows, sorts: ['default', 'number', 'name'], defaultLabel: 'Blocks most work first' })}`
     : empty('Nothing needs you', 'No homeowner decision or failed work is waiting.', 'check')) + decidedBlock(view);
 }
@@ -436,15 +439,6 @@ function warningsPanel(view) {
   const items = unknown.length ? [...view.panels.warnings, { severity: 'warning', text: `${unknown.length} agent record${unknown.length === 1 ? '' : 's'} could not be read or have an unknown state: running count is unknown` }] : view.panels.warnings;
   return items.length ? `${copyAllBtn(items, 'warnings')}${dlist({ id: 'warnings', label: 'Warnings', noun: 'warnings', rows: items.map((a, n) => dli({ cls: `sev-${a.severity}`, key: `warn-${a.id || n}`, sev: a.severity, num: a.ref?.n, name: a.text, inner: `<div class="t">${badge(a.severity)} ${escT(a.text)} ${refOf(a.ref)}</div>${a.overseer ? `<div class="acts">${overseerBtn(a.overseer)}</div>` : ''}` })), sorts: ['severity', 'default', 'number', 'name'], defaultSort: { key: 'severity', dir: 'desc' }, defaultLabel: 'As reported' })}` : empty('No warnings', 'No stalls, stale data or version drift.', 'check');
 }
-// Issues #76, #421: one compact badge per agent: name, role, state, linking to the agent's page. The job description is NOT here
-// (it lives once, on the Now card); several jobs show a count instead of a role.
-const agentBadge = a => {
-  const jobs = a.jobs?.length ? a.jobs : a.job ? [a.job] : [];
-  const mid = jobs.length > 1 ? `${jobs.length} jobs` : jobs.length === 1 ? (jobs[0].role === 'reviewer' ? 'Reviewer' : jobs[0].role === 'rebaser' ? 'Rebaser' : jobs[0].role === 'inbox' ? 'Inbox lane' : 'Implementer') : '';
-  const st = ({ running: 'Running', idle: 'Idle', paused: 'Paused', blocked: 'Blocked', unknown: 'Unknown' })[a.state] || a.state;
-  const label = [a.name, mid, st].filter(Boolean).join(' · ');
-  return `<li><a class="agent-badge sev-${esc(stateSev[a.state] || 'info')}" href="/agents/${esc(encodeURIComponent(a.name))}" data-agent="${esc(a.name)}" data-state="${esc(a.state)}" aria-label="${esc(label)}" title="${esc(label)}"><b class="ab-name">${esc(a.name)}</b>${mid ? `<span class="ab-role">${esc(mid)}</span>` : ''}<span class="ab-state">${esc(st)}</span></a></li>`;
-};
 // Issue #473: one of three states, never "due now". The tick's real schedule (or its live lock) is the source.
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 export function nextTickHtml(view, now) {
@@ -457,7 +451,6 @@ export function nextTickHtml(view, now) {
   // scheduled: the script counts down, then turns the count into "overdue by" and reveals the last tick time
   return `<b data-tick-state="scheduled"><span data-countdown="${n.at}">in ${esc(clock(n.at - now))}</span><span data-after hidden>${last}</span></b>`;
 }
-const agentStat = view => `<div class="stat agent-lines" data-bar="agents" data-bar-name="Agents" aria-label="Agents"><ul>${view.agents.map(agentBadge).join('')}</ul></div>`;
 // Issue #467: how old the prepared copy behind this page is. Never shown as current once it is old or its rebuild failed.
 export function pageDataStat(view) {
   const d = view.pageData; if (!d || !Number.isFinite(d.ageMs)) return '';
@@ -470,9 +463,9 @@ function statusBar(view, route, head = '', crumbs = '') {
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
   const L = pillLinks({ health: view.health, attention: view.attention, needsYou: view.panels?.needsYou, version: view.version });
   const pill = (href, inner, why) => `<a class="pill" href="${esc(href)}" title="${esc(why)}">${inner}</a>`;
-  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} DevTest team</div>${head}
+  return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} <span class="brand-name">DevTest team</span></div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
-${agentStat(view)}
+${agentBarHtml({ esc, lt, dur, utc }, view)}
 <div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}
@@ -692,7 +685,7 @@ function issueDetail(view, query, path, route) {
 
 // Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
 // and redacted when it was archived, and the text shown is rebuilt from those fields. Filters are plain GET parameters.
-const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', unblock: 'Unblock', migration: 'Migration' };
+const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', description: 'Description round', unblock: 'Unblock', migration: 'Migration' };
 const SOURCE_LABEL = { live: 'recorded live', 'job-record': 'from the job record', github: 'backfilled from GitHub' };
 const mib = n => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GiB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`);
 function storageCard(view) {
@@ -753,20 +746,8 @@ function activityPage(view, query, path) {
   const body = toggle + activityChips(view, collapsed, query, path) + table({ id: 'act', path, query, noun: 'events', rows, searchKeys: ['text', 'agent', 'outcome', 'jobKind'], cols, totals: { text: 'count', tokens: 'sum' }, emptyState: empty('No activity yet', 'Events appear after the first tick.', 'pulse') });
   return { title: 'Activity', body: grid('activity', card({ id: 'act', title: `Recent activity (${rows.filter(r => !r.child).length} rows from ${view.activity.length} events)`, span: 12, movable: false, body })) };
 }
-// One agent's allowance card (issue #75): the last known reading with its age; an expired window (reset time passed) is
-// marked and never shown as current; a limit pause says when it resets and on what basis.
-const SOURCE = { job: 'reported to a supervised job', probe: 'refreshed by a minimal probe run (no repository, no tools)', 'session-log': 'read from the local Codex session log (no model call)' };
-function allowanceBody(u, now, name = '') {
-  const l = u.limit;
-  const refresh = u.canProbe && name ? `<form method="post" action="/probe/${encodeURIComponent(name)}" class="probe-form"><button type="submit" class="tbtn" title="Run one minimal probe to read the current allowance (no repository, no tools)">Refresh allowance</button></form>` : '';
-  const limit = l ? `<p class="limit">${badge('action', 'Paused on a usage limit')} ${l.limiting ? `${esc(l.limiting)}. ` : ''}${l.resetsAt ? `resets <b>${lt(l.resetsAt)}</b> (${esc(inFuture(l.resetsAt, now))}; ${esc(l.basis)})` : 'reset time not reported by the provider'}${l.retryAt ? `. The supervisor retries ${esc(inFuture(l.retryAt, now))}.` : '.'}</p>` : '';
-  if (!u.windows.length) return `${limit}<p>Allowance: <b>unknown</b></p>${refresh}${empty('No allowance reported', 'The provider has never reported a limit window to the supervisor.', 'info')}`;
-  const used = w => (Number.isFinite(w.utilization) ? `<div class="bar${w.expired ? ' expired' : ''}" role="img" aria-label="${pct(w.utilization)} used${w.expired ? ', expired' : ''}"><b style="width:${Math.min(100, w.utilization * 100)}%"></b></div> ${pct(w.utilization)}${w.expired ? ' <span class="muted">(expired)</span>' : ''}` : 'unknown');
-  const resets = w => (!w.resetsAt ? 'unknown' : w.expired ? `reset ${esc(dur(now - w.resetsAt))} ago; current use unknown` : esc(inFuture(w.resetsAt, now)));
-  const rows = u.windows.map(w => `<tr${w.expired ? ' class="expired"' : ''}><td>${esc(w.label)}</td><td>${used(w)}</td><td>${resets(w)}</td></tr>`).join('');
-  const note = u.allExpired ? `<p class="sub">${badge('warning', 'Expired')} Every window in this reading has reset since; current use is unknown until the provider reports again.</p>` : '';
-  return `${limit}<table><thead><tr><th>Window</th><th>Used</th><th>Resets</th></tr></thead><tbody>${rows}</tbody></table>${note}<p class="sub">Last reading ${esc(ago(u.observedAt, now))} (${lt(u.observedAt)}), ${esc(SOURCE[u.source] || 'reported by the provider')}.</p>${refresh}`;
-}
+// One agent's allowance card (issue #75, supervisor/allowancecard.mjs): the helpers it needs are passed in.
+const allowanceBody = (u, now, name = '') => allowanceCard({ esc, badge, lt, dur, pct, inFuture, ago, empty }, u, now, name);
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
   const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name) })).join('');
@@ -789,7 +770,8 @@ function usagePage(view, query, path) {
     { key: 'tokens', label: 'Tokens', num: true, html: x => esc(num(x.tokens)) }, { key: 'cost', label: 'CLI cost estimate (£)*', num: true, html: x => esc(usd(x.cost)), fmt: usd }];
   const failed = card({ id: 'u-failed', title: `Failed attempts: ${fs_.jobs} job${fs_.jobs === 1 ? '' : 's'}, ${fs_.tokens == null ? 'unknown' : num(fs_.tokens)} tokens, ${usd(fs_.cost)}`, span: 12, movable: false, body: table({ id: 'failed', path, query, noun: 'failed jobs', rows: fs_.rows, searchKeys: ['name', 'kind', 'status'], totals: { attempts: 'sum', tokens: 'sum', cost: 'sum' }, cols: fcols,
     emptyState: empty('No failed attempts', 'Jobs that ended failed or blocked, with the tokens and cost they used, are listed here.', 'chart') }) });
-  return { title: 'Usage & cost', body: `${grid('usage', win + chart + tokChart + byModel + failed + table_)}` };
+  const limits = resetsCard({ esc, card, badge, lt }, view.limitResets);
+  return { title: 'Usage & cost', body: `${grid('usage', limits + win + chart + tokChart + byModel + failed + table_)}` };
 }
 function reviewsPage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
@@ -1021,6 +1003,8 @@ function processesPage(view, query, pathname, route) {
     body: `${grid('processes', body)}<script type="module" src="/static/processes.js"></script>` };
 }
 const PAGES = { headline: headlinePage, processes: processesPage, diagnostics: diagnosticsPage, health: (view, query, path, route) => healthPage(route, { esc, card, grid, empty, legend, plainTable, diagSpark, utc }), evidence: evidencePage, 'evidence-run': evidenceRunPage, overview, agents: agentsPage, agent: agentDetail, work: workPage, pr: prDetail, issue: issueDetail, job: jobDetail, watch: watchPage, activity: activityPage, timeline: timelinePage, usage: usagePage, reviews: reviewsPage, supervisor: supervisorPage, ticks: ticksPage, upgrades: upgradesPage, system: systemPage };
+PAGES.work = withWorkViews(workPage, { esc, lt, badge, agentTag, prLink, issueLink, copyBtn, card, grid, empty });
+PAGES.inbox = (view, query) => inboxPage(view, query, { card, decided: decidedBlock, esc, form: inboxForm, grid, tag: inboxTag });
 
 export const PAGE_NAMES = Object.keys(PAGES);
 

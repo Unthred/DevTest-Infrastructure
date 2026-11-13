@@ -1,0 +1,15 @@
+{
+ "job": "60b46719080fc517fd9d569569d1c6cf",
+ "at": 1794472463184,
+ "type": "rebase",
+ "cause": "deterministic",
+ "detail": "the same stop (postcondition_not_met) happened 2 times before on this item",
+ "stop": "postcondition_not_met",
+ "agent": "claude",
+ "pr": 1180,
+ "issue": null,
+ "inputTokens": 1934329,
+ "outputTokens": 17251,
+ "tokens": 1951580,
+ "cost": 1.0052753
+}

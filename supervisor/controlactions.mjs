@@ -3,6 +3,7 @@
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
 import { addLabelAsApp } from './appidentity.mjs';
 import { refusalNote } from './pendingsteps.mjs';
+import { postIssueDraft } from './issue-drafts.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
@@ -104,7 +105,7 @@ export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords
 
 // Runs one approved inbox item by its kind; kept out of Team so adding a kind does not grow that class.
 export async function dispatchApproved(team, inboxStore, dir, st, item, report) {
-  if (st.kind === 'issue_draft') await team.postIssueDraft(dir, st, item, report);
+  if (st.kind === 'issue_draft') await postIssueDraft(team, dir, st, item, report);
   if (st.state !== 'approved') return;
   if (st.kind === 'action') await team.runInboxAction(dir, st, item, report);
   if (st.kind === 'host_value') team.runHostValue(dir, st, item, report);

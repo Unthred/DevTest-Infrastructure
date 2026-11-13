@@ -1,6 +1,7 @@
 // Issue #855: a change is done when it is installed and working, so "the homeowner can do X after deploy" is never an accepted resolution.
 // Pure text rules for the pull request description. A step that truly cannot be automated is listed under a "Homeowner steps" heading
 // (and shows in Needs you); anything else that defers work to the homeowner after deploy draws CHANGES.
+export { syncPendingSteps } from './pendingstepssync.mjs';   // issue #1155: the tick pass, re-exported so team.mjs needs no new import line
 export const HEADING = /^#{1,6}\s*homeowner steps\b.*$/im;
 const DEFERRAL = [
   /\b(?:for|to be done by|left (?:to|for)|up to) the homeowner\b(?:[^.\n]|\.(?=\S)){0,60}\b(?:after|once|when)\b(?:[^.\n]|\.(?=\S)){0,30}\b(?:deploy|deployed|deployment|install|installed|merge|merged|release|released)/i,

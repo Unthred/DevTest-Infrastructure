@@ -54,6 +54,15 @@ function diskCards(h, d) {
   return cards.join('');
 }
 
+// Issue #1151: the host pressure hold, each measure's current value next to its threshold.
+function pressureCard(h, p) {
+  if (!p) return '';
+  const rows = p.measures.map(m => `<tr data-pressure-measure="${h.esc(m.id)}" data-tripped="${m.tripped}"><td>${h.esc(m.label)}</td><td>${m.value == null ? 'not read' : h.esc(`${m.value}${m.unit}`)}</td><td>${m.below ? 'floor' : 'limit'} ${h.esc(`${m.limit}${m.unit}`)}</td><td>${m.holdsStarts ? (m.tripped ? 'holding starts' : 'ok') : (m.tripped ? 'warning only' : 'ok')}</td></tr>`).join('');
+  const state = p.hold ? `Holding new job starts: ${h.esc(p.reason)}` : 'Not holding job starts.';
+  const body = `<p class="sub" data-pressure-hold="${p.hold}">${state}</p>${p.measures.length ? `<table class="plain"><thead><tr><th>Measure</th><th>Now</th><th>Threshold</th><th>Effect</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="sub">No reading yet; the next tick records one.</p>'}`;
+  return h.card({ id: 'health-pressure', title: 'Host pressure hold', span: 12, movable: false, cls: p.hold ? 'health-alert' : '', body });
+}
+
 export function healthPage(route, h) {
   const d = route.data;
   if (!d) return { title: 'Health', body: h.grid('health', h.card({ id: 'health-none', title: 'Health', span: 12, movable: false, body: h.empty('Health is not available here', 'This page was rendered without its data.', 'warn') })) };
@@ -61,5 +70,5 @@ export function healthPage(route, h) {
   const rec = h.card({ id: 'health-recorder', title: 'Load, swap and disk wait from the memory flight recorder', span: 12, movable: false, body: `<p class="sub" data-health-recorder="${h.esc(r.status)}">${problem ? '' : `${h.esc(r.samples)} samples from ${h.esc(r.files)} log file${r.files === 1 ? '' : 's'}. `}${r.note ? h.esc(r.note) : ''}</p>${problem ? h.empty(r.status === 'empty' ? 'No recorder samples in this window' : r.status === 'missing' ? 'Recorder logs not found' : 'Recorder logs not readable', 'The rest of this page does not depend on them.', 'warn')
     : `<div class="diag-sparks">${h.diagSpark(r.hourly, 'loadMax', 'Load average (1 min), hourly peak', '')}${h.diagSpark(r.hourly, 'swapMaxPercent', 'Swap in use, hourly peak', ' %')}${h.diagSpark(r.hourly, 'iowaitAvg', 'CPU waiting on disk, hourly average', ' %')}</div>${h.plainTable(['Day', 'Samples', 'Load avg', 'Load peak', 'Swap peak', 'Disk wait avg', 'Disk wait peak', 'Blocked tasks peak'], r.days.map(x => (x.samples ? [x.day, x.samples, x.loadAvg, x.loadMax, `${x.swapMaxPercent}% (${kb(x.swapMaxKb)})`, `${x.iowaitAvg ?? '–'}%`, `${x.iowaitMax ?? '–'}%`, x.blockedMax] : [x.day, 0, '–', '–', '–', '–', '–', '–'])), 'Recorder figures per day')}<p class="sub">Disk I/O is the share of CPU time spent waiting on disk and the number of blocked tasks, both from the one-minute host samples.</p>`}` });
   const procs = h.card({ id: 'health-processes', title: 'Memory and CPU per job', span: 12, movable: false, body: '<p class="sub">Per job memory and CPU are on the <a href="/system/processes">Processes page</a>.</p>' });
-  return { title: 'Health', body: h.grid('health', diskCards(h, d) + rec + procs) };
+  return { title: 'Health', body: h.grid('health', diskCards(h, d) + pressureCard(h, d.hostPressure) + rec + procs) };
 }

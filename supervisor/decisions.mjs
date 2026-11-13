@@ -20,15 +20,17 @@ export function parseRegister(text) {
   return out;
 }
 
-// The approval a PR comment records: a line `homeowner-approval: D-025 [D-026 ...]` written by the repository owner.
+// The approval a PR comment records: a line `homeowner-approval: D-025 [D-026 ...]` written by the repository owner. Issue #1229: a proposal
+// that has no number yet is named by its file, `homeowner-approval: 1164-queue-control`.
+const APPROVAL_ID = String.raw`(?:D-\d{3}|\d+-[a-z0-9]+(?:-[a-z0-9]+)*)`;
 export function approvalsFrom(comments, owner) {
   const out = new Map();   // id -> [{ url, id }]
   for (const c of comments || []) {
     if (!c || String(c.login || '').toLowerCase() !== String(owner || '').toLowerCase() || !owner) continue;
     for (const line of String(c.body || '').split('\n')) {
-      const m = /^homeowner-approval:\s*((?:D-\d{3}[\s,]*)+)$/.exec(line.trim());
+      const m = new RegExp(String.raw`^homeowner-approval:\s*((?:${APPROVAL_ID}[\s,]*)+)$`).exec(line.trim());
       if (!m) continue;
-      for (const id of m[1].match(/D-\d{3}/g)) (out.get(id) || out.set(id, []).get(id)).push({ url: String(c.url || ''), id: String(c.id ?? '') });
+      for (const id of m[1].match(new RegExp(APPROVAL_ID, 'g'))) (out.get(id) || out.set(id, []).get(id)).push({ url: String(c.url || ''), id: String(c.id ?? '') });
     }
   }
   return out;

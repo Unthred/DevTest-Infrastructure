@@ -3,7 +3,9 @@
 import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
+import { wasteCauses } from './wastecauses.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
+import { jobTableFields } from './jobs-fields.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -13,9 +15,11 @@ import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.m
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
+import { latchAttention } from './latchaction.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
-import { planningInputs, readHeadRegister } from './planning.mjs';
-import { proposalsAdded } from './decisions.mjs';
+import { planningInputs } from './planning.mjs';
+import { pendingProposals, proposalWords } from './decisionproposals.mjs';
+export { pendingProposals };
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
@@ -23,17 +27,21 @@ import { consolidateNeedsYou } from './needsyou.mjs';
 import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { faultAttention } from './dashassign.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
-import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex, readUpgrades } from './suphealth.mjs';
+import { afterInstallAttention, installedPrsOf } from './afterinstall-view.mjs';
+import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdictIndex } from './suphealth.mjs';
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
-import { budgetView } from './budgetview.mjs';
+import { assignmentFaults, budgetThresholds, budgetView, usageReading } from './budgetview.mjs';
 import { hasProbe } from './probe.mjs';
+import { annotateQueues, nextWhyFields } from './holdreason.mjs';
+import { hostPressureView } from './hostpressure.mjs';
 import { defaultRegistry, processStart } from './core.mjs';
 import { estimateQueue } from './estimate.mjs';
 import { idleReport } from './idlecause.mjs';
 import { wakeView } from './wake.mjs';
 import { sinceView } from './since.mjs';
-import { pendingCards as inboxCards, failedCards as failedInboxCards, refusedGroups as refusedInboxGroups, decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+import { decidedCards as decidedInboxCards, approvedItems as approvedInboxItems } from './inbox.mjs';
+import { inboxSearchView, inboxView } from './inbox-panel.mjs';
 import { describeJob, jobSubject, makeNamer, shortCommit, shortJob } from './naming.mjs';
 
 const sha7 = s => String(s || '').slice(0, 7);
@@ -48,7 +56,6 @@ export const windowLabel = (w, provider) => {
   if (w.windowMinutes === 10080) return 'weekly';
   return String(w.type || provider).replace(/_/g, ' ');
 };
-
 const DEAD = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 const fullWindow = (w, exhaustedAt = EXHAUSTED) => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || DEAD.includes(w.status);
 const utcTime = ms => new Date(ms).toISOString().slice(11, 16) + ' UTC';
@@ -207,7 +214,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     for (const e of q) { const o = e.type === 'review' ? order.get(e.ref) : null; if (o) { e.order = o.position; e.reason += ` [review order ${o.position} of ${o.of}: ${o.reason}]`; } }
   }
   for (const q of Object.values(queues)) q.sort((x, y) => (y.next - x.next) || (x.type === 'review' && y.type === 'review' && x.order && y.order ? x.order - y.order : x.ref - y.ref));
-  return queues;
+  return annotateQueues(team, queues);
 }
 
 // Why an idle agent is idle, in plain words (issue #50). Homeowner waits first, then what is in flight, then drafts, then blocked issues.
@@ -217,7 +224,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
   if (config.enabled === false) return { text: 'the team loop is switched off', links: [] };
   const next = plan.find(a => a.agent === agent);
   // Issue #487: name the hold from the last tick's record for this agent; "on the next tick" only when no hold applied to it.
-  const held = hold?.cause === 'upgrade' ? 'an install is in progress' : hold?.cause === 'named-hold' ? hold.hold : null;
+  const held = team.hostHolds?.[agent] ?? (hold?.cause === 'upgrade' ? 'an install is in progress' : hold?.cause === 'named-hold' ? hold.hold : null);   // issue #1151: the host's reason first
   if (next) return { text: `about to start ${next.type === 'cifix' ? 'fix CI on' : next.type} ${['implement', 'continue'].includes(next.type) ? names.issue(next.issue).text : names.pr(next.pr).text} ${held ? `once the hold clears; held: ${held}` : 'on the next tick'}`, links: [] };
   // A slot or cap hold stops the planner too, so the live plan has no work for this agent: name the hold anyway.
   if (held) return { text: `held: ${held}`, links: [] };
@@ -268,16 +275,6 @@ const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'str
 // Issue #804: the second opinions recorded for a PR (one per pr:head); a carried one (D-025) is an avoided review, not a review.
 const secondOpinionsOf = (state, n) => Object.entries(state.secondOpinions || {}).filter(([k]) => k.startsWith(`${n}:`)).map(([, v]) => v);
 export const carryText = c => `carried from ${sha7(c.oldHead)} to ${sha7(c.newHead)} over a clean rebase: ${c.evidence?.resolvedConflicts === false ? 'no conflict resolved' : 'conflict check not met'}, ${c.evidence?.patchUnchanged === true ? 'patch unchanged' : 'patch not shown unchanged'}, CI ${c.evidence?.ci || 'unknown'}`;
-// Issue #303: proposals that open pull requests add to the register and that main does not have yet. Never throws: an unreadable head adds none.
-export function pendingProposals(config, pulls, mainRegister, read = readHeadRegister) {
-  const out = [];
-  for (const p of pulls || []) {
-    if (p.isDraft) continue;
-    let text = ''; try { text = read(config, p) || ''; } catch { text = ''; }
-    for (const e of proposalsAdded(mainRegister, text)) out.push({ ...e, pr: p.number });
-  }
-  return out;
-}
 // Issue #414: where a held issue is listed. 'needs': a question the homeowner can answer today. 'later': parked or staged work, with what it waits
 // for and who or what ends the wait. Foreman applied the label only when state or the issue's own marker says so (stock text only then).
 const foremanApplied = (i, state) => Object.keys(state.unblock?.flags?.[i.number] || {}).length > 0 || !!state.splits?.[i.number] || i.foremanFiled === true;
@@ -389,8 +386,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
   // Issue #303: one item per decision proposal awaiting the homeowner's sign-off, naming the entry and the pull request that adds it.
-  for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${names.pr(p.pr).text}`, { kind: 'pull', n: p.pr },
-    { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
+  for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, proposalWords(p, names.pr(p.pr).text).text, { kind: 'pull', n: p.pr },
+    { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: proposalWords(p, '').action, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
   // Issue #855: a step that truly cannot be automated is listed by the PR under "Homeowner steps"; it shows here, not in a job report.
   for (const [n, h] of Object.entries(state.homeownerSteps || {})) {
     const pr = Number(n), open = (cache?.pulls || []).some(p => p.number === pr && p.headRefOid === h?.head);
@@ -410,7 +407,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried, action: `${unblock}, or review the PR by hand.`, links: [{ text: what, url: web('pull', u.pr) }] });
   }
   // Issue #212: exclusions are listed on the Work page; #1103: a bad Depends on line needs the homeowner.
-  for (const x of Team.dependencyTools.attention(cache)) add(x.id, x.text, x.ref, { action: x.action });
+  for (const x of Team.dependencyTools.attention(cache, now)) add(x.id, x.text, x.ref, { action: x.action, since: x.since });
   for (const j of jobs) if (['blocked', 'failed'].includes(j.status) && !splitJobs.has(j.id) && now - (j.updatedAt || 0) < 48 * 3600000 && !jobs.some(k => k.id !== j.id && k.provider === j.provider && k.issue === j.issue && (k.createdAt || 0) > (j.createdAt || 0))) {
     const kind = ['implement', 'continue'].includes(j.kind) ? 'issue' : 'pull';
     // Issue #297: an issue that is closed, labelled epic or has an accepted split has nothing left to decide.
@@ -428,7 +425,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     if (tj.kind === 'rebase' && tj.rebase?.lost?.length && pr && pr.headRefOid === tj.rebase.newHead)
       add(`rebase-lost-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} dropped ${tj.rebase.lost.length} commit(s): ${tj.rebase.lost.map(c => `${shortCommit(c.sha)} ${c.subject}`).join('; ')}`, { kind: 'pull', n: tj.pr });
     if (tj.kind === 'rebase' && tj.rebase?.lostChanges?.length && pr && pr.headRefOid === tj.rebase.newHead)
-      add(`rebase-lost-changes-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} lost ${tj.rebase.lostChanges.length} change(s): ${tj.rebase.lostChanges.slice(0, 5).map(c => `${c.file} ${c.kind === 'unreferenced' ? c.text + ' (unreferenced)' : c.text}`).join('; ')}`, { kind: 'pull', n: tj.pr });
+      add(`rebase-lost-changes-${id.slice(0, 8)}`, `${names.job({ id, kind: 'rebase', pr: tj.pr }).text} lost ${tj.rebase.lostChanges.length} change(s): ${tj.rebase.lostChanges.slice(0, 5).map(c => `${c.file} ${c.hunk || ''} (${c.kind}) ${c.text}`).join('; ')}`, { kind: 'pull', n: tj.pr });
   }
   for (const pr of cache?.pulls || []) if (!pr.isDraft && !fixLimited.has(pr.number) && checksState(pr.statusCheckRollup, retriedIn(state.cancelWatch, pr, now)) === 'red') add(`ci-${pr.number}`, `CI is red on ${names.pr(pr.number).text}`, { kind: 'pull', n: pr.number });
   // Issue #331: a check run whose state contradicts itself for too long. One item per head and check; it clears when the check finishes or the head moves.
@@ -502,7 +499,7 @@ function usageView(config, jobs, states, allowance, now) {
     const windows = al ? al.windows.map(w => ({ label: windowLabel(w, a.provider), utilization: Number.isFinite(w.utilization) ? w.utilization : null, resetsAt: w.resetsAt || null, expired: windowExpired(w, now) })) : [];
     out[agent] = {
       observedAt: al?.observedAt || null, ageMs: al?.observedAt ? now - al.observedAt : null, source: al?.source || null,
-      canProbe: hasProbe(defaultRegistry, a.provider),
+      canProbe: hasProbe(defaultRegistry, a.provider), ...usageReading(al, now, budgetSettings(config)),
       allExpired: windows.length > 0 && windows.every(w => w.expired),
       limit: limited ? limitView(st.job, al, now) : null,
       windows,
@@ -699,13 +696,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     });
     const pauseText = team.pauseText(c.pulls || [], c.issues || []);
     const attention = attentionItems({ pauseText, config, cache, jobs, states, plan, snapshots, now, allowance, teamEnabled: config.enabled !== false, state, limits: team.c.limits, names, gated: { info: decisionInfo(register, INDEPENDENCE_DECISION), prs: team.waitingOnDecision(c.pulls || []) }, unreviewed: team.unreviewable(c.pulls || []), withheld: new Map((c.pulls || []).map(p => [p.number, team.writeBlock(p)]).filter(([, b]) => b)), proposals: pendingProposals(config, c.pulls || [], register), fixCount: pr => team.fixCount(pr), held: new Set((c.pulls || []).filter(p => team.carriedHold(p)).map(p => p.number)), escalating: new Set((c.pulls || []).filter(p => team.escalationPending(p.number, p)).map(p => p.number)) }).map(a => ({ ...a, severity: severityOf(a.id) }));
+    attention.push(...afterInstallAttention({ state, root, names, config }).map(a => ({ ...a, severity: severityOf(a.id) })));
     const ver = readVersion(root, running === undefined ? { now } : { running, now });
-    // Issue #124: each pending inbox item is one Approve/Reject card. Nothing here runs anything; the card posts to the dashboard's own write route.
-    if (config.inbox?.dir) for (const card of inboxCards(config.inbox.dir)) attention.push({ id: `inbox-${card.id}`, inboxId: card.id, inboxKind: card.kind, text: card.broken ? `An inbox item cannot be shown: ${card.broken}` : `Overseer proposal (${card.kind === 'prompt' ? 'run as a job' : 'post as an issue'}): ${card.title}`, ref: null, severity: 'action', inbox: card, action: card.broken ? 'Reject it; the overseer can propose it again.' : card.will });
-    // Issue #641: a failed or stopped inbox item has no GitHub notice, so it is one Needs you line (for three days after it failed).
-    if (config.inbox?.dir) for (const f of failedInboxCards(config.inbox.dir, now)) attention.push({ id: `inboxfail-${f.id}`, inboxId: f.id, inboxKind: f.kind, text: `An overseer ${f.kind === 'prompt' ? 'job' : f.kind === 'action' ? 'action' : 'item'} failed${f.job ? ` (job ${f.job})` : ''}: ${f.why}`, ref: null, severity: 'action', action: f.job ? `Look at it with ai-supervisor status ${f.job}; the overseer can read the outcome and propose it again.` : 'The overseer can read the outcome and propose it again. It leaves this list three days after it failed.' });
-    // Issue #943: refusals after pickup, one grouped line per reason.
-    if (config.inbox?.dir) refusedInboxGroups(config.inbox.dir, now).forEach((g, i) => attention.push({ id: `inboxrefused-${i}`, text: `${g.count} overseer proposal${g.count === 1 ? ' was' : 's were'} refused: ${g.reason}`, ref: null, severity: 'action', action: 'The overseer can read the reason with foreman_proposal_status and propose again. It leaves this list three days after the latest refusal.' }));
+    const inbox = inboxView(config, attention, now);
+    const inboxSearch = inboxSearchView(config);
     if (ver?.running && ver.installed && ver.running !== ver.installed) attention.push({ id: 'dashboard-stale', text: `Dashboard is running ${sha7(ver.running)}, Foreman is on ${sha7(ver.installed)}; what you see may be out of date. Restart the dashboard server.`, ref: null, severity: 'warning' });
     if (ver?.drift) attention.push({ id: 'drift', text: `Installed supervisor ${sha7(ver.installed)} is behind main ${sha7(ver.main)}${Number.isSafeInteger(ver.behind) ? ` by ${ver.behind} commit${ver.behind === 1 ? '' : 's'}` : ''}: merged, not installed yet.${ver.nextInstall ? ` Next install: ${Number.isFinite(ver.nextInstall.at) ? 'not before ' + new Date(ver.nextInstall.at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : ver.nextInstall.why}.` : ''}`, ref: null, severity: 'warning' });
     // Issue #265: one Needs you item while main needs a hand-deployed bootstrap installer change; it ends when the installed commit moves.
@@ -715,8 +709,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #209: a failed dashboard restart or a fall back to the last good version stays a Needs you item until a restart succeeds.
     try { const f = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).dashboardFailure; if (f && typeof f.reason === 'string') attention.push({ id: 'dashboard-restart-failed', text: redact(`The dashboard server could not be ${f.kind === 'watchdog' ? 'brought back after it stopped answering' : 'restarted after the ' + (f.kind === 'rollback' ? 'rollback' : 'upgrade')}${/^[0-9a-f]{40}$/.test(f.target || '') ? ` on ${sha7(f.target)}` : ''}: ${f.reason}. ${f.recovered ? 'The last good version was started again and is serving now.' : 'Foreman keeps trying on later ticks with a growing delay.'}`, 500), ref: null, severity: 'action', action: 'Check supervisor/dashboard.log, then restart the dashboard server on the installed version.' }); } catch { /* none */ }
     // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
-    const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
-    if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
+    attention.push(...latchAttention(root, ver));
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
@@ -733,7 +726,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: { kind: 'issue', n: e.issue }, since: e.markedAt, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
     for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
-    attention.push(...stoppedAttention(team));   // issue #995 retry caps and issue #1107 parked agents
+    attention.push(...stoppedAttention(team), ...(team.holdItems?.() || []));   // issue #995 retry caps and issue #1107 parked agents; issue #1238 holds
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
     for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: { kind: 'pull', n: r.pr }, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.
@@ -742,7 +735,10 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     { const names = [...new Set(Object.values(states).flatMap(x => x.unknownRecords || []))]; if (names.length) attention.push({ id: 'unknown-job-records', text: redact(`Agent state is Unknown because of job record(s) this version cannot read: ${names.join(', ')}. Fix or delete them in the jobs directory (they stop counting after 7 days).`, 300), ref: null, severity: 'warning' }); }
     if (registerUnreadable) attention.push({ id: 'register-unreadable', text: REGISTER_NOTE, ref: null, severity: 'warning' });
     const sup = supervisorHealth({ root, config, jobs, now });
-    { const f = faultAttention((team.assignments || []).filter(a => a.fault).map(a => ({ issue: a.number, fault: a.fault }))); if (f) attention.push(f); }   // issue #1121
+    const { faults: assignmentFaultsFromTick, refusal: assignmentFaultRefusal } = assignmentFaults(team.assignments);
+    const assignmentWarning = faultAttention(assignmentFaultsFromTick);
+    if (assignmentWarning) attention.push(assignmentWarning);
+    if (assignmentFaultRefusal) attention.push({ id: 'assignment-fault-refused', text: `An assignment fault was refused because ${assignmentFaultRefusal}.`, ref: null, severity: 'warning' });
     // Issue #215: team-alert's own warnings, taken from the latest tick. A notify that failed means the homeowner was not told.
     { const w = sup.ticks.filter(t => Number.isFinite(t.at)).at(-1)?.warnings || [];
       if (w.some(x => /warning: notify failed/.test(x))) attention.push({ id: 'alert-failed', text: 'The last alert could not be delivered (notify failed), so you may not have been told the team needs you.', ref: null, severity: 'action' });
@@ -754,16 +750,17 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const breakerView = breakerHaltView(breakerState, breakerRunning);
     if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
     if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
-    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText });
+    const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText, inbox, inboxSearch });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
-    if (latch) upgrade = { ...(upgrade || {}), latch: true };
+    if (attention.some(a => a.id === 'upgrade-latched')) upgrade = { ...(upgrade || {}), latch: true };
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
       ...assignmentFields(extra, team.assignments, names),   // issue #1121: extra plus assignments, faults and the issue rows' explanation
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
       headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
+      wasteCauses: wasteCauses(Object.values(breakerState.waste || {}), now),   // issue #1256
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
@@ -771,7 +768,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
-      budget,
+      budget, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },
@@ -885,7 +882,7 @@ export function nextWhy({ states, issues, prs, names }) {
   return { busy, paused, blocked: blocked.length, waitingReview: waiting.length };
 }
 
-function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText = null }) {
+function dashExtras({ root, config, cache, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText = null, inbox = [], inboxSearch = [] }) {
   const repo = config.repository, teamEnabled = config.enabled !== false;
   const agentNames = Object.keys(config.agents);
   const agentOf = j => agentNames.find(n => config.agents[n].provider === j.provider) || j.provider;
@@ -895,16 +892,15 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     id: shortJob(j.id), fullId: j.id, hasTranscript: transcriptExists(root, j.id), desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, head: state.jobs?.[j.id]?.head ?? j.head ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100), overseer: jobOverseer(j, { ticks: sup.ticks, state, cache, now }) });
-  const jobRows = sortedJobs.slice(0, 300).map(rowOf);
-  // Older jobs keep a page (not a table row) so a job link from old Activity, a verdict or a lease still resolves (issue #182).
-  const olderJobs = sortedJobs.slice(300, 2300).map(rowOf);
+  const jobRows = sortedJobs.slice(0, 300).map(j => ({ ...rowOf(j), ...jobTableFields(j, state) })); // Issue #182.
+  const olderJobs = sortedJobs.slice(300, 2300).map(j => ({ ...rowOf(j), ...jobTableFields(j, state) }));
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
   const reviewing = new Set(Object.values(queues).flat().filter(q => q.type === 'review').map(q => q.ref));   // issue #76: PRs waiting for a review
   const merged = new Map((state.mergeLog || []).map(m => [m.pr, m]));
   // Issue #855: merged, installed or verified. Installed: the PR is in a completed install (upgrade record verified). Verified: its live checks passed.
-  const installedPrs = new Set((() => { try { return readUpgrades(root).filter(r => r.result === 'verified' && Array.isArray(r.prs)).flatMap(r => r.prs); } catch { return []; } })());
+  const installedPrs = installedPrsOf(root);
   const verifiedPrs = new Set(Object.values((() => { try { return readVerification(root); } catch { return {}; } })()).filter(r => r && r.state === 'verified').map(r => r.pr));
   const prNumbers = new Set([...(cache.pulls || []).map(p => p.number), ...verdictRows.map(v => v.pr), ...merged.keys()]);
   const prs = [...prNumbers].sort((a, b) => b - a).map(n => {
@@ -954,10 +950,11 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   return {
     display: { gbpPerUsd: config.display?.gbp_per_usd ?? DEFAULT_GBP_PER_USD },   // issue #1097: the rate the cost figures were shown with, for the MCP tools
     health: healthOf({ attention, states, teamEnabled, needsYouCount: needsYou.length }), freshness: freshness(tickAt, now),
-    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null,
+    nextTick, nextTickAt: nextTick?.state === 'scheduled' ? nextTick.at : null, dependencies: cache.dependencies ?? null, planned: cache.planned ?? null, resumeChecks: cache.resumeChecks ?? null,
     wakes: root ? (() => { try { return wakeView(root, now); } catch { return null; } })() : null,   // issue #985
     version: ver && { ...ver, latched: !!sup.cards.find(c => c.id === 'version')?.latch },
-    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) } : a.type === 'review' && a.why ? { why: redact(a.why, 300) } : {}) })) },
+    panels: { nextWhy: nextWhy({ states, issues, prs, names }), needsYou,
+      inbox, inboxSearch, inboxDecided: config.inbox?.dir ? decidedInboxCards(config.inbox.dir, now) : [], later: laterOf({ cache, state, pauseText, names, config }), warnings: [...attention.filter(a => a.severity !== 'action'), ...consolidated.notices].map(a => ({ ...a, overseer: attentionOverseer(a, { ...ctx, command: COMMANDS[a.id] || null }) })), next: plan.map(a => ({ agent: a.agent || null, type: a.type, ref: a.issue ?? a.pr, name: redact(a.type === 'inbox' ? `Overseer proposal: ${a.title}` : (['implement', 'continue'].includes(a.type) ? names.issue(a.issue) : names.pr(a.pr)).text, 300), ...nextWhyFields(a, redact) })) },
     failedSpend: failedSpend(jobRows),
     slots: roleSlots(config, jobs, state, names), jobs: jobRows, olderJobs, issueTimelines, modelUsage: modelUsage(jobRows), verdicts: verdictRows, prs, issues, excluded, supervisor
   };

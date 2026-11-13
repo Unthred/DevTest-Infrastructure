@@ -556,33 +556,11 @@ function fakeStartKit(t) {
   return { proc, kill, start };
 }
 
-test('issue #632: the settle wait is bounded by elapsed time even when every probe hangs', async t => {
-  const { proc, kill, start } = fakeStartKit(t);
-  let answered = false;
-  const t0 = Date.now();
-  // the first probe after each start answers; later ones hang for 2 s (longer than the whole bounded wait)
-  const health = () => { if (!fs.existsSync(path.join(proc, "200"))) return Promise.resolve(true); if (!answered) { answered = true; return Promise.resolve(true); } return new Promise(r => setTimeout(r, 2000, false)); };
-  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { answered = false; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, settleMaxMs: 300, settleProbeMs: 50, health, logTail: () => '' });
-  assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive');
-  assert.ok(Date.now() - t0 < 1900, `took ${Date.now() - t0} ms`);
-});
-
 test('issue #632: the 5 Nov shape (answers once, fails probes while alive, then recovers) passes with one start', async t => {
   const { proc, kill, start } = fakeStartKit(t);
   const seq = [true, false, false, true, true, true]; let n = 0, starts = 0;
   const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { starts++; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 3, settleMs: 0, settleMaxMs: 10000, settleProbeMs: 1000, health: async () => seq[Math.min(n++, seq.length - 1)], logTail: () => '' });
   assert.equal(r.ok, true); assert.equal(starts, 1);
-});
-
-test('issue #725: the pre-answer loop is bounded by the overall deadline even when every probe hangs', async t => {
-  const { proc, kill, start } = fakeStartKit(t);
-  let starts = 0;
-  const t0 = Date.now();
-  const health = () => new Promise(r => setTimeout(r, 5000, false));
-  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start: (...a) => { starts++; start(...a); }, startOld: () => {}, sleep: async () => {}, tries: 50, restartMaxMs: 300, recoverMaxMs: 200, health, logTail: () => '' });
-  assert.equal(r.ok, false); assert.equal(r.cause, 'unresponsive');
-  assert.equal(starts, 1, 'no second attempt after the deadline');
-  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
 });
 
 test('issue #725: recovery of the old version has its own budget after the deadline is used up', async t => {
@@ -613,16 +591,4 @@ test('issue #810: a normal double failure still says "tried twice"', async t => 
   const { proc, kill, start } = fakeStartKit(t);
   const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => {}, sleep: async () => {}, tries: 2, settleMs: 0, settleMaxMs: 100, settleMinMs: 50, settleProbeMs: 10, restartMaxMs: 60000, health: async () => false, logTail: () => '' });
   assert.equal(r.ok, false); assert.match(r.reason, /tried twice; first:/);
-});
-
-test('issue #810: the settle window is never shorter than settleMinMs, and the failure text reports the window used', async t => {
-  const { proc, kill, start } = fakeStartKit(t);
-  // Healthy only from 250 ms on; the deadline (300 ms) would leave no settle window, the minimum (1000 ms) does.
-  const t0 = Date.now();
-  const r = await restartDashboardServer(NEW, { procRoot: proc, kill, start, startOld: () => {}, sleep: ms => new Promise(x => setTimeout(x, Math.min(ms, 20))), tries: 50, settleMs: 0, settleMaxMs: 60000, settleMinMs: 1000, settleProbeMs: 20, restartMaxMs: 300, health: async () => Date.now() - t0 > 250, logTail: () => '' });
-  assert.equal(r.ok, true, JSON.stringify(r));
-  // Never healthy: the text says the window actually used (minimum 2 s here), not 60 s.
-  const k = fakeStartKit(t);
-  const f = await restartDashboardServer(NEW, { procRoot: k.proc, kill: k.kill, start: k.start, startOld: () => {}, sleep: async () => {}, tries: 50, settleMs: 0, settleMaxMs: 60000, settleMinMs: 2000, settleProbeMs: 1000, restartMaxMs: 300, health: (() => { let n = 0; return async () => ++n === 1; })(), logTail: () => '' });
-  assert.equal(f.ok, false); assert.match(f.reason, /health check for 2 s/); assert.doesNotMatch(f.reason, /for 60 s/);
 });

@@ -30,7 +30,11 @@ export class FaultFlow {
   onEnd(id, j, job, report) {
     const cls = faults.classifyEnd(job);
     // Issue #1109: a deliberate stop uses no attempt either, but it does not park the agent.
-    if (cls.kind === 'none') { if (this.refund(j)) { j.attemptRefunded = cls.cause; (report.stopRefunds ||= []).push({ job: id.slice(0, 8), agent: j.agent }); this.save(); } return cls; }
+    if (cls.kind === 'none') {
+      if (cls.by) { j.stoppedBy = { by: cls.by, why: cls.why || '', cause: cls.cause }; this.save(); }   // issue #1179: the stopped outcome keeps who and why
+      if (this.refund(j)) { j.attemptRefunded = cls.cause; (report.stopRefunds ||= []).push({ job: id.slice(0, 8), agent: j.agent }); this.save(); }
+      return cls;
+    }
     if (cls.kind !== 'infra' || j.infraFault) return cls;
     j.infraFault = cls.cause;
     // The agent never started: the issue is queued again (a job that spent tokens may hold partial work, so it keeps the existing path).
@@ -100,6 +104,8 @@ export class FaultFlow {
     if (cleared.length) this.save();
   }
   items() { return faults.attentionItems(this.infra, this.now(), faults.fixOf); }
+  // Issue #1179: release by an approved action. Returns the released record, or null when the agent was not parked.
+  release(agent, by) { const rec = faults.releaseParked(this.infra, agent, this.now(), by); if (rec) this.save(); return rec; }
   parked(agent) { return faults.isParked(this.infra, agent) ? this.infra.parked[agent] : null; }
   summary() { return faults.summary(this.state().infra || {}, this.now()); }
 }
@@ -109,7 +115,7 @@ export function withParking(limitedOf, flow) {
   return (agent, ...rest) => {
     const rec = flow.parked(agent);
     const base = limitedOf(agent, ...rest);
-    return rec && !base?.out ? { ...(base || {}), out: true, reason: `parked: ${faults.INFRA_LABEL[rec.cause] || rec.cause}`, parked: true } : base;
+    return rec && !base?.out ? { ...(base || {}), out: true, reason: faults.parkedHoldText(agent, rec), parked: true } : base;
   };
 }
 

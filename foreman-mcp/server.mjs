@@ -11,6 +11,7 @@ import { createViewSource, readHost, getJson } from './source.mjs';
 import { createCallLog } from './calllog.mjs';
 import { createReports } from './reports.mjs';
 import { redact } from './redact.mjs';
+import { stopDirsFrom } from './stoprecord.mjs';
 import { createInbox } from './inbox.mjs';
 
 function loadConfig(env = process.env) {
@@ -22,7 +23,14 @@ function loadConfig(env = process.env) {
 export function buildServer(config) {
   const callLog = createCallLog(config.logFile);
   const getPath = config.viewUrl ? p => getJson(new URL(p, config.viewUrl).href) : null;   // same dashboard, same GET-only reader
-  const tools = createTools({ source: createViewSource({ url: config.viewUrl }), readHost, getPath, reports: createReports(config.reportsDir, { redact }), inbox: createInbox({ dir: config.inboxDir, baseUrl: config.viewUrl }) });
+  const tools = createTools({
+    source: createViewSource({ url: config.viewUrl }),
+    readHost,
+    getPath,
+    reports: createReports(config.reportsDir, { redact }),
+    inbox: createInbox({ dir: config.inboxDir, baseUrl: config.viewUrl }),
+    stopDirs: stopDirsFrom(process.env),   // issue #1161
+  });
   return createProtocol({ tools, log: e => callLog.record(e) });
 }
 

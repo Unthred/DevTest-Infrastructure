@@ -289,28 +289,24 @@ html[data-dock=bottom] .to-top{bottom:calc(var(--nav-h) + var(--sp3) + env(safe-
 .watch-link{margin-left:var(--sp2)}
 @media(max-width:639px){.tr{padding:var(--sp2)}}
 
-/* issue #76 */
-/* issues #76, #421: compact agent badges; at 1100px and wider the status bar wraps (the page heading takes its own row), below 1100px the badge list wraps, and a phone has its own layout */
-.agent-lines ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:nowrap;gap:var(--sp1) var(--sp2)}
-.agent-badge{display:inline-flex;align-items:center;gap:var(--sp1);min-height:24px;padding:2px var(--sp2);border-radius:999px;border:1px solid currentColor;font-size:var(--fs-xs);white-space:nowrap;text-decoration:none}
-.agent-badge b{font-weight:700}.agent-badge .ab-role,.agent-badge .ab-state{font-weight:500}
-.agent-badge .ab-role::before,.agent-badge .ab-state::before{content:"\00b7";margin-right:var(--sp1)}
+/* issues #76, #421, #1221: at 1100px and wider the status bar wraps (the page heading takes its own row); a phone has its own layout */
 @media(min-width:1100px){
   .statusbar{flex-wrap:wrap;gap:var(--sp2) var(--sp3)}
   .statusbar>*{flex:none;white-space:nowrap}.statusbar>h1{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
-/* 1100-1439px: the full bar is wider than the viewport, so the stat labels go first (values keep their badges and titles), then the role below 1280px */
-@media(min-width:1100px) and (max-width:1439px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
-@media(min-width:1100px) and (max-width:1279px){.agent-badge .ab-role{display:none}.agent-badge .ab-state::before{content:none}}
-@media(max-width:1099px){.agent-lines ul{flex-wrap:wrap}}
+/* 1100px and wider: the bar with agent items is wider than the viewport at 1440 too, so the stat labels go first (values keep their badges and titles) */
+@media(min-width:1100px){.statusbar{gap:var(--sp2)}.statusbar .stat .k{display:none}}
+/* issue #1221: at 1100px and wider the whole bar (brand, title, agent items, Edit bar, pin, theme) must fit one row: the brand shows its icon only (the name stays for screen readers) and the three buttons are smaller */
+@media(min-width:1100px){
+  .statusbar{column-gap:var(--sp1)}.brand{margin-right:var(--sp1)}
+  .brand-name{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .statusbar>.theme,.statusbar>.stickybtn{min-width:36px;min-height:36px}.statusbar>.barbtn{min-height:36px;padding:0 var(--sp2)}
+}
 @media(max-width:639px){
-  .statusbar{display:grid;grid-template-columns:1fr auto;align-items:center}
-  .statusbar>.brand{grid-column:1}.statusbar>.theme{grid-column:2;grid-row:1}
+  .statusbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:center}
+  .statusbar>.brand{grid-column:1}.statusbar>.theme{grid-column:2;grid-row:1;justify-self:end}
   .statusbar>h1{grid-column:1/-1}
-  .statusbar>.agent-lines{grid-column:1/-1}
-  .agent-lines ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr))}
-  .agent-badge{justify-content:space-between;min-height:44px;padding:0 var(--sp3)}
-  .agent-badge .ab-role{display:none}.agent-badge .ab-state::before{content:none}
+  .agent-item:has(details[open]){grid-column:1/-1}
   .statusbar>.stat{min-width:0}
   .card>header>*{max-width:100%}.card>header .ranges{flex-wrap:wrap}
 }
@@ -449,6 +445,8 @@ body.layout-editing{overscroll-behavior:contain}
 .inbox-outcome{display:inline-block;font-weight:600;padding:0 var(--sp2);border-radius:var(--r-sm);border:1px solid var(--line)}
 .inbox-outcome.approved{color:var(--ok)}.inbox-outcome.rejected{color:var(--warning)}
 .inbox-form button[disabled]{opacity:.6;cursor:not-allowed}.inbox-form button.greyed{opacity:.35}
+.decision-status{margin-top:var(--sp2)}
+.decision-status[data-state=failed],.decision-status[data-state=cleared]{padding:var(--sp1) var(--sp2);border:1px solid var(--action);border-left-width:4px;border-radius:var(--r-sm);color:var(--action)}
 .inbox-err{margin-top:var(--sp2);padding:var(--sp1) var(--sp2);border:1px solid var(--action);border-left-width:4px;border-radius:var(--r-sm);color:var(--action)}
 .inbox-decided{margin-top:var(--sp3)}.inbox-decided summary{cursor:pointer;min-height:36px;display:flex;align-items:center}
 .inbox-decided-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--sp2)}
@@ -516,3 +514,72 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .approvals-panel{margin-top:var(--sp2);max-height:60vh;overflow:auto}.approval-row{padding:var(--sp2) 0;border-top:1px solid var(--line)}
 .approval-row .acts{display:flex;flex-wrap:wrap;gap:var(--sp2)}
 @media (max-width:600px){.approvals-panel .btn{min-height:44px}.approvals{width:100%}}
+
+/* app bar agent items (issue #1221): one compact item per agent; state is a coloured dot, the level is colour AND a mark; the detail opens on focus or tap */
+.agent-item{position:relative}
+.agent-item summary{display:inline-flex;align-items:center;gap:var(--sp2);min-height:28px;cursor:pointer;list-style:none;white-space:nowrap}
+.agent-item summary::-webkit-details-marker{display:none}
+.agent-item summary:focus-visible{outline:2px solid var(--accent,currentColor);outline-offset:2px;border-radius:4px}
+.ai-name{text-transform:none}.ai-k{color:var(--mut)}
+.ai-role{font-size:var(--fs-xs);color:var(--mut)}
+.ai-dot{width:.7em;height:.7em;border-radius:50%;background:var(--mut);flex:none;display:inline-block}
+.ai-dot[data-state=running]{background:var(--ok)}.ai-dot[data-state=idle]{background:var(--info)}
+.ai-dot[data-state=paused],.ai-dot[data-state=held],.ai-dot[data-state=unknown]{background:var(--warning)}
+.ai-dot[data-state=blocked]{background:var(--action)}
+.ai-dot[data-state=held]{border-radius:2px}.ai-dot[data-state=paused]{border-radius:2px;clip-path:polygon(0 0,35% 0,35% 100%,0 100%,0 0,65% 0,100% 0,100% 100%,65% 100%,65% 0)}
+.ai-fig[data-level=high] .ai-pct,.ai-fig[data-level=high] .ai-mark{color:var(--warning)}
+.ai-fig[data-level=near] .ai-pct,.ai-fig[data-level=near] .ai-mark{color:var(--action);font-weight:700}
+.ai-unknown{color:var(--mut);font-style:italic}.ai-stale{color:var(--warning);font-size:var(--fs-xs)}
+.ai-detail{position:absolute;top:100%;left:0;z-index:60;min-width:18rem;max-width:min(26rem,calc(100vw - 2rem));padding:var(--sp3);background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);white-space:normal;text-transform:none}
+.ai-detail p,.ai-detail ul{margin:0 0 var(--sp2)}.ai-detail ul{padding-left:var(--sp4)}
+.ai-links a{margin-right:var(--sp3)}
+/* a phone: compact items, the role is hidden, and an open detail takes the full row in the flow instead of floating over the page */
+@media(max-width:639px){
+  .agent-item summary{min-height:44px;gap:var(--sp1);font-size:var(--fs-sm)}.agent-item .ai-role{display:none}
+  .agent-item{position:static}.ai-detail{position:static;max-width:none;box-shadow:none;margin-top:var(--sp1)}
+}
+.ai-age[data-stale=true]{color:var(--warning)}
+/* Inbox quick filters (issue #1217): wrapping rows of toggle links, each at least 44px high so a phone tap lands. */
+.qf-row{display:flex;flex-wrap:wrap;gap:var(--sp2);margin-bottom:var(--sp2)}
+.qf{display:inline-flex;align-items:center;gap:var(--sp2);min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--fg);text-decoration:none;font-weight:600}
+.qf.on{background:var(--link);border-color:var(--link);color:var(--surface)}
+.qf-n{font-variant-numeric:tabular-nums;opacity:.85}
+.empty .btn{min-height:44px;margin-top:var(--sp2)}
+/* Jobs view (issue #1220): the table with resizable and hideable columns, the group rows, and the side panel. */
+.qf-label{align-self:center;color:var(--mut);font-size:var(--fs-sm);min-width:72px}
+.jobs-tools{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:center;margin-bottom:var(--sp3)}
+.jobs-tools[hidden]{display:none}
+.jobs-views{display:flex;flex-wrap:wrap;gap:var(--sp2);align-items:end}
+.jobs-views input,.jobs-views select{min-height:44px}
+.jobs-tools .btn,.jobs-cols summary{min-height:44px;display:inline-flex;align-items:center}
+.jobs-col-list{display:flex;flex-wrap:wrap;gap:var(--sp2);padding:var(--sp2) 0}
+.jobs-col-opt{display:inline-flex;align-items:center;gap:4px;min-height:44px}
+.jobs-table th{position:relative}
+.jobs-table .col-grip{position:absolute;right:0;top:0;bottom:0;width:8px;cursor:col-resize;touch-action:none}
+.jobs-table .col-grip:hover,.jobs-table .col-grip:focus-visible{background:var(--link)}
+.jobs-table .col-off{display:none!important}
+.jobs-table tr[data-job]{cursor:pointer}
+.jobs-table tr.on{outline:2px solid var(--link);outline-offset:-2px}
+.jobs-table tr.grp th{background:var(--surface2);color:var(--fg);text-transform:none;letter-spacing:0;white-space:normal}
+.jobs-stat{display:inline-block;margin-right:var(--sp3)}
+.jobs-same-ref{padding-left:var(--sp4)}.jobs-same-ref li[aria-current]{font-weight:700}
+.overseer-note{white-space:pre-wrap;overflow-wrap:anywhere;max-height:16em;overflow:auto}
+@media(max-width:639px){.jobs-table .col-grip{display:none}}
+.jobs-views label,.jobs-views+.sub,.inbox-search label{display:inline-flex;align-items:center;gap:var(--sp2)}
+/* Issue #1219: Inbox view switch (Cards, Table, Compact list). Only the table scrolls sideways, inside its own container. */
+.iv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp2);margin:var(--sp2) 0}
+.iv-switch{display:flex;flex-wrap:wrap;gap:var(--sp1)}.iv-view[aria-pressed=true]{border-color:var(--link);font-weight:600}
+.iv-cols summary{cursor:pointer;min-height:36px;display:flex;align-items:center}.iv-colmenu{display:flex;flex-wrap:wrap;gap:var(--sp2)}
+.iv-tablewrap{overflow-x:auto;max-width:100%}.iv-table{border-collapse:collapse;table-layout:fixed;min-width:640px;width:100%}
+.iv-table th,.iv-table td{border-bottom:1px solid var(--line);padding:var(--sp1) var(--sp2);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.iv-table th{position:relative;white-space:nowrap}.iv-sort{font:inherit;font-weight:600;background:none;border:0;padding:0;color:inherit;cursor:pointer;min-height:24px}
+.iv-grip{position:absolute;top:0;right:0;bottom:0;width:8px;cursor:col-resize;touch-action:none}.iv-grip:hover,.iv-grip:focus-visible{background:var(--line)}
+.iv-compact{list-style:none;margin:0;padding:0;min-width:0}.iv-crow{border-bottom:1px solid var(--line);min-width:0}
+.iv-crow summary{display:flex;align-items:baseline;gap:var(--sp2);min-height:36px;cursor:pointer;min-width:0}
+.iv-crow .iv-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.iv-crow .iv-kind,.iv-crow .iv-age{flex:none;color:var(--mut);font-size:.9em}
+.iv-mark{flex:none;width:1.4em;text-align:center}.iv-crow[data-state=failed] .iv-mark{color:var(--action)}.iv-crow[data-state=done] .iv-mark{color:var(--ok)}
+.iv-more{padding:0 var(--sp2) var(--sp2) 1.8em;overflow-wrap:anywhere}.iv-more p{margin:var(--sp1) 0;white-space:pre-wrap}
+/* The phone rule above turns every table into stacked blocks; the Inbox table stays a real table and scrolls inside .iv-tablewrap. */
+.iv-table{display:table}.iv-table thead{display:table-header-group;position:static}.iv-table tbody{display:table-row-group}
+.iv-table tr{display:table-row;border:0;border-radius:0;margin:0;padding:0;background:none}.iv-table th,.iv-table td{display:table-cell;text-align:left;gap:0}.iv-table td::before{content:none}
+.iv[data-view=cards] .iv-cols,.iv[data-view=compact] .iv-cols{display:none}

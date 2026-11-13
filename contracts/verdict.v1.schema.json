@@ -18,7 +18,8 @@
         "required": ["kind", "text"],
         "properties": {
           "kind": { "enum": ["blocking", "follow-up"] },
-          "text": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "scope": { "enum": ["code", "tests", "description"] }
         }
       }
     },

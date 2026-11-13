@@ -35,6 +35,7 @@
   },
   "display": { "gbp_per_usd": 0.75 },
   "budget": { "enabled": true, "high_water": 0.85, "high_water_min_hours": 24, "recent_hours": 24, "exhausted_at": 0.995, "can_take_over": ["claude", "codex"] },
+  "host_pressure": { "disk_percent": 80, "swap_pages_per_second": 200, "swap_window_minutes": 5, "min_available_mb": 1024, "swap_warn_percent": 90 },
   "health": { "volumes": ["/", "/tmp", "/mnt/cache", "/mnt/user"], "disk_warn_percent": 85, "disk_alert_percent": 95 },
   "agents": {
     "claude": { "provider": "claude", "branch_prefix": "claude/", "issues": [] },
