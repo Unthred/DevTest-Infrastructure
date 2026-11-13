@@ -24,7 +24,7 @@ export { pendingProposals };
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
-import { consolidateNeedsYou } from './needsyou.mjs';
+import { consolidateNeedsYou, churnStopped, churnCard } from './needsyou.mjs';
 import { closedReasonAttention } from './closedreason-store.mjs';
 import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { faultAttention } from './dashassign.mjs';
@@ -378,6 +378,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: `A review job finished without a valid verdict file (${refusal.count} time${refusal.count === 1 ? '' : 's'} at this head), so no verdict reached GitHub. The reason: ${refusal.error}. The refused file is ${refusal.file}. A refused file records no verdict, so it does not use up the review attempts unless the refusals pass the review limit.`, action: `Read the verdict file and the review job ${String(refusal.job).slice(0, 8)} output, then review the PR by hand or push a new head to start a fresh review; remove the needs-homeowner label when done.`, links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
       { tried: `Review jobs ran ${maxReview} times at this head without recording a verdict, so Foreman stopped reviewing it.`, action: 'Read the review job output, then review the PR by hand or push a new head to start a fresh review.', links });
+    else if (churnStopped(state, pr, verdict)) add(...churnCard(pr, names.pr(pr.number).text, FIX_LIMIT_OPTIONS, links));
     else add(`homeowner-pr-${pr.number}`, `${names.pr(pr.number).text} needs the homeowner`, { kind: 'pull', n: pr.number },
       { tried: heldJobs(pr.number).length ? `Foreman labelled this PR needs-homeowner because ${heldJobs(pr.number).map(id => `job ${String(id).slice(0, 8)}`).join(' and ')} stopped (blocked, failed or stopped) and holds the label.` : 'Foreman labelled this PR needs-homeowner and posted the reason as a notice on it.',
         action: heldJobs(pr.number).length ? `The label clears by itself once ${heldJobs(pr.number).length === 1 ? 'that job is' : 'those jobs are'} resumed, or once the PR head has moved past the job's head and the job's worktree has no uncommitted or unpushed work. ${resumeHint(pr.number)}inspect the job's worktree and push or discard its work; Foreman then removes the label. Otherwise remove the needs-homeowner label by hand when it is handled.` : 'Read the notice on the PR and decide; remove the needs-homeowner label when it is handled.', links });
