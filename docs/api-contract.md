@@ -57,6 +57,14 @@ Optional exports: `events` and `commands` (arrays of objects) fill the same list
 
 The context holds everything a model gets (`now`, `coreVersion`, `models`, `routes`, `query`, `params`, `root`, `config`) plus `headers` (the security headers), `reply(req, res, code, type, body, extra)`, `fail(req, res, code, errorCode, text, extra)` and `guard`. `guard` hands over the dashboard's write checks, so a route copies none of them: `originAllowed(req)`, `proofValid(value)`, `reserveCooldown(name, ms)` (returns `{ ok }` or `{ ok: false, retryAt }`), `releaseCooldown(name)`, `invalidateView()` (drop the prepared view so the next read is fresh) and `wake(reason)` (ask for a pass). A write route must call `originAllowed` and `proofValid` itself before it changes anything.
 
+## The best model
+
+Issue #1325. `GET /api/v1/best` returns the best 24 hours so far as two records, the current 24 hours on the same basis and the distance to each record. Basis: the first review of a pull request is its earliest posted verdict comment and it counts in the window that holds that comment; windows are half-open and start on whole UTC hours. The approval record needs at least 20 first reviews in the window (`min_first_reviews`); of equal rates the one over more first reviews wins. The merges record is the window with most merged pull requests. Each window states `start`, `end`, `approved`, `reviewed`, `merged`, `rate`, `verdicts` and `verdicts_per_merged` (every verdict comment in the window divided by merged).
+
+- `distance.approval` is the current rate minus the record rate in percentage points, and null while the current window has fewer than 20 first reviews or there is no record; `distance.merges` is current merged minus the record.
+- A request reads the stored record and writes nothing. `built` is false until the history has been built once; the records are then null.
+- The records are stored in `dashboard/best-day.json` with the verdict and merge times they came from (60 days). With nothing stored the tick builds the history once from the verdict comments on GitHub (paged reads of the repository's issue comments) and the merge entries of the timeline; a failed read is retried after 10 minutes. After that the tick checks the records again only when the timeline holds a new verdict or merge entry. A stored record is replaced only by a window that beats it. Logic: `supervisor/best-day.mjs` (pure), `supervisor/best-day-store.mjs`, `supervisor/best-day-step.mjs`.
+
 ## The outcomes model
 
 Issue #1307. `GET /api/v1/outcomes?hours=N` answers, for a time window, which issues and pull requests had activity, which pegs each passed or bounced off in order, how many laps it took and where it stands. A screen can draw and replay it with no logic of its own. It is built when asked from the retained timeline, the dashboard view and the current Needs you list: no timer, nothing stored. The logic is the pure builder `supervisor/outcomes.mjs`.

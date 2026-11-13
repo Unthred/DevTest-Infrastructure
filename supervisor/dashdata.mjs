@@ -15,6 +15,7 @@ import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { readMcpInstall } from './mcpinstall.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
 import { limitResetStep } from './resetstep.mjs';
+import { bestDayStep } from './best-day-step.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
 import { isDroppedClose } from './closedreason.mjs';
@@ -268,6 +269,12 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
   try { limitResetStep(team); } catch (error) { console.error(`ai-supervisor: limit reset step failed: ${error?.name || 'Error'}`); }
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
   try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }
+  // Issue #1325: check the best 24 hours again when the timeline holds a new verdict or merge (the step does nothing otherwise).
+  try {
+    if (team?.c?.repository) bestDayStep(root, { repository: team.c.repository, now });
+  } catch (error) {
+    console.error(`ai-supervisor: best day step failed: ${error?.name || 'Error'}`);
+  }
   appendSnapshot(root, snap, now);
   return cache;
 }
