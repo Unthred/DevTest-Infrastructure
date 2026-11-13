@@ -83,3 +83,13 @@ test('issue #867: a malformed request-review is refused up front, not queued', t
   const r = spawnSync(process.execPath, [cli, 'team', 'request-review'], { encoding: 'utf8', env: { ...process.env, AI_SUPERVISOR_STATE_ROOT: dir, AI_SUPERVISOR_LOCK_WAIT_MS: '200' } });
   assert.notEqual(r.status, 0); assert.match(r.stdout + r.stderr, /usage: team request-review/); assert.doesNotMatch(r.stdout + r.stderr, /queued/);
 });
+
+test('issue #1331: a deadline already passed when the first lock attempt fails still says it is waiting', async t => {
+  const root = stateRoot(tmp(t)), held = tickLock(root); t.after(() => held());
+  const said = [];
+  let tick = 0;
+  const slowClock = () => (tick++ === 0 ? 0 : 10_000);   // the first lock attempt "took" longer than the whole wait
+  assert.equal(await tickLockWait(root, { timeoutMs: 300, pollMs: 20, say: l => said.push(l), now: slowClock }), null);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /waiting up to/);
+});
