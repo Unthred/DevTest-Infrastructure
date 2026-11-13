@@ -63,7 +63,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
     { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
     { name: 'overview', path: '/api/v1/overview', schema: 'overview.schema.json' },   // issue #1256
   ]);
-  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
+  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'work_item.accept_split'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
 });
 
 test('freshness reads the last finished tick: fresh when recent, stale when old, null times stay null', async t => {
