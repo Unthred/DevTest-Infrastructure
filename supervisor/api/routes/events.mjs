@@ -48,9 +48,8 @@ function openStream({ req, res, context, after }) {
   const token = {};
   active.add(token);
   let done = false;
-  let sentAt = Date.now();
   let sent = idNumber(after ?? newestId(root));
-  const send = event => { res.write(wire(event)); sentAt = Date.now(); };
+  const send = event => res.write(wire(event));
   // hello, heartbeat and resync_required are not kept in the log: they carry the newest id, so a reconnect never moves backwards.
   const synthetic = (type, fields) => ({ id: newestId(root), type, at: new Date().toISOString(), ...fields });
   const freshness = () => freshnessOf({ tickAt: lastTickAt(root), now: Date.now(), staleAfterMs: STALE_TICK_MS });
@@ -73,8 +72,9 @@ function openStream({ req, res, context, after }) {
       }
     } catch { finish(); }
   };
+  // A fixed schedule at half the limit, independent of other events, so a heartbeat is never more than HEARTBEAT_MS after the last.
   const heartbeat = () => {
-    if (!done && Date.now() - sentAt >= fromEnv('DEVTEST_EVENTS_HEARTBEAT_MS', HEARTBEAT_MS)) send(synthetic('heartbeat', { freshness: freshness() }));
+    if (!done) send(synthetic('heartbeat', { freshness: freshness() }));
   };
   res.writeHead(200, {
     ...context.headers, 'content-type': SSE_TYPE, 'cache-control': 'no-store', connection: 'keep-alive',
@@ -86,7 +86,7 @@ function openStream({ req, res, context, after }) {
     sent = idNumber(newestId(root));
   }
   const poller = setInterval(pump, fromEnv('DEVTEST_EVENTS_POLL_MS', POLL_MS));
-  const beat = setInterval(heartbeat, Math.max(10, Math.floor(fromEnv('DEVTEST_EVENTS_HEARTBEAT_MS', HEARTBEAT_MS) / 3)));
+  const beat = setInterval(heartbeat, Math.max(5, Math.floor(fromEnv('DEVTEST_EVENTS_HEARTBEAT_MS', HEARTBEAT_MS) / 2)));
   const cap = setTimeout(finish, MAX_STREAM_MS);
   req.on('close', finish);
   res.on('close', finish);

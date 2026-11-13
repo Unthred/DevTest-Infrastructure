@@ -221,3 +221,13 @@ test('HEAD answers 200 with no body and holds no stream open', async t => {
   for (let n = 0; n < 12; n += 1) streams.push(await open());
   assert.equal(streams.every(s => s.status === 200), true, 'the HEAD took no place');
 });
+
+test('valid: heartbeats keep to the 15 second limit (here 120 ms) even while other events are sent between them', async t => {
+  const { open, root } = await serve(t);
+  const s = await open();
+  for (let i = 0; i < 12; i++) { append(root, { type: 'model_changed', models: ['meta'] }); await sleep(40); }
+  await until(() => ofType(s, 'heartbeat').length >= 4);
+  const times = ofType(s, 'heartbeat').map(e => Date.parse(e.data.at));
+  assert.ok(times.length >= 4, 'several heartbeats arrived');
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 120, `gap ${times[i] - times[i - 1]} ms is within the limit`);
+});
