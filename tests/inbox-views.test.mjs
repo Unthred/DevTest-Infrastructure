@@ -124,7 +124,8 @@ test('GET /inbox serves the switch and the three views with the same ids, and th
   }
   assert.ok(all.body.includes('Tower&#39;s disk check'), 'an apostrophe is escaped on the real page');
 });
-test('the two new browser files are served as scripts', () => {
+test('the Inbox scripts and the shared column rules are served as scripts', () => {
   assert.equal(STATIC['/static/inbox-views.mjs'][1], 'text/javascript; charset=utf-8');
   assert.equal(STATIC['/static/inbox-views-ui.mjs'][0], 'inbox-views-ui.mjs');
+  assert.equal(STATIC['/static/table-columns.mjs'][0], 'table-columns.mjs');
 });
