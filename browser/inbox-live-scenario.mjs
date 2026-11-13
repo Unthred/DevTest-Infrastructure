@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs INSIDE the pinned Playwright container (no network; one declared target). Drives the real /inbox page (issue #1287): a card that
-// arrives, or is decided elsewhere, shows or leaves in place within 10 seconds, in the Cards and the Table view, without a page load; a typed
+// arrives, or is decided elsewhere, shows or leaves in place within 10 seconds, in the Cards, Table and Compact list view, without a page load; a typed
 // search is kept; the stream is opened once on the Inbox page and never on a page with neither the count badge nor the Inbox card; the
 // Overview badge still follows the stream. The host side (tests/inbox-live-browser.mjs) changes the Inbox folder when this script calls
 // /__test/add and /__test/decide, and reports the stream requests it saw at /__test/streams?path=<page>.
@@ -35,9 +35,9 @@ try {
   const visibleWithin = async (view, title) => { try { await shown(view, title).waitFor({ state: 'visible', timeout: WITHIN_MS }); return true; } catch { return false; } };
   const goneWithin = async (view, title) => { try { await shown(view, title).waitFor({ state: 'hidden', timeout: WITHIN_MS }); return true; } catch { return false; } };
 
-  for (const view of ['cards', 'table']) {
+  for (const view of ['cards', 'table', 'compact']) {
     await control('/__test/reset');
-    const label = view === 'cards' ? 'Cards' : 'Table';
+    const label = { cards: 'Cards', table: 'Table', compact: 'Compact list' }[view];
     await page.goto(url('/inbox'), { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: label, exact: true }).click();
     await page.evaluate(() => { window.__loaded = 'first-load'; });
@@ -64,7 +64,7 @@ try {
   await page.evaluate(() => document.activeElement?.blur?.());
   await sleep(9000);
   await control('/__test/add');
-  check('after a search typed over 8 seconds earlier, the new card still arrives', await visibleWithin('cards', NEW_TITLE) || await visibleWithin('table', NEW_TITLE));
+  check('after a search typed over 8 seconds earlier, the new card still arrives', (await visibleWithin('cards', NEW_TITLE) || await visibleWithin('table', NEW_TITLE) || await visibleWithin('compact', NEW_TITLE)));
   check('the typed search is kept', (await page.locator('input[name=search]').inputValue()) === 'typed words');
   check('the boundary run did not load the page again', (await page.evaluate(() => window.__loaded)) === 'boundary-load');
 
