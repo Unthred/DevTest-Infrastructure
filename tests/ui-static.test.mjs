@@ -45,7 +45,8 @@ test('valid: the shell page is served as html with the security headers', async 
   assert.equal(res.status, 200);
   assert.match(res.headers['content-type'], /^text\/html; charset=utf-8/);
   for (const name of SECURITY) assert.ok(res.headers[name], `${name} is set`);
-  assert.equal(res.body, fs.readFileSync(new URL('index.html', UI), 'utf8'));
+  // Issue #1288: the only difference from the file is the one proof meta element the route adds.
+  assert.equal(res.body.replace(/<meta name="foreman-proof" content="[a-f0-9]{64}">\n/, ''), fs.readFileSync(new URL('index.html', UI), 'utf8'));
   assert.match(res.body, /id="appbar"/);
 });
 
