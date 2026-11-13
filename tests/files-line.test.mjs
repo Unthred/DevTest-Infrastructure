@@ -9,6 +9,8 @@ import { Team, expectedFiles, driftItemsOf } from '../supervisor/team.mjs';
 import { filesLineRefusal, parseFilesLine } from '../supervisor/fileslist.mjs';
 import { validateItem } from '../supervisor/inbox.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
+import { recordTick, readCache } from '../supervisor/dashdata.mjs';
+import { buildView } from '../supervisor/dashboard.mjs';
 
 const H = n => String(n).repeat(40).slice(0, 40);
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
@@ -125,4 +127,18 @@ test('a prose item that names a file by its bare name is held by an open PR on t
   const other = world(t, { issues: [issue(20, 'Change the dashboard in dashrender.mjs to add buttons.')], pulls: [pr(5)], files: { 5: ['supervisor/xdashrender.mjs'] } });
   await other.team.tick();
   assert.deepEqual(other.implemented(), [20], 'a different file whose name ends the same does not hold');
+});
+
+test('the drift item reaches the dashboard through the tick cache, which keeps no issue bodies', async t => {
+  const w = world(t, { issues: [issue(30, 'Files: a/one.mjs')], pulls: [pr(30)], files: { 30: ['a/one.mjs', 'x/1.mjs', 'x/2.mjs', 'x/3.mjs'] } });
+  await w.team.tick();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fl-cache-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  recordTick(root, { now: 1_800_000_000_000, status: 'ok', team: w.team, jobs: [] });
+  const cache = readCache(root);
+  assert.equal(cache.issues.some(i => 'body' in i), false, 'the cache keeps no issue body');
+  const v = await buildView({ config: w.team.c, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: 1_800_000_000_000 });
+  const item = v.attention.find(a => a.id === 'files-drift-30');
+  assert.ok(item, 'the Needs you list holds the drift item');
+  assert.equal(item.severity, 'action');
+  assert.ok(item.text.includes('x/3.mjs'));
 });
