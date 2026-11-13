@@ -107,3 +107,10 @@ test('the page has no inline script and reads only paths under /api/v1/', () => 
     assert.doesNotMatch(code, /\bXMLHttpRequest\b|\bsendBeacon\b|\bWebSocket\b/, file);
   }
 });
+
+test('valid: the live check for the board screen finds "hopper" in the served board.mjs (issue #1312)', async t => {
+  const get = await serve(t);
+  const res = await get('/api/v1/ui/board.mjs');
+  assert.equal(res.status, 200);
+  assert.ok(res.body.includes('hopper'));
+});

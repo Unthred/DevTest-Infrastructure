@@ -15,6 +15,9 @@ export function findBall(data, key) {
   return entry ? { kind, entry } : null;
 }
 
+// The label the board carries for assistive technology; it names the zones the drawing holds, hopper first.
+export const BOARD_LABEL = 'Live board: the hopper of waiting work, a lane per agent and model, and the result boxes';
+
 const focusTarget = () => {
   const node = document.activeElement?.closest?.('[data-ball],[data-box]');
   if (!node) return null;
@@ -94,7 +97,7 @@ export class BoardScreen {
   body() {
     if (!this.model) return this.error ? [] : [el('p', {}, 'Loading the board…')];
     const { data } = this.model;
-    const holder = el('div', { class: 'board-holder' });
+    const holder = el('div', { class: 'board-holder', role: 'group', 'aria-label': BOARD_LABEL });
     const svg = drawBoard(data, this.width(), Date.now(), this.view());
     if (svg) holder.append(svg);
     const parts = [holder];
