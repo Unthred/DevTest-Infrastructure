@@ -128,7 +128,8 @@ export async function approveStuckSplit(team, n) {
   const fault = children.map(c => bodyFault(c.body)).find(Boolean);
   if (fault) throw new Error(`an item body was refused by the dependency parser: ${fault}`);
   const sp = team.s.splits[n] ||= { status: 'proposed', agent: rec.agent, stuckPr: n, children, at: team.clock.now() };
-  const issues = await team.acceptSplit(n);
+  // A crash after acceptSplit but before this record was saved leaves the split 'accepted'; resume from its children instead of throwing.
+  const issues = sp.status === 'accepted' ? sp.children.map(c => c.issue) : await team.acceptSplit(n);
   Object.assign(rec, { status: 'filed', filed: issues, filedAt: team.clock.now() });
   team.save();
   return `PR #${n}: filed ${sp.children.map(c => `#${c.issue}`).join(', ')}; the PR stays parked until they have merged`;

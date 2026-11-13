@@ -138,6 +138,16 @@ test('approval resumes after a crash between two items without filing the first 
   assert.equal(w.calls.issues.length, 2); assert.equal(w.team.s.stuckSplits[11].status, 'filed');
 });
 
+test('approval after a crash that left the split accepted but the record proposed marks it filed', async t => {
+  const w = await proposed(t);
+  await click(w, 'approve_split');
+  w.team.s.stuckSplits[11].status = 'proposed';
+  await approveStuckSplit(w.team, 11);
+  assert.equal(w.team.s.stuckSplits[11].status, 'filed');
+  assert.deepEqual(w.team.s.stuckSplits[11].filed, [2000, 2001]);
+  assert.equal(w.calls.issues.length, 2, 'nothing is filed twice');
+});
+
 test('an item body the dependency parser refuses stops the approval before anything is filed', async t => {
   const w = await proposed(t);
   w.team.s.stuckSplits[11].items[0].scope = 'Depends on: nothing, see #3';
