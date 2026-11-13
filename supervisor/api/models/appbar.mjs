@@ -50,7 +50,7 @@ export function agentCondition(a, held) {
   return condition(state, state === 'unknown' ? 'unknown' : 'none', null, text, state === 'idle' ? iso(a.lastActivityAt) : null);
 }
 
-function agentEntries(view, now, roles) {
+export function agentEntries(view, now, roles) {
   const held = heldOf(view);
   const byName = new Map((view.agents || []).map(a => [a.name, a]));
   return allowanceItems(view).map(item => {

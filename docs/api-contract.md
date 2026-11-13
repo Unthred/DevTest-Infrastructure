@@ -84,6 +84,37 @@ Every other entry (a fix or review job, a started or created event, an unknown j
 - The reply carries `window` (`hours`, `start`, `end`), `counts` per bin over every qualifying item, `truncated` (true when more than 200 items qualify) and `items`: the 200 most recently active, newest first.
 - **Install is not a peg.** Foreman records no install event per pull request, so the model cannot place one without inventing it. A later item may add it when such an event exists.
 
+## The live board model
+
+Issue #1310. `GET /api/v1/liveboard` gives a screen everything it needs to draw the queue working: waiting work, a ball leaving on a lane when a job starts, and the ball landing in a box that says how the job ended. The screen holds no rules. It is built when asked from the dashboard view, the configuration and the time of the request: no GitHub call, no clock of its own, no stored state. The logic is the pure builder `supervisor/board.mjs`.
+
+**When to ask again.** There is no timer. The change stream (`/api/v1/events`) appends one `model_changed` event, which names every loaded model including `liveboard`, when the tick moves. A client asks again on that event.
+
+- `agents`: one entry per configured agent with `id`, `display_name`, `condition`, `weekly`, `short` and `reading`, built by the app bar code (`agentEntries` in `supervisor/api/models/appbar.mjs`), plus `out_until` and `out_reason`. `out_until` is the reset time reported for the agent's current job when it is paused on a usage limit (the dashboard view carries the reset time for that job only), else the next attempt time of its paused jobs, else the end of its allowance hold (reviews only, or waiting for the reset) while that is still ahead; `null` means the agent can take work. A paused job whose reset time is not reported gives `out_until` null and an `out_reason` that says so.
+- `lanes`: one entry per agent and model the configuration can launch (every `models.agents.<agent>` entry and review candidate), then any pair a running or landed job used. `id` is `<agent>/<model>`, or `<agent>/default` with a null `model` when the provider default is used; `job_types` lists the job kinds that run on it (`cifix` is the kind name of `ci-fix`). A new agent or model appears with no code change.
+- `waiting`: the planned work in plan order (`place` from 1; an action already launched is not waiting). `tied_agent` is the agent the work must go to: the planned agent for `fix`, `cifix`, `continue` and `rebase` (a fix returns to its writer), the agent an issue is configured for on `implement`, else null (any agent with a free slot). `held` is `{ kind, reason }` from the tick's plan ledger, or null when the work can start.
+- `running`: one entry per running job with `job_id`, `lane_id`, `job_type`, `number`, `title`, `started_at`, `typical_seconds` and `laps`. `typical_seconds` is the median (p50) for that job type from Foreman's own estimates, null with fewer than 5 recorded jobs of that type.
+- `landed`: one entry per job that ended in the last 24 hours (an end exactly 24 hours ago is kept), newest first, with `job_id`, `lane_id`, `job_type`, `number`, `title`, `ended_at`, `box`, `tokens`, `cost_pence` and `laps`. A job paused for a usage limit or by hand has landed in its box. `cost_pence` is the usage-equivalent estimate converted with the configured pounds per dollar; unknown tokens and cost are null. `number` is the issue for `implement` and `continue`, otherwise the pull request.
+- `counts` is the number of qualifying landed jobs per box; `landed` keeps the newest 300 and `truncated` is true when more than 300 qualify. `skipped_jobs` counts job records with a status Foreman does not know; they are ignored, not an error.
+
+### The box table
+
+The first row that matches wins. A review's verdict is the first verdict on its pull request recorded after the job started and before the next review job of that pull request started.
+
+| Box | A job lands here when |
+| --- | --- |
+| `merged` | a review with verdict PASS whose pull request has since merged |
+| `needs_you` | its issue or pull request (an issue counts as its pull request once one exists) is named in the current Needs you list |
+| `passed` | a review with verdict PASS, not yet merged |
+| `changes_asked` | a review with verdict CHANGES |
+| `out_of_allowance` | the job is paused for a usage limit |
+| `failed` | the job failed or was blocked |
+| `stopped` | the job was stopped or paused by hand |
+| `to_review` | an implement, continue, fix, cifix, rebase or split job that completed |
+| `done` | any other completed job, for example an Inbox job |
+
+`laps` is the number of earlier jobs for the same issue or pull request that started inside the last 7 days and whose box was `changes_asked`, `failed` or `out_of_allowance`. The lap count applies the table without its `needs_you` row, so naming the item in Needs you does not remove its laps.
+
 ## Schema subset
 
 `validate.mjs` has no imports and supports only `$ref` (same file, and other files by `$id`), `allOf`, `anyOf`, `type` (one or a list), `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minimum`, `maximum`, `pattern` and `format: date-time` (UTC, ending in `Z`). It returns a list of strings, each starting with the path of the fault. Schemas must stay inside this subset.

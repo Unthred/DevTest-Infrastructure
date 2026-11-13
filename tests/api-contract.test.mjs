@@ -60,6 +60,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
     { name: 'appbar', path: '/api/v1/appbar', schema: 'appbar.schema.json' },   // issue #1253
     { name: 'audit', path: '/api/v1/audit', schema: 'audit.schema.json' },   // issue #1257
     { name: 'inbox', path: '/api/v1/inbox', schema: 'inbox.schema.json' },   // issue #1255
+    { name: 'liveboard', path: '/api/v1/liveboard', schema: 'liveboard.schema.json' },   // issue #1310
     { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
     { name: 'outcomes', path: '/api/v1/outcomes', schema: 'outcomes.schema.json' },   // issue #1307
     { name: 'overview', path: '/api/v1/overview', schema: 'overview.schema.json' },   // issue #1256
