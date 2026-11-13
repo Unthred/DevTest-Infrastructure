@@ -343,6 +343,16 @@ The old latch records only the first fault of the failed tick, so a tick whose f
 
 **Homeowner steps.** On a host that is latched now, reach this change by `clear-latch` (or a hand-install, which has no latch check); the automatic install then proceeds. A latch with another cause (for example `upgrade script failed: swap: version already installed`) is not cleared by this change and needs `clear-latch` once the cause is understood.
 
+## Clearing the upgrade latch from the dashboard (issue #1160)
+After a rollback, or a homeowner pause that sets the latch, automatic upgrades stop until the latch is cleared. The Needs you card `upgrade-latched` now says why and carries the control, so no Tower prompt is needed.
+
+- **The card** shows why the latch was set: for a rollback, the versions it went from and to and the failed check; for a homeowner pause, the first three lines of the stop record the reason names (read only from the stop directory, `STOP_DIR` or `/mnt/cache/logs/agent-cleanup`, directly inside it, never through a link). It also shows when the latch was set and what would install next: how many commits main is ahead of the installed version.
+- **The control** is the inbox action `clear_latch` (no target). A click, or the homeowner's approval of an overseer proposal made with `foreman_propose` kind `action`, leaves an approved item; the next tick runs it once, as for every inbox action (`running` is recorded first).
+- **Refusals change nothing and end the item `failed` with the reason:** no latch is set (a stale card: it was cleared by hand or by the old `clear-latch` command first), an install is running (`upgrade.lock` is held), a hand-install holds the host, or an install waits for its verification. The action runs while holding `upgrade.lock`, so it cannot race an install.
+- **Record.** The action removes the latch file and appends a `latch_cleared` line to `team/upgrades.jsonl` with the time, `by` (the homeowner), the reason text (the click or the proposal), and what the old latch said. The next tick may then upgrade under the existing rules; nothing is installed by the action itself. The overseer can propose it but cannot approve it.
+- **Homeowner steps.** None on Tower: open the dashboard, read the card, press Clear upgrade latch. `ai-supervisor self-upgrade clear-latch` still works.
+- **Job commands take the short id (issue #1160).** `pause`, `stop`, `resume`, `logs` and `release` (as `status` already did) accept a unique prefix of at least 8 hex characters of the job id, as the dashboard and Inbox show it; an ambiguous prefix is refused with `job ID prefix is ambiguous`.
+
 ## Host pressure hold uses real memory pressure (issue #1151)
 
 Foreman starts no new job while starting one would hurt the host. The hold has three measures, each with a threshold in `team.json` under `host_pressure` (defaults shown; every key is optional):

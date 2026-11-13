@@ -12,6 +12,7 @@ export const CONTROLS = {
   close_job: { label: 'Close job', target: 'job', does: 'Closes this overtaken job after saving its work to a branch on the remote.' },
   reopen: { label: 'Reopen issue', target: 'issue', does: 'Clears the implemented mark so Foreman can start the issue again.' },
   unpark: { label: 'Unpark', target: 'any', does: 'Removes the parked label so the planner may take it again.' },
+  clear_latch: { label: 'Clear upgrade latch', target: 'latch', does: 'Clears the upgrade latch so the next tick may install merged work. Refused when no latch is set or an install is running.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };
 
@@ -54,7 +55,7 @@ const T = {
   inboxfail: { clears: 'clears three days after it failed, or sooner when the work is done another way', actions: [] },
   inboxrefused: { clears: 'clears three days after the latest refusal; the overseer can propose again', actions: [] },
   'hand-deploy': { clears: 'clears when the installed commit moves past the change', actions: [] },
-  'upgrade-latched': { clears: 'clears when you run the clear-latch command', actions: [] },
+  'upgrade-latched': { clears: 'clears when you clear the latch with the control on this card (or ai-supervisor self-upgrade clear-latch on Tower)', actions: ['clear_latch'] },
   'upgrade-refused': { clears: 'clears when a later main is installed or the refusal no longer applies', actions: [] },
   'dashboard-restart-failed': { clears: 'clears when the dashboard restarts on the installed commit', actions: [] },
   'dashboard-stale': { clears: 'clears when the dashboard is restarted on the installed commit', actions: [] },
@@ -91,13 +92,14 @@ export const typeOf = id => {
 const clean = (t, n) => redact(String(t ?? '').replace(/\s+/g, ' ').trim(), n);
 // The reason is never empty: the item's explanation and what it says, then a plain fallback naming the type.
 export function reasonOf(item, type) {
-  const parts = [clean(item.text, 300), clean(item.tried, 300)].filter(Boolean);
+  const parts = [clean(item.text, 700), clean(item.tried, 300)].filter(Boolean);
   return parts.length ? parts.join(' ') : `Foreman stopped on a "${type}" item and recorded no further detail.`;
 }
 
 const JOB_ID = /^(?:job|selfcheck-job)-([a-f0-9]{8})/;
 // The target is always taken from the item, never from the request.
 function targetFor(item, spec) {
+  if (spec.target === 'latch') return item.id === 'upgrade-latched' ? 'latch' : null;   // no target: a fixed word
   if (spec.target === 'job') return JOB_ID.exec(String(item.id))?.[1] ?? null;
   const ref = item.ref;
   if (!ref || !Number.isSafeInteger(ref.n) || ref.n < 1) return null;

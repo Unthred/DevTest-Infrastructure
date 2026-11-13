@@ -13,6 +13,7 @@ import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.m
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
+import { latchAttention } from './latchaction.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { pendingProposals, proposalWords } from './decisionproposals.mjs';
@@ -707,8 +708,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #209: a failed dashboard restart or a fall back to the last good version stays a Needs you item until a restart succeeds.
     try { const f = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).dashboardFailure; if (f && typeof f.reason === 'string') attention.push({ id: 'dashboard-restart-failed', text: redact(`The dashboard server could not be ${f.kind === 'watchdog' ? 'brought back after it stopped answering' : 'restarted after the ' + (f.kind === 'rollback' ? 'rollback' : 'upgrade')}${/^[0-9a-f]{40}$/.test(f.target || '') ? ` on ${sha7(f.target)}` : ''}: ${f.reason}. ${f.recovered ? 'The last good version was started again and is serving now.' : 'Foreman keeps trying on later ticks with a growing delay.'}`, 500), ref: null, severity: 'action', action: 'Check supervisor/dashboard.log, then restart the dashboard server on the installed version.' }); } catch { /* none */ }
     // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
-    const latch = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.latch'), 'utf8')); } catch (error) { return error.code === 'ENOENT' ? null : { reason: 'unreadable latch file' }; } })();
-    if (latch) attention.push({ id: 'upgrade-latched', text: redact(`Automatic upgrades are paused: the upgrade to ${sha7(latch.to)} was rolled back (${String(latch.reason || 'no reason recorded').slice(0, 160)}). Merged work is not installed until the latch is cleared.`, 400), ref: null, severity: 'action', action: 'Find out why the upgrade failed, then clear the latch so the next tick can try again.' });
+    attention.push(...latchAttention(root, ver));
     // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
@@ -752,7 +752,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText, inbox, inboxSearch });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
-    if (latch) upgrade = { ...(upgrade || {}), latch: true };
+    if (attention.some(a => a.id === 'upgrade-latched')) upgrade = { ...(upgrade || {}), latch: true };
     const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {

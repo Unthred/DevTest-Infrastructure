@@ -18,8 +18,8 @@ const PROPOSAL_SCHEMA = {
   properties: {
     kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action'] },
     title: { type: 'string', maxLength: 200 },
-    action: { type: 'string', enum: ['new_review_attempt', 'clear_retry_cap', 'reopen', 'close_job', 'stop_job', 'resume_job'], description: 'kind action: the named action' },
-    target: { type: 'string', maxLength: 12, description: 'kind action: PR or issue number, or 8-character job id' },
+    action: { type: 'string', enum: ['new_review_attempt', 'clear_retry_cap', 'reopen', 'close_job', 'stop_job', 'resume_job', 'clear_latch'], description: 'kind action: the named action' },
+    target: { type: 'string', maxLength: 12, description: 'kind action: PR or issue number, or 8-character job id; omit for clear_latch' },
     reason: { type: 'string', maxLength: 300, description: 'kind action: why' },
     prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' },
     body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' },
@@ -64,7 +64,7 @@ export function inboxToolDefs(inbox, search = null, cards = null) {
     }] : []),
     {
       name: 'foreman_propose',
-      description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. kind "action": one named job action (new_review_attempt or clear_retry_cap with a PR number, reopen with an issue number, close_job, stop_job or resume_job with an 8-character job id) plus a reason. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
+      description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. kind "action": one named job action (new_review_attempt or clear_retry_cap with a PR number, reopen with an issue number, close_job, stop_job or resume_job with an 8-character job id, or clear_latch with no target to clear the upgrade latch) plus a reason. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
       inputSchema: PROPOSAL_SCHEMA,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       run: args => inbox.propose(args),

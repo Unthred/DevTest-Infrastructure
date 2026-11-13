@@ -690,12 +690,13 @@ async function main() {
     }
   }
   if (command === 'logs') {
-    const id = a._[0]; readJob(root, id);
+    const id = resolveJobId(root, a._[0] ?? ''); readJob(root, id);   // issue #1160: the short id the dashboard shows
     const file = path.join(root, 'events', `${id}.jsonl`);
     if (fs.existsSync(file)) process.stdout.write(fs.readFileSync(file, 'utf8').split('\n').slice(-51).join('\n'));
     return;
   }
-  const id = a._[0]; if (!id) throw new SupervisorError('job ID is required');
+  if (!a._[0]) throw new SupervisorError('job ID is required');
+  const id = resolveJobId(root, a._[0]);   // issue #1160: pause, stop, resume and release take the short id, as status does
   const job = readJob(root, id);
   if (command === 'pause' || command === 'stop') {
     if (['completed', 'failed', 'blocked', 'stopped'].includes(job.status)) throw new SupervisorError('terminal job cannot be paused or stopped');

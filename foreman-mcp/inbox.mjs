@@ -10,7 +10,9 @@ import { matchesInboxSearch } from './inbox-search.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
-const ACTIONS = { new_review_attempt: /^[1-9]\d{0,8}$/, clear_retry_cap: /^[1-9]\d{0,8}$/, reopen: /^[1-9]\d{0,8}$/, close_job: /^[a-f0-9]{8}$/, stop_job: /^[a-f0-9]{8}$/, resume_job: /^[a-f0-9]{8}$/ };   // issue #629: the names Foreman accepts
+// issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
+const NUMBER = /^[1-9]\d{0,8}$/, JOB = /^[a-f0-9]{8}$/;
+const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: NUMBER, close_job: JOB, stop_job: JOB, resume_job: JOB, clear_latch: /^latch$/ };
 // Issue #1115: the releasing direction is an ordinary action (approved on the dashboard); a `control` item may carry only park or stop_job.
 const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
@@ -21,7 +23,9 @@ const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
-  const a = args && typeof args === 'object' ? args : {};
+  const given = args && typeof args === 'object' ? args : {};
+  // Issue #1160: clear_latch has no target; the stored item carries the fixed word "latch" so every later step sees the same shape.
+  const a = given.kind === 'action' && given.action === 'clear_latch' && given.target === undefined ? { ...given, target: 'latch' } : given;
   const kind = a.kind;
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
@@ -49,7 +53,7 @@ export function checkProposal(args) {
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name' };
+    if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name (clear_latch takes none)' };
   }
   return { ok: true, item };
 }
