@@ -1,0 +1,119 @@
+{
+  "$id": "liveboard.schema.json",
+  "title": "The live board model: reply of GET /api/v1/liveboard (issue #1310)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "number": { "type": ["integer", "null"], "minimum": 1 },
+    "box": { "enum": ["merged", "needs_you", "passed", "changes_asked", "out_of_allowance", "failed", "stopped", "to_review", "done"] },
+    "nullableTimestamp": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+    "agent": {
+      "type": "object",
+      "required": ["id", "display_name", "condition", "weekly", "short", "reading", "out_until", "out_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "weekly": { "$ref": "appbar.schema.json#/$defs/window" },
+        "short": { "$ref": "appbar.schema.json#/$defs/window" },
+        "reading": { "$ref": "appbar.schema.json#/$defs/reading" },
+        "out_until": { "$ref": "#/$defs/nullableTimestamp" },
+        "out_reason": { "type": ["string", "null"] }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "required": ["id", "agent", "model", "job_types"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "agent": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "job_types": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "waiting": {
+      "type": "object",
+      "required": ["place", "number", "title", "job_type", "tied_agent", "held"],
+      "additionalProperties": false,
+      "properties": {
+        "place": { "type": "integer", "minimum": 1 },
+        "number": { "$ref": "#/$defs/number" },
+        "title": { "type": ["string", "null"] },
+        "job_type": { "type": "string" },
+        "tied_agent": { "type": ["string", "null"] },
+        "held": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "required": ["kind", "reason"], "additionalProperties": false, "properties": { "kind": { "type": "string" }, "reason": { "type": "string" } } }
+          ]
+        }
+      }
+    },
+    "running": {
+      "type": "object",
+      "required": ["job_id", "lane_id", "job_type", "number", "title", "laps", "started_at", "typical_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "type": "string" },
+        "lane_id": { "type": "string" },
+        "job_type": { "type": "string" },
+        "number": { "$ref": "#/$defs/number" },
+        "title": { "type": ["string", "null"] },
+        "laps": { "$ref": "#/$defs/count" },
+        "started_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "typical_seconds": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "landed": {
+      "type": "object",
+      "required": ["job_id", "lane_id", "job_type", "number", "title", "laps", "ended_at", "box", "tokens", "cost_pence"],
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "type": "string" },
+        "lane_id": { "type": "string" },
+        "job_type": { "type": "string" },
+        "number": { "$ref": "#/$defs/number" },
+        "title": { "type": ["string", "null"] },
+        "laps": { "$ref": "#/$defs/count" },
+        "ended_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "box": { "$ref": "#/$defs/box" },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "cost_pence": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "liveboard" },
+        "data": {
+          "type": "object",
+          "required": ["agents", "lanes", "waiting", "running", "landed", "counts", "truncated", "skipped_jobs"],
+          "additionalProperties": false,
+          "properties": {
+            "agents": { "type": "array", "items": { "$ref": "#/$defs/agent" } },
+            "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } },
+            "waiting": { "type": "array", "items": { "$ref": "#/$defs/waiting" } },
+            "running": { "type": "array", "items": { "$ref": "#/$defs/running" } },
+            "landed": { "type": "array", "items": { "$ref": "#/$defs/landed" } },
+            "counts": {
+              "type": "object",
+              "required": ["merged", "needs_you", "passed", "changes_asked", "out_of_allowance", "failed", "stopped", "to_review", "done"],
+              "additionalProperties": false,
+              "properties": {
+                "merged": { "$ref": "#/$defs/count" }, "needs_you": { "$ref": "#/$defs/count" }, "passed": { "$ref": "#/$defs/count" },
+                "changes_asked": { "$ref": "#/$defs/count" }, "out_of_allowance": { "$ref": "#/$defs/count" }, "failed": { "$ref": "#/$defs/count" },
+                "stopped": { "$ref": "#/$defs/count" }, "to_review": { "$ref": "#/$defs/count" }, "done": { "$ref": "#/$defs/count" }
+              }
+            },
+            "truncated": { "type": "boolean" },
+            "skipped_jobs": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -2235,7 +2235,7 @@ export class Team {
           // A second opinion never replaces the primary PASS; its CHANGES does (the fix loop then runs as for any rejected head).
           if (j.secondOpinion) { this.s.secondOpinions[verdictKey(j.pr, j.head)] = entry; if (r.verdict.verdict === 'CHANGES') this.s.verdicts[verdictKey(j.pr, j.head)] = entry; }
           else { this.s.verdicts[verdictKey(j.pr, j.head)] = entry; this.finishReReview(j.pr, j.head, entry); }
-          j.ingested = true; this.save();
+          j.ingested = true; j.verdict = r.verdict.verdict; this.save(); // Issue #1310: j is this job's record; its verdict outlives the head's.
           report.ingested.push({ job: id, pr: j.pr, verdict: r.verdict.verdict });
           return;
         } else { j.refusal = breaker.verdictErrorCode(r.error); report.ingested.push({ job: id, pr: j.pr, error: r.error }); }
