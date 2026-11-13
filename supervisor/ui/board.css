@@ -1,0 +1,85 @@
+/* Issue #1312: the live board screen. Colours come from the tokens of app.css; the job and agent colours are named here once, per theme. */
+:root {
+  --job-implement: #1a57b5; --job-review: #7a3fb0; --job-fix: #9a4a00; --job-cifix: #8c2f39; --job-continue: #0f6b6b;
+  --job-rebase: #4d5766; --job-split: #666600; --job-inbox: #3f6b2a; --job-other: #5f6875; --on-ball: #ffffff;
+  --agent-0: #d9480f; --agent-1: #0b7285; --agent-2: #862e9c; --agent-3: #5c940d; --agent-4: #c2255c; --agent-5: #364fc7;
+  --held-fill: #9aa3af; --long-fill: #8f5200; --peg: #c3c9d2;
+}
+[data-theme="dark"] { --held-fill: #5b6570; --peg: #38404b; --long-fill: #b46a00; }
+
+.board-screen { padding: var(--pad); max-width: 1500px; margin: 0 auto; }
+.board-screen h1 { margin: 0 0 var(--gap); font-size: 18px; }
+.board-screen h2 { margin: 16px 0 6px; font-size: 15px; }
+.board-screen h3 { margin: 10px 0 4px; font-size: var(--fs); }
+.screen-link { padding: var(--pad); }
+.board-screen.stale .board-svg { opacity: .7; }
+.board-error { padding: 10px var(--pad); border: 1px dashed var(--fault); border-radius: var(--radius); background: var(--surface-2); }
+.board-error button, .ball-panel button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); cursor: pointer; }
+.stale-mark { color: var(--muted); font-weight: 600; }
+
+.board-svg { display: block; width: 100%; height: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.board-svg text { fill: var(--text); font: 12px var(--font); }
+.board-svg .muted, .board-svg .reading, .board-svg .lane-label, .board-svg .zone-label, .board-svg .more { fill: var(--muted); }
+.board-svg .agent-name { font-weight: 700; font-size: 14px; }
+.board-svg .lane { fill: var(--surface-2); stroke: var(--line); }
+.board-svg .pegs { fill: url(#peg); stroke: var(--line); }
+.board-svg .peg-dot { fill: var(--peg); }
+.board-svg .hopper-box { fill: var(--surface-2); stroke: var(--line); }
+.board-svg .group.out .lane, .board-svg .group.out .allow, .board-svg .group.out .bar, .board-svg .group.out .reset { opacity: .4; }
+.board-svg .out-label { fill: var(--fault); font-weight: 700; }
+.board-svg .reset { fill: var(--muted); font-size: 11px; }
+.board-svg .allow.unknown { fill: var(--unknown); font-style: italic; }
+.board-svg .bar .track { fill: var(--surface-2); stroke: var(--line); }
+.board-svg .bar .fill { fill: var(--ok); }
+.board-svg .bar.unknown .track { fill: url(#hatch); stroke: var(--unknown); stroke-dasharray: 3 2; }
+
+.board-svg .box-rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+.board-svg .box-label { font-weight: 700; }
+.board-svg .box-count { font-size: 16px; font-weight: 700; }
+.board-svg .box-needs_you .box-rect { stroke: var(--you); stroke-width: 3; fill: var(--surface); }
+.board-svg .box-needs_you .box-label { fill: var(--you); }
+.board-svg .box, .board-svg .ball { cursor: pointer; }
+.board-svg .box:focus-visible .box-rect { stroke: var(--accent); stroke-width: 3; }
+
+.board-svg .ball circle { stroke: var(--surface); stroke-width: 1.5; fill: var(--job-other); }
+.board-svg .ball .num { fill: var(--on-ball); font-size: 9.5px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+.board-svg .ball .laps { font-size: 10px; font-weight: 700; }
+.board-svg .ball:focus-visible circle { stroke: var(--accent); stroke-width: 3; }
+.board-svg .tied { stroke: var(--surface); stroke-width: 1; }
+.board-svg .ball.held circle { fill: var(--held-fill); opacity: .6; }
+.board-svg .ball.long circle { fill: var(--long-fill); stroke: var(--fault); stroke-width: 3; }
+.board-svg .ball.no-estimate circle { stroke-dasharray: 3 2; stroke: var(--text); }
+.board-svg .tip { display: none; pointer-events: none; }
+.board-svg .tip rect { fill: var(--text); }
+.board-svg .tip text { fill: var(--bg); }
+.board-svg .ball:hover .tip, .board-svg .ball:focus .tip { display: block; }
+.board-svg .ball:hover, .board-svg .ball:focus { outline: none; }
+
+.board-svg .job-implement circle { fill: var(--job-implement); } .board-svg .job-review circle { fill: var(--job-review); } .board-svg .job-fix circle { fill: var(--job-fix); }
+.board-svg .job-cifix circle { fill: var(--job-cifix); } .board-svg .job-continue circle { fill: var(--job-continue); } .board-svg .job-rebase circle { fill: var(--job-rebase); }
+.board-svg .job-split circle { fill: var(--job-split); } .board-svg .job-inbox circle { fill: var(--job-inbox); } .board-svg .job-other circle { fill: var(--job-other); }
+.board-svg .ball.held circle { fill: var(--held-fill); }
+.board-svg .ball.long circle { fill: var(--long-fill); }
+.agent-0 { fill: var(--agent-0); } .agent-1 { fill: var(--agent-1); } .agent-2 { fill: var(--agent-2); }
+.agent-3 { fill: var(--agent-3); } .agent-4 { fill: var(--agent-4); } .agent-5 { fill: var(--agent-5); }
+
+/* the lists: the screen on a phone, read by screen readers at every width */
+.board-lists ul { list-style: none; margin: 0; padding: 0; }
+.board-lists li, .picked-box li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.board-lists .item, .picked-box .item { min-height: 32px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: pointer; text-align: left; }
+.board-lists .detail, .picked-box .detail, .none { color: var(--muted); }
+.agent-item.out b::after { content: " (out)"; color: var(--fault); }
+.box-section.you { border-left: 4px solid var(--you); padding-left: 8px; }
+.picked-box { margin-top: var(--gap); padding: var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+@media (min-width: 640px) {
+  .board-lists { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+
+.ball-panel { position: fixed; right: 8px; top: calc(var(--bar) + 8px); z-index: 30; width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - var(--bar) - 16px); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--pad); box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
+.ball-panel .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.ball-panel dl { display: grid; grid-template-columns: 6em 1fr; gap: 4px 8px; margin: 0; }
+.ball-panel dt { color: var(--muted); }
+.ball-panel dd { margin: 0; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .board-lists .item, .picked-box .item, .board-error button, .ball-panel button { min-height: var(--touch); } }
+.board-svg .hatch-bar { fill: var(--line); }
