@@ -21,7 +21,7 @@ export class LeaseHeld extends SupervisorError {
 // A directory the dispatcher was told to use as a worktree is not a linked worktree of the repository (for example a standalone
 // clone). A condition for the homeowner to fix, not a crash: the dispatcher records it once instead of failing every tick.
 export class WorktreeUnusable extends SupervisorError {
-  constructor(message, worktree) { super(message); this.worktree = worktree; }
+  constructor(message, worktree, required = null) { super(message); this.worktree = worktree; this.required = required; }
 }
 // The git common directory of a checkout, as an absolute real path. `git -C <dir> rev-parse --git-common-dir` prints a path relative
 // to <dir> for a standalone clone (".git"), so it is always resolved against <dir>, never against the process working directory.
