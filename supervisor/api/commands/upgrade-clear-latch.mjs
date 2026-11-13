@@ -26,7 +26,7 @@ function run(input, context) {
     inboxDir: dir, action: 'clear_latch', target: LATCH_TARGET, reason, title: 'Clear the upgrade latch', now: context.now,
   });
   if (!recorded.ok) return refusal(refusalCodeOf(recorded.reason), recorded.reason);
-  context.wake?.('clear_latch');
+  context.wake?.('approve');   // an accepted trigger: requestWake refuses any other reason
   const after = conditionOf({ dir, id: recorded.id });
   return { outcome: 'accepted', target: TARGET, before: null, after, undo: null, models: ['inbox', 'overview', 'appbar'] };
 }

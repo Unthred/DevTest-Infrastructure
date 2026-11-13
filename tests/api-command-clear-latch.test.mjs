@@ -13,6 +13,7 @@ import * as store from '../supervisor/inbox.mjs';
 import { dispatchApproved } from '../supervisor/controlactions.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 import { readSince } from '../supervisor/api/eventlog.mjs';
+import { requestWake } from '../supervisor/wake.mjs';
 
 const NOW = Date.UTC(2026, 10, 13, 12, 0, 0);
 const API = new URL('../supervisor/api/', import.meta.url);
@@ -105,7 +106,7 @@ test('valid: the real reason records one approved clear_latch action, wakes once
   const loaded = store.loadItem(s.inbox, all[0].id);
   assert.equal(loaded.ok, true);
   assert.equal(loaded.item.reason, REASON);
-  assert.deepEqual(s.wakes, ['clear_latch']);
+  assert.deepEqual(s.wakes, ['approve']);
 });
 
 test('boundary: 300 characters are accepted, 301 are reported as not_recorded, a second call while approved is already_queued', async t => {
@@ -164,4 +165,12 @@ test('audit: the applied entry keeps its reason, the refused one is listed, and 
   const seen = entries.map(e => [e.command, e.outcome, e.refusal_code, e.reason]);
   assert.deepEqual(seen, [['upgrade.clear_latch', 'refused', 'not_recorded', words(301)], ['upgrade.clear_latch', 'accepted', null, REASON]]);
   assert.deepEqual(events(s).map(e => e.audit_id), [ok.body.audit_id, refused.body.audit_id]);
+});
+
+test('the reason the command wakes with is accepted by the real requestWake and starts a pass', async t => {
+  const s = await serve(t);
+  await s.clear(REASON);
+  const started = [];
+  const outcome = requestWake({ root: s.root, reason: s.wakes[0], spawnPass: why => started.push(why) });
+  assert.deepEqual([outcome.requested, started], [true, ['approve']]);
 });
