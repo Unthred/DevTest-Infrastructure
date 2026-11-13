@@ -58,6 +58,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
   assert.equal(group('stalled'), 'failed');
   assert.deepEqual(body.data.models, [
     { name: 'appbar', path: '/api/v1/appbar', schema: 'appbar.schema.json' },   // issue #1253
+    { name: 'inbox', path: '/api/v1/inbox', schema: 'inbox.schema.json' },   // issue #1255
     { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
   ]);
   assert.deepEqual([body.data.commands, body.data.events], [[], []]);

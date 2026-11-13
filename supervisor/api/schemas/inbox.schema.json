@@ -1,0 +1,83 @@
+{
+  "$id": "inbox.schema.json",
+  "title": "The Inbox model: reply of GET /api/v1/inbox (issue #1255)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "counts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/count" } },
+    "nullableTimestamp": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+    "item": {
+      "type": "object",
+      "required": [
+        "id", "full_id", "kind", "state", "attention", "title", "why", "will_text", "body_text", "proposed_by", "created_at", "decided_at",
+        "undo_until", "result_text", "reason_code", "reason_text", "target", "job_id", "parked", "actions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
+        "full_id": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "kind": { "type": "string" },
+        "state": { "enum": ["waiting_for_approval", "approved", "running", "done", "failed", "refused", "rejected", "unknown"] },
+        "attention": { "enum": ["homeowner", "fault", "none"] },
+        "title": { "type": "string" },
+        "why": { "type": ["string", "null"] },
+        "will_text": { "type": ["string", "null"] },
+        "body_text": { "type": ["string", "null"] },
+        "proposed_by": { "enum": ["foreman", "overseer"] },
+        "created_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "decided_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "undo_until": { "$ref": "#/$defs/nullableTimestamp" },
+        "result_text": { "type": ["string", "null"] },
+        "reason_code": {
+          "enum": [
+            "pending_cap", "masked_text", "secret_shaped", "attribution_text", "malformed_prerequisite_line", "too_long", "unknown_kind",
+            "item_changed", "inbox_job_stopped", "action_failed", "other", null
+          ]
+        },
+        "reason_text": { "type": ["string", "null"] },
+        "target": {
+          "anyOf": [
+            { "$ref": "common.schema.json#/$defs/ref" },
+            { "type": "null" }
+          ]
+        },
+        "job_id": { "type": ["string", "null"] },
+        "parked": { "type": "boolean" },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "inbox" },
+        "data": {
+          "type": "object",
+          "required": ["facets", "page", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "facets": {
+              "type": "object",
+              "required": ["state", "kind"],
+              "additionalProperties": false,
+              "properties": { "state": { "$ref": "#/$defs/counts" }, "kind": { "$ref": "#/$defs/counts" } }
+            },
+            "page": {
+              "type": "object",
+              "required": ["total", "matched", "returned", "next_cursor"],
+              "additionalProperties": false,
+              "properties": {
+                "total": { "$ref": "#/$defs/count" },
+                "matched": { "$ref": "#/$defs/count" },
+                "returned": { "$ref": "#/$defs/count" },
+                "next_cursor": { "type": ["string", "null"] }
+              }
+            },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+          }
+        }
+      }
+    }
+  ]
+}
