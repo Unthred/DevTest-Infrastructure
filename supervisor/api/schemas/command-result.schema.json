@@ -1,0 +1,60 @@
+{
+  "$id": "command-result.schema.json",
+  "title": "The reply of POST /api/v1/commands/{name} (issue #1257): always this shape, with status 200, 400, 403, 404, 409 or 429",
+  "$defs": {
+    "cursor": { "type": "string", "pattern": "^e-(0|[1-9][0-9]*)$" },
+    "undo": {
+      "type": "object",
+      "required": ["command", "input", "until"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "input": { "type": "object" },
+        "until": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "applied": {
+      "type": "object",
+      "required": ["ok", "command", "outcome", "audit_id", "refusal_code", "refusal_text", "result", "undo", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "command": { "type": "string" },
+        "outcome": { "enum": ["applied", "accepted", "no_change"] },
+        "audit_id": { "type": ["string", "null"], "pattern": "^[a-f0-9]{8}$" },
+        "refusal_code": { "type": "null" },
+        "refusal_text": { "type": "null" },
+        "result": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["target", "condition"],
+              "additionalProperties": false,
+              "properties": { "target": { "$ref": "common.schema.json#/$defs/ref" }, "condition": { "$ref": "common.schema.json#/$defs/condition" } }
+            }
+          ]
+        },
+        "undo": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/undo" }] },
+        "cursor": { "$ref": "#/$defs/cursor" }
+      }
+    },
+    "refused": {
+      "type": "object",
+      "required": ["ok", "command", "outcome", "audit_id", "refusal_code", "refusal_text", "result", "undo", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "command": { "type": "string" },
+        "outcome": { "const": "refused" },
+        "audit_id": { "type": ["string", "null"], "pattern": "^[a-f0-9]{8}$" },
+        "refusal_code": { "type": "string" },
+        "refusal_text": { "type": "string" },
+        "result": { "type": "null" },
+        "undo": { "type": "null" },
+        "cursor": { "$ref": "#/$defs/cursor" }
+      }
+    }
+  },
+  "anyOf": [{ "$ref": "#/$defs/applied" }, { "$ref": "#/$defs/refused" }]
+}

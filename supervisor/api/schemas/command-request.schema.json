@@ -1,0 +1,13 @@
+{
+  "$id": "command-request.schema.json",
+  "title": "The body of POST /api/v1/commands/{name} (issue #1257): at most 16384 bytes of JSON",
+  "type": "object",
+  "required": ["input", "reason", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "input": { "type": "object" },
+    "reason": { "type": ["string", "null"] },
+    "idempotency_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "dry_run": { "type": "boolean" }
+  }
+}
