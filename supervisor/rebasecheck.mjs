@@ -58,7 +58,7 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
     if (m) { used.add(m.sha); changedPairs.push({ old: c, now: m }); } else if (!alreadyApplied(run, c.sha, base)) missing.push({ sha: c.sha, subject: c.subject });
   }
-  const lostChanges = compareChangedPairs(run, { pairs: changedPairs, base, oldHead });
+  const lostChanges = compareChangedPairs(run, { pairs: changedPairs, base, oldHead, extra: now.filter(n => !used.has(n.sha)).map(n => n.sha) });
   const commits = now.map(c => ({ sha: c.sha, subject: c.subject }));
   return { oldHead, newHead, commits, missing, lostChanges, resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
 }

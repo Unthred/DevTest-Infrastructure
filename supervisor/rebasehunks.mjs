@@ -3,7 +3,8 @@
 // then author identity and subject). For a paired commit whose patch changed in the rebase, every hunk of the OLD commit must be
 // found again in the NEW commit (any position, any context), or be a change main already made since the merge base. Both are
 // computed from diffs, not guessed:
-//   - covered:  the hunk's added and removed lines are consumed from the same file's added and removed lines of the new commit;
+//   - covered:  the hunk's added and removed lines are consumed from the same file's added and removed lines of the new commit, or of
+//               a new commit no old commit pairs with (a change the agent restored in a commit of its own, as the refusal tells it to);
 //   - on main:  what is left is consumed from the lines main added or removed between the merge base and the base tip;
 //   - folded:   (the longer line is used up) a left-over added line that a longer added line of the new commit contains (both sides edited one line and the
 //               resolution joined them; at least 4 characters, so a brace or a short token proves nothing);
@@ -179,16 +180,17 @@ function compareCommit(oldHunks, newHunks, readMain, id) {
   });
 }
 
-// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ. Returns the findings, newest bounded to MAX_FINDINGS.
-export function compareChangedPairs(run, { pairs, base, oldHead }) {
+// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ; extra: shas of new commits no old commit pairs with. Returns the findings, newest bounded to MAX_FINDINGS.
+export function compareChangedPairs(run, { pairs, base, oldHead, extra = [] }) {
   if (!pairs.length) return [];
   const mergeBase = run(['merge-base', base, oldHead]).trim();
   const readMain = mainReader(run, mergeBase, base);
   const show = sha => parseHunks(run(['show', '--format=', ...DIFF, sha]));
+  const spare = extra.flatMap(show);
   const out = [];
   for (const { old, now } of pairs) {
     const id = { commit: old.sha, subject: old.subject };
-    out.push(...compareCommit(show(old.sha), show(now.sha), readMain, id));
+    out.push(...compareCommit(show(old.sha), [...show(now.sha), ...spare], readMain, id));
   }
   return out.slice(0, MAX_FINDINGS);
 }

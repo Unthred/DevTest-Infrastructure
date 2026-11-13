@@ -186,7 +186,9 @@ test('repair path with a fake agent: the first push is refused, the agent restor
   assert.equal(first.out.stop, false);
   assert.match(first.out.message, /run rebase-push once more/);
   assert.equal(readRefusal(w.agent, w.oldHead).reason, 'lost-changes');
-  resolve(w, lines('a', 'B', 'c', 'D', 'feature();'));   // the fake agent restores the named hunk
+  // the fake agent restores the named hunk in a commit of its own: the prompt forbids amending
+  fs.writeFileSync(path.join(w.agent, w.file), lines('a', 'B', 'c', 'D', 'feature();'));
+  git(w.agent, 'commit', '-q', '-am', 'restore feature');
   const second = push(w);
   assert.equal(second.code, 0);
   assert.equal(second.out.pushed, true);
