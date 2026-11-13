@@ -34,7 +34,7 @@ import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
-import { chooseForSlot, holdUnchosen, chosenFields } from './slotchoice.mjs';
+import { chooseForSlot, holdUnchosen, chosenFields, withRequiredPins } from './slotchoice.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
@@ -536,7 +536,7 @@ export class Team {
   ciState(pr) { return checksState(pr.statusCheckRollup, this.retried(pr)); }
   agents() { return Object.entries(this.c.agents); }
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
-  issuesOf(agent) { return [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]; }
+  issuesOf(agent) { return withRequiredPins(this.c, agent, [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]); }
   // Issue #212: every open issue is eligible unless excluded. Returns null when eligible, else { kind, text, refs } where kind is
   // label | dependency | waiting_on (what a stopped job reported as open).
   exclusion(n, issueByNo, prs = this.view?.prs || []) {

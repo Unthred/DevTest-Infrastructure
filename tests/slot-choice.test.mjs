@@ -137,7 +137,29 @@ test('a preferred pin breaks a tie; a required pin leaves the job to its agent a
   assert.equal(pick.agent, 'codex');
   assert.equal(pick.choice.rule, 'preferred-pin');
   const required = world(t, { budget: { ...CAPS, choice: { pins: { 23: { agent: 'codex', mode: 'required' } } } }, issues: [issue(23), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')], allowance });
-  assert.deepEqual(implementOf(await required.team.plan()), [], 'issue 23 is pinned to codex, which does not list it: it waits for codex');
+  const [pinned] = implementOf(await required.team.plan());
+  assert.equal(pinned?.issue, 23, 'issue 23 is pinned to codex, which does not list it: codex is offered it and takes it while idle');
+  assert.equal(pinned.agent, 'codex');
+  assert.equal(pinned.choice.rule, 'required-pin');
+});
+
+test('a required pin waits when its agent has no free slot, and no other agent takes the job', async t => {
+  const allowance = { claude: weekly('claude', 0.1, RESET), codex: weekly('codex', 0.1, RESET) };
+  const w = world(t, { budget: { ...CAPS, choice: { pins: { 23: { agent: 'codex', mode: 'required' } } } }, issues: [issue(23), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')],
+    allowance, roles: { implementer: 1, reviewer: 1 } });
+  w.team.providerSlotFull = provider => provider === 'codex';
+  assert.deepEqual(implementOf(await w.team.plan()), []);
+});
+
+test('jobs planned earlier in the tick are charged to the agent before the next slot is chosen', async t => {
+  // claude has 10% of its short window left and each job needs about 7% of it: the second job must not also go to claude.
+  const w = world(t, { budget: CAPS, issues: [issue(23), issue(5), issue(2), issue(3, 'CLOSED')], roles: { implementer: 3, reviewer: 1 },
+    jobRecords: [...history('claude', 1e5, 0), ...history('codex', 2e5, 10)],
+    allowance: { claude: withShort('claude', 0.1, 0.9), codex: withShort('codex', 0.1, 0.1) } });
+  const starts = implementOf(await w.team.plan());
+  const onClaude = starts.filter(a => a.agent === 'claude');
+  assert.ok(onClaude.length <= 1, `claude short window room 10% covers one job of about 7%, got ${onClaude.length}`);
+  assert.ok(starts.some(a => a.agent === 'codex'), 'the rest of the work goes to the agent with room');
 });
 
 test('both agents below their reserve start no implement, as before', async t => {

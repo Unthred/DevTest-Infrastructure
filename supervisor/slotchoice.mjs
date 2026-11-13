@@ -20,21 +20,38 @@ export function holdUnchosen(team, group, why) {
   }
 }
 
+// The issues that budget.choice.pins requires on this agent, so the agent offers them even when its own list does not name them.
+export function withRequiredPins(config, agent, listed) {
+  const pinned = Object.entries(config.budget?.choice?.pins || {}).filter(([, pin]) => pin.mode === 'required' && pin.agent === agent).map(([n]) => Number(n));
+  return [...listed, ...pinned.filter(n => !listed.includes(n))];
+}
+
 // The fields a started job keeps from its choice (none for a job the choice rule did not run for).
 export const chosenFields = act => (act.choice ? { choice: act.choice, chosenWhy: act.why } : {});
 
 const jobLabel = act => (act.issue != null ? `${act.type} #${act.issue}` : act.pr != null ? `${act.type} on PR #${act.pr}` : act.type);
 
 // One candidate row for an agent: the job it offers (or, for an agent that offered none, the job of the best-ranked one, so its row still reads).
-function candidateOf(team, agent, act, { slotFree, why }) {
+// The weekly and short window shares of the jobs this tick already chose for the agent: the next slot is judged on what is left after them.
+function plannedShares(planned, agent) {
+  const total = { weekly: 0, short: 0 };
+  for (const x of planned) {
+    const row = x.agent === agent ? x.choice?.candidates?.find(c => c.agent === agent) : null;
+    total.weekly += row?.expectedShare || 0;
+    total.short += row?.expectedShortShare || 0;
+  }
+  return total;
+}
+
+function candidateOf(team, agent, act, { slotFree, why, spent }) {
   const mode = team.modes?.[agent], settings = team.c.budget?.choice || {};
   const jobs = (team.usage?.jobs || []).filter(j => j.provider === team.c.agents[agent].provider);
   const pin = act.issue != null ? settings.pins?.[String(act.issue)] : null;
   const now = team.clock.now(), snapshots = team.usage?.snapshots || [], current = team.usage?.allowance?.[agent] || null;
   const recent = kind => recentWindowRate({ snapshots, current, agent, kind, now });
-  const short = mode?.shortWindow ? { ...mode.shortWindow, rate: recent('short'), hoursToReset: (mode.shortWindow.resetsAt - now) / 3600000 } : null;
+  const short = mode?.shortWindow ? { ...mode.shortWindow, used: mode.shortWindow.used + spent.short, rate: recent('short'), hoursToReset: (mode.shortWindow.resetsAt - now) / 3600000 } : null;
   // The last one to two hours decide the rate when there are readings for it; otherwise the window figure the allowance rule already holds.
-  return { agent, job: jobLabel(act), slotFree, why, used: mode?.known ? mode.used : null, rate: recent('weekly') ?? mode?.ratePerHour ?? null,
+  return { agent, job: jobLabel(act), slotFree, why, used: mode?.known ? mode.used + spent.weekly : null, rate: recent('weekly') ?? mode?.ratePerHour ?? null,
     hoursToReset: mode?.hoursLeft ?? null, short,
     share: expectedShare({ jobs, kind: act.type, capacity: mode?.capacity?.capacity, settings }),
     requiredAgent: pin?.mode === 'required' ? pin.agent : null, preferredAgent: pin?.mode === 'preferred' ? pin.agent : null };
@@ -53,7 +70,8 @@ export function chooseForSlot(team, cands, { prs, usedBy, role, planned }) {
     const earlier = ownHolds(team).has(`${agent}:${first.act.type}`) ? null : team.held?.[agent]?.[first.act.type];   // not an earlier choice's text
     const why = earlier || 'it offered no such job now';
     const slotFree = !team.providerSlotFull(a.provider, role, usedBy);
-    return { ...candidateOf(team, agent, own?.act ?? first.act, { slotFree, why }), eligible: !!own, planned: planned.filter(x => x.agent === agent).length };
+    const spent = plannedShares(planned, agent);
+    return { ...candidateOf(team, agent, own?.act ?? first.act, { slotFree, why, spent }), eligible: !!own, planned: planned.filter(x => x.agent === agent).length };
   });
   const result = chooseAgent(rows);
   const choice = { rule: result.rule, chosen: result.chosen, candidates: result.candidates };
