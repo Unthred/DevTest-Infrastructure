@@ -1,0 +1,1 @@
+This MCP server started before the installed code changed, so it may be missing tools or fields (a proposal field could be dropped without an error). Restart the connection to this server in the client (for example reconnect it, or start a new session), then try again.

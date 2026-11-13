@@ -4,7 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const STALE_TEXT = 'This MCP server started before the installed code changed, so it may be missing tools or fields (a proposal field could be dropped without an error). Restart the connection to this server in the client (for example reconnect it, or start a new session), then try again.';
+// Issue #1327: the long text lives in its own file, next to the modules.
+export const STALE_TEXT = fs.readFileSync(new URL('./stale-text.txt', import.meta.url), 'utf8').trim();
 export const BASE_VERSION = '0.1.0';
 
 // Pure: the fingerprint of a listing of { name, size, mtimeMs }. Only module files count; order does not matter.
@@ -42,11 +43,14 @@ export function markStale(text) {
   return obj ? JSON.stringify({ staleServer: STALE_TEXT, ...obj }, null, 1) : `staleServer: ${STALE_TEXT}\n${text}`;
 }
 
-// The status reply: startedAt and stale under the MCP version entry.
+// The status reply: startedAt and stale under the MCP version entry. A reply that is not a JSON object (an error, or text cut at the size
+// limit) cannot take the entry, so the self-check goes in a first line instead and the overseer still sees it (issue #1327).
 export function markStatus(text, check, stale) {
   const obj = parse(text);
-  if (!obj) return text;
+  if (!obj) return `mcpSelfCheck: ${JSON.stringify({ startedAt: check.startedAt, stale })}\n${text}`;
   const mcp = obj.version?.mcp;
   const entry = mcp && typeof mcp === 'object' ? mcp : mcp == null ? {} : { installed: mcp };
-  return JSON.stringify({ ...obj, version: { ...(obj.version && typeof obj.version === 'object' ? obj.version : {}), mcp: { ...entry, startedAt: check.startedAt, stale } } }, null, 1);
+  const version = obj.version && typeof obj.version === 'object' ? obj.version : {};
+  const marked = { ...entry, startedAt: check.startedAt, stale };
+  return JSON.stringify({ ...obj, version: { ...version, mcp: marked } }, null, 1);
 }

@@ -60,6 +60,26 @@ test('install: a commit that does not touch foreman-mcp/ still moves VERSION so 
   assert.equal(fs.readFileSync(path.join(w.inst, 'VERSION'), 'utf8').trim(), '3'.repeat(40));
 });
 
+test('install (issue #1327): a first install with no VERSION file records the commit', () => {
+  const w = world({ installed: false });
+  fs.mkdirSync(path.join(w.inst, 'foreman-mcp'));
+  fs.copyFileSync(path.join(w.src, 'foreman-mcp/server.mjs'), path.join(w.inst, 'foreman-mcp/server.mjs'));
+  fs.copyFileSync(path.join(w.src, 'foreman-mcp/launcher.sh'), path.join(w.inst, 'foreman-mcp/launcher.sh'));
+  const r = install(w.src, SH2, w.state);
+  assert.equal(r.status, 0, r.err);
+  assert.equal(r.out.result, 'unchanged');
+  assert.equal(fs.readFileSync(path.join(w.inst, 'VERSION'), 'utf8').trim(), SH2);
+});
+
+test('install (issue #1327): an update with no VERSION file records the commit', () => {
+  const w = world();
+  fs.rmSync(path.join(w.inst, 'VERSION'));
+  const r = install(w.src, SH2, w.state);
+  assert.equal(r.status, 0, r.err);
+  assert.equal(r.out.result, 'installed');
+  assert.equal(fs.readFileSync(path.join(w.inst, 'VERSION'), 'utf8').trim(), SH2);
+});
+
 test('install: a failing copy keeps the previous one working and reports failure', () => {
   const w = world();
   fs.writeFileSync(path.join(w.src, 'foreman-mcp/server.mjs'), 'export const = ;\n');   // does not parse

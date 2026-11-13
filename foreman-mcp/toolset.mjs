@@ -14,18 +14,23 @@ const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
 
 export function createToolset(options) {
   const base = createTools(options), now = options.now ?? Date.now, calls = [];
-  const stop = stopRecordTool({ reasons: viewReasons({ source: options.source, getPath: options.getPath }), dirs: options.stopDirs ?? DEFAULT_STOP_DIRS, redact });   // issue #1161
-  const extra = [stop, ...(options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [])];
+  const reasons = viewReasons({ source: options.source, getPath: options.getPath });
+  const stop = stopRecordTool({ reasons, dirs: options.stopDirs ?? DEFAULT_STOP_DIRS, redact });   // issue #1161
+  const controls = options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [];
+  const extra = [stop, ...controls];
   const own = name => extra.find(d => d.name === name);
   return {
-    list: () => [...base.list(), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY }))],
+    list: () => [
+      ...base.list(),
+      ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY })),
+    ],
     has: name => base.has(name) || !!own(name),
     async call(name, args = {}) {
       const check = options.selfCheck, stale = check ? check.stale() : false;
       if (stale && WRITERS.has(name)) return { isError: true, text: markStale(JSON.stringify({ error: STALE_TEXT })) };
       const out = await answer(name, args);
       if (!check) return out;
-      const text = name === 'foreman_status' && !out.isError ? markStatus(out.text, check, stale) : out.text;
+      const text = name === 'foreman_status' ? markStatus(out.text, check, stale) : out.text;
       return { ...out, text: stale ? markStale(text) : text };
     },
   };

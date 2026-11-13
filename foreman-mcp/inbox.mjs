@@ -24,6 +24,7 @@ const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
 const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i, /\bco-authored-by:/i, /\bnoreply@anthropic\.com\b/i, /\bclaude\.ai\/code\b/i];
 const OPTIONAL = ['why', 'effect', 'after'];
+const SUBMITTED_NOTE = 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.';
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
@@ -71,6 +72,12 @@ const waitsForOf = (dir, s, item) => {
   const labels = s.waitsFor ?? (item?.after && ['pending', 'approved'].includes(s.state) ? afterLabels(dir, item.after) : null);
   return labels ? { waitsFor: labels } : {};
 };
+// Issue #1314: `stored` lists which optional fields were kept, so a dropped one is visible in the reply.
+function submittedReply(dir, id, item, link) {
+  const stored = OPTIONAL.filter(k => item[k] !== undefined);
+  const waitsFor = item.after ? { waitsFor: afterLabels(dir, item.after) } : {};
+  return { id, shortId: id.slice(0, 8), link, state: 'submitted', stored, ...waitsFor, note: SUBMITTED_NOTE };
+}
 export function createInbox({ dir, baseUrl = null }) {
   // Issue #977: the dashboard link for an item, so the overseer can pass it on. Absent when no dashboard address is configured.
   const linkFor = id => { try { return baseUrl ? new URL(`/inbox/${id}`, baseUrl).href : null; } catch { return null; } };
@@ -99,9 +106,7 @@ export function createInbox({ dir, baseUrl = null }) {
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
-      // Issue #1314: which optional fields were stored, so a dropped one is visible in this reply.
-      const stored = OPTIONAL.filter(k => c.item[k] !== undefined);
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', stored, ...(c.item.after ? { waitsFor: afterLabels(dir, c.item.after) } : {}), note: 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.' };
+      return submittedReply(dir, id, c.item, linkFor(id));
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
