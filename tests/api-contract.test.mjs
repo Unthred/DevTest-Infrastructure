@@ -66,7 +66,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
     { name: 'outcomes', path: '/api/v1/outcomes', schema: 'outcomes.schema.json' },   // issue #1307
     { name: 'overview', path: '/api/v1/overview', schema: 'overview.schema.json' },   // issue #1256
   ]);
-  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'upgrade.clear_latch', 'work_item.accept_split', 'work_item.clear_retry_cap', 'work_item.close_reason', 'work_item.requeue'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
+  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'job.resume', 'upgrade.clear_latch', 'work_item.accept_split', 'work_item.clear_retry_cap', 'work_item.close_reason', 'work_item.requeue'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
 });
 
 test('freshness reads the last finished tick: fresh when recent, stale when old, null times stay null', async t => {
