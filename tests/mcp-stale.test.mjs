@@ -8,26 +8,26 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fingerprintOf, createSelfCheck, markStale, STALE_TEXT } from '../foreman-mcp/selfcheck.mjs';
+import { fingerprintOf, createSelfCheck, markStale, markStatus, STALE_TEXT } from '../foreman-mcp/selfcheck.mjs';
 
 const mcpDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'foreman-mcp');
 const FIRST = 'Live board balls travel from hopper to lane and bounce down the pegs into their box Boardmotion';
 const SECOND = 'Live board drawing styles behind one switch with the peg board as the first style Boardstyles';
 
-function viewServer(t) {
-  const server = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ version: { installed: 'aaaaaaa', mcp: { installed: 'aaaaaaa' } } })); });
+function viewServer(t, status = 200) {
+  const server = http.createServer((req, res) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ version: { installed: 'aaaaaaa', mcp: { installed: 'aaaaaaa' } } })); });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => { t.after(() => server.close()); resolve(`http://127.0.0.1:${server.address().port}/api/view.json`); }));
 }
 
 // Copies the server folder, starts it, and returns a small client.
-async function start(t) {
+async function start(t, viewStatus = 200) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-stale-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const server = path.join(root, 'srv'), inbox = path.join(root, 'inbox');
   fs.cpSync(mcpDir, server, { recursive: true, preserveTimestamps: true });
   fs.mkdirSync(path.join(inbox, 'items'), { recursive: true });
   fs.mkdirSync(path.join(inbox, 'status'));
-  const child = spawn(process.execPath, [path.join(server, 'server.mjs')], { env: { PATH: process.env.PATH, FOREMAN_MCP_VIEW_URL: await viewServer(t), FOREMAN_MCP_INBOX: inbox, FOREMAN_MCP_LOG: path.join(root, 'calls.log') }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(server, 'server.mjs')], { env: { PATH: process.env.PATH, FOREMAN_MCP_VIEW_URL: await viewServer(t, viewStatus), FOREMAN_MCP_INBOX: inbox, FOREMAN_MCP_LOG: path.join(root, 'calls.log') }, stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => child.kill('SIGKILL'));
   const waiting = new Map();
   let buffer = '', next = 1;
@@ -125,4 +125,23 @@ test('fingerprint: only module files count, order does not matter; a null readin
   assert.equal(check.stale(), true, 'unreadable');
   assert.equal(check.stale(), true, 'different');
   assert.equal(markStale('plain text'), `staleServer: ${STALE_TEXT}\nplain text`);
+});
+
+test('issue #1327: the self-check is still reported when the status reply is an error (fresh and stale)', async t => {
+  const s = await start(t, 500);
+  const fresh = await s.call('foreman_status');
+  assert.equal(fresh.isError, true, 'the status reply is an error');
+  assert.equal(fresh.body.version.mcp.stale, false);
+  assert.match(fresh.body.version.mcp.startedAt, /^\d{4}-\d\d-\d\dT/);
+  fs.appendFileSync(path.join(s.server, 'gbp.mjs'), '// changed\n');
+  const stale = await s.call('foreman_status');
+  assert.equal(stale.isError, true);
+  assert.equal(stale.body.version.mcp.stale, true);
+  assert.equal(stale.body.staleServer, STALE_TEXT);
+});
+
+test('issue #1327: markStatus puts the self-check in a first line for text that is not a JSON object (an error or a cut reply)', () => {
+  const check = { startedAt: '2026-01-02T03:04:05.000Z' };
+  assert.equal(markStatus('{"error":"x"', check, false), 'mcpSelfCheck: {"startedAt":"2026-01-02T03:04:05.000Z","stale":false}\n{"error":"x"');
+  assert.equal(JSON.parse(markStatus('{"version":{"mcp":"abc"}}', check, true)).version.mcp.installed, 'abc');
 });

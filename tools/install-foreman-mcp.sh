@@ -42,7 +42,7 @@ same() {
 # write_version [FILE]: the commit on line 1; further lines of the old file (free-text notes) are kept.
 write_version() {
   local target=${1:-$vfile} t; t="$(dirname "$target")/.VERSION.tmp"
-  { printf '%s\n' "$commit"; [ -f "$vfile" ] && sed -n '2,$p' "$vfile"; } > "$t" && chmod 644 "$t" && mv -f "$t" "$target"
+  { printf '%s\n' "$commit"; if [ -f "$vfile" ]; then sed -n '2,$p' "$vfile"; fi; } > "$t" && chmod 644 "$t" && mv -f "$t" "$target"
 }
 if same "$src_root/foreman-mcp" "$live"; then
   write_version || { result failed 'could not record VERSION'; exit 1; }
