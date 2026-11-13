@@ -125,7 +125,7 @@ export function csvCell(v) {
   const safe = typeof v === 'string' && FORMULA.test(text) ? `'${text}` : text;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
-export function toCsv(rows, columns = COLUMN_KEYS, ctx = {}) {
+export function toCsv(rows, columns = COLUMN_KEYS) {
   const cols = COLUMNS.filter(c => columns.includes(c.key));
   const value = (r, c) => {
     const v = sortValue(r, c.key);
