@@ -234,6 +234,6 @@ test('valid: heartbeats keep to the 15 second limit (here 120 ms) even while oth
   assert.ok(times.length >= 4, 'several heartbeats arrived');
   const firstBeat = Date.parse(ofType(s, 'heartbeat')[0].data.at) - openedAt;
   assert.ok(firstBeat <= 300, `first heartbeat ${firstBeat} ms after opening is within the limit`);
-  // 60 ms of allowance for timer jitter under load (a 124 ms gap failed once in a full run); a missed beat would be 240 ms.
-  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 180, `gap ${times[i] - times[i - 1]} ms is within the limit`);
+  // 100 ms of allowance for timer jitter under a loaded CI run (gaps of 124 ms and 186 ms failed in full runs); a missed beat would be 240 ms or more.
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 220, `gap ${times[i] - times[i - 1]} ms is within the limit`);
 });
