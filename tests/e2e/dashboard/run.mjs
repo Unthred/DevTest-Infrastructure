@@ -55,7 +55,7 @@ try {
     config
   );
   await execute('restore Playwright package cache', restore);
-  for (const variant of ['valid', 'long', 'empty', 'malformed']) {
+  for (const variant of ['valid', 'long', 'empty', 'malformed', 'best', 'best-none', 'best-beaten']) {
     const root = path.join(fixturesRoot, variant, 'state');
     const site = path.join(fixturesRoot, variant, 'site');
     fs.mkdirSync(site, { recursive: true });

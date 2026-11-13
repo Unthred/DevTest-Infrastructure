@@ -17,5 +17,14 @@
     }
   },
   "long": { "issueCount": 51 },
-  "empty": { "issues": [] }
+  "empty": { "issues": [] },
+  "best": {
+    "issues": [],
+    "best": { "record": true }
+  },
+  "best-none": { "issues": [] },
+  "best-beaten": {
+    "issues": [],
+    "best": { "record": true, "current": { "reviewed": 20, "approved": 20, "merged": 120 } }
+  }
 }
