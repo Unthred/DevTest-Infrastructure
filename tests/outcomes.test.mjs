@@ -55,6 +55,8 @@ test('the mapping: every listed event gives its stated peg and result, and other
     [verdict(1, 'PASS', at), 'review', 'passed'], [verdict(1, 'CHANGES', at), 'review', 'bounced'],
     [job('cifix', 'created', at, {}), 'ci', 'bounced'],
     [rebase(1, at), 'rebase', 'passed'], [job('rebase', 'blocked', at, {}), 'rebase', 'bounced'],
+    [job('rebase', 'incomplete', at, {}), 'rebase', 'bounced'], [job('rebase', 'retry_exhausted', at, {}), 'rebase', 'bounced'],
+    [job('rebase', 'crash', at, {}), 'rebase', 'bounced'], [job('implement', 'stale_handover', at, {}), 'implement', 'bounced'],
     [{ kind: 'merge', at, pr: 1 }, 'merge', 'passed'],
   ];
   for (const [entry, peg, result] of cases) assert.deepEqual(stepOf(entry), { at, peg, result }, JSON.stringify(entry));
@@ -137,4 +139,11 @@ test('the builder reads no clock and calls no network: the same input gives the 
   const realNow = Date.now;
   Date.now = () => { throw new Error('the builder must not read the clock'); };
   try { assert.deepEqual(outcomes(input), outcomes(input)); } finally { Date.now = realNow; }
+});
+
+test('a rebase job that ends on incomplete, as Foreman records a blocked job, bounces the item into the failed bin', () => {
+  const entries = [verdict(70, 'CHANGES', END - 3 * HOUR), job('rebase', 'incomplete', END - HOUR, { pr: 70 })];
+  const item = only(outcomes({ entries }));
+  assert.deepEqual(item.steps.map(s => `${s.peg}:${s.result}`), ['review:bounced', 'rebase:bounced']);
+  assert.deepEqual([item.laps, item.bin], [1, 'failed']);
 });

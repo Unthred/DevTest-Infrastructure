@@ -78,7 +78,7 @@ test('hours 0, 169, text and other malformed values are refused with the contrac
 });
 
 test('hoursOf: default when absent, whole numbers 1 to 168 only', () => {
-  assert.deepEqual([{}, { hours: '1' }, { hours: '168' }, { hours: '0' }, { hours: '169' }, { hours: 'x' }].map(hoursOf), [24, 1, 168, null, null, null]);
+  assert.deepEqual([{}, { hours: '1' }, { hours: '24' }, { hours: '168' }, { hours: '0' }, { hours: '169' }, { hours: 'x' }].map(hoursOf), [24, 1, 24, 168, null, null, null]);
 });
 
 test('the model is listed in the meta model and is a pure read: no timer in the module, no file written', async t => {

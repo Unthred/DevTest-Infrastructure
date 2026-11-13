@@ -68,12 +68,12 @@ Issue #1307. `GET /api/v1/outcomes?hours=N` answers, for a time window, which is
 | Timeline entry | Step |
 | --- | --- |
 | implement or continue job, event `completed` | implement passed |
-| implement or continue job, event `blocked`, `crash`, `incomplete`, `retry_exhausted` or `auth_error` | implement bounced |
+| implement or continue job, event `blocked`, `crash`, `incomplete`, `retry_exhausted`, `auth_error` or `stale_handover` | implement bounced |
 | review verdict PASS | review passed |
 | review verdict CHANGES | review bounced |
 | cifix job, event `created` (one per job) | ci bounced |
 | rebase entry (a completed rebase) | rebase passed |
-| rebase job, event `blocked` | rebase bounced |
+| rebase job, event `blocked`, `crash`, `incomplete`, `retry_exhausted`, `auth_error` or `stale_handover` (Foreman records a blocked job under its cause) | rebase bounced |
 | merge entry | merge passed |
 
 Every other entry (a fix or review job, a started or created event, an unknown job kind) is not a step and is ignored. A completed rebase job is not counted again: its rebase entry is the step.

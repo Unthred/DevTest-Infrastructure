@@ -6,8 +6,9 @@ export const PEGS = ['implement', 'ci', 'review', 'rebase', 'merge'];
 export const BINS = ['merged', 'needs_you', 'failed', 'moving'];
 export const MAX_ITEMS = 200;
 
-// A job event that ends an implement or continue job badly. Other job events (created, started, usage_limit, ...) are not a result.
-const IMPLEMENT_BOUNCED = new Set(['blocked', 'crash', 'incomplete', 'retry_exhausted', 'auth_error']);
+// A job event that ends an implement, continue or rebase job badly. Foreman records a blocked job under its cause (core.mjs transition), so these are the
+// causes; 'blocked' is kept for the issue's wording. Other job events (created, started, usage_limit, ...) are not a result.
+const JOB_BOUNCED = new Set(['blocked', 'crash', 'incomplete', 'retry_exhausted', 'auth_error', 'stale_handover']);
 const IMPLEMENT_KINDS = new Set(['implement', 'continue']);
 const step = (entry, peg, result) => ({ at: entry.at, peg, result });
 
@@ -21,10 +22,10 @@ export function stepOf(entry) {
   if (entry.kind === 'rebase') return step(entry, 'rebase', 'passed');
   if (entry.kind !== 'job') return null;
   if (entry.jobKind === 'cifix') return entry.event === 'created' ? step(entry, 'ci', 'bounced') : null;
-  if (entry.jobKind === 'rebase') return entry.event === 'blocked' ? step(entry, 'rebase', 'bounced') : null;   // a completed rebase job is the rebase entry
+  if (entry.jobKind === 'rebase') return JOB_BOUNCED.has(entry.event) ? step(entry, 'rebase', 'bounced') : null;   // a completed rebase job is the rebase entry
   if (!IMPLEMENT_KINDS.has(entry.jobKind)) return null;
   if (entry.event === 'completed') return step(entry, 'implement', 'passed');
-  return IMPLEMENT_BOUNCED.has(entry.event) ? step(entry, 'implement', 'bounced') : null;
+  return JOB_BOUNCED.has(entry.event) ? step(entry, 'implement', 'bounced') : null;
 }
 
 // issue number -> pull request number, from every entry that names both and from the dashboard's own pull request rows.
