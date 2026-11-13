@@ -52,8 +52,8 @@ import { scanInboxNow } from './wake.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
 import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
-import { stuckSplitPass, ingestStuckSplit, approveStuckSplit, rejectStuckSplit } from './splitstuck.mjs';
-import { readStuckDraft, splitChildBody, splitAcceptedText } from './splitstuck-draft.mjs';
+import { stuckSplitPass, ingestStuckSplit, STUCK_ACTIONS, readStuckDraft } from './splitstuck.mjs';
+import { acceptSplit } from './splitaccept.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -1990,8 +1990,7 @@ export class Team {
       const { handInstallHold } = await import('./handinstall.mjs');
       return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
     }
-    if (action === 'approve_split') return approveStuckSplit(this, n);   // issue #1240
-    if (action === 'reject_split') return rejectStuckSplit(this, n);
+    if (STUCK_ACTIONS[action]) return STUCK_ACTIONS[action](this, n);   // issue #1240
     if (action === 'release_agent') return releaseAgentApproved(target, this.faults);   // issue #1179
     const id = this.jobByPrefix(target), rec = this.s.jobs[id], job = await this.jobs.get(id);
     if (!job) throw new SupervisorError(`job ${target} is unknown to the supervisor`);
@@ -2718,21 +2717,7 @@ export class Team {
     if (r && r.status === 'pending') { r.status = 'done'; r.verdict = entry.verdict; r.job = entry.job; r.doneAt = this.clock.now(); }
   }
   // "Accept split": file each proposed child once (a marker makes a repeat safe), queue it for the same agent, say so on the parent.
-  async acceptSplit(issue) {
-    const sp = this.s.splits[issue];
-    if (!sp || sp.status !== 'proposed') throw new SupervisorError(`issue #${issue} has no proposed split to accept${sp ? ` (state: ${sp.status})` : ''}`);
-    const q = this.s.unblock.queued[sp.agent] ||= [];
-    for (const [i, c] of sp.children.entries()) {
-      if (c.issue) continue;
-      const marker = `<!-- devtest-split-child v1 parent=${issue} idx=${i} -->`;
-      c.issue = await this.gh.findIssueByMarker(marker) || await this.gh.createIssue(c.title, splitChildBody(marker, c, sp, i, issue));
-      if (!q.includes(c.issue)) q.push(c.issue);
-      this.save();
-    }
-    sp.status = 'accepted'; sp.acceptedAt = this.clock.now(); this.save();
-    await this.postNotice(issue, `split-accepted`, splitAcceptedText(sp));
-    return sp.children.map(c => c.issue);
-  }
+  async acceptSplit(issue) { return acceptSplit(this, issue); }   // moved to splitaccept.mjs (issue #1240) to keep this class from growing
   // Issue #521: an "implemented" mark whose pull request is gone. implementable() skips a marked issue for ever, so when its PR was
   // closed unmerged (or never opened) the issue would sit first in the queue and never start, with nothing saying why. The mark is NOT
   // cleared automatically: a closed PR is often a deliberate rejection or a re-scope, and an automatic restart could loop on it.
@@ -3511,8 +3496,7 @@ export class Team {
         return why('a new head was pushed but GitHub did not report it mergeable');
       }
       if (p.kind === 'inbox_result') { try { return fs.readFileSync(path.join(this.dir, 'inbox', String(p.ticket || 'none'), 'inbox-result.txt'), 'utf8').trim().length > 0; } catch { return false; } }
-      if (p.kind === 'split_drafted') return !readSplitDraft(this.root, p.ticket).error;
-      if (p.kind === 'stuck_split_drafted') return !readStuckDraft(this.root, p.ticket).error;
+      if (p.kind === 'split_drafted' || p.kind === 'stuck_split_drafted') return !(p.kind === 'split_drafted' ? readSplitDraft : readStuckDraft)(this.root, p.ticket).error;
       if (p.kind === 'description_edited') return descriptionEdited(this, p, job);
       if (p.kind === 'pr_opened') {
         const open = await this.gh.listPulls();

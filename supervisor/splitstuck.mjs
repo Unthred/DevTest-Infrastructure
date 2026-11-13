@@ -155,3 +155,7 @@ async function closeWhenMerged(team, n, rec, pr, report) {
   team.save();
   (report.notified ||= []).push({ pr: n, splitItemsMerged: rec.filed });
 }
+
+// The homeowner's decision-card actions, dispatched by Team.applyInboxAction.
+export const STUCK_ACTIONS = { approve_split: approveStuckSplit, reject_split: rejectStuckSplit };
+export { readStuckDraft };
