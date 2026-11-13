@@ -126,6 +126,7 @@ export const STATIC = { '/static/style.css': ['style.css', 'text/css; charset=ut
   '/static/inbox-filter.mjs': ['inbox-filter.mjs', 'text/javascript; charset=utf-8'],
   '/static/approve-all.mjs': ['approve-all.mjs', 'text/javascript; charset=utf-8'],
   '/static/decision-ui.mjs': ['decision-ui.mjs', 'text/javascript; charset=utf-8'],
+  '/static/close-reason-ui.mjs': ['close-reason-ui.mjs', 'text/javascript; charset=utf-8'],
   '/static/watch.mjs': ['watch.mjs', 'text/javascript; charset=utf-8'], '/static/inbox-ui.mjs': ['inbox-ui.mjs', 'text/javascript; charset=utf-8'], '/static/watch.js': ['watch.js', 'text/javascript; charset=utf-8'], '/static/processes.js': ['processes.js', 'text/javascript; charset=utf-8'] };
 Object.assign(STATIC, JOBS_STATIC, INBOX_VIEWS_STATIC);
 const staticFile = name => fs.readFileSync(new URL(`./dashui/${name}`, import.meta.url));
@@ -181,10 +182,10 @@ export function healthData({ root, config, now, recorderDir }) {
     hostPressure: hostPressureView(readTeamState(root), checked, now),   // issue #1151
     recorder: recorderDir ? readRecorder(recorderDir, now - 7 * DAY_MS, now) : { status: 'missing', note: 'No recorder log folder is configured.', files: 0, samples: 0, hourly: [], days: [] } };
 }
-export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid, sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
-  // Issues #448, #467: one prepared copy per view serves every request and tab; an old copy is served (marked) while one shared background
-  // rebuild runs; a first build is shared by all requests that arrive meanwhile. ttl 0 (tests) rebuilds on every request, still shared.
-  // `statfs` is a test seam reaching only the in-process build; the worker build cannot receive a function, so refuse the combination (issue #841).
+export function handler({ root, config, host, port, now = () => Date.now(), supervised = underSupervisedJob, peerPid = defaultPeerPid,
+  sampler = null, probe = probeNow, registry = defaultRegistry, viewTtlMs = 0, viewStaleMs = VIEW_STALE_MS, wake = defaultWake, github = null,
+  evidenceRoot = DEFAULT_EVIDENCE_ROOT, offload = false, recorderDir = process.env.DEVTEST_RECORDER_DIR || DEFAULT_RECORDER_DIR, statfs = undefined }) {
+  // Issues #448, #467, #841: one prepared copy serves every request (an old one is marked while one shared rebuild runs); `statfs` is a test seam, not for offload.
   if (offload && statfs) throw new Error('handler: the statfs option is not supported with offload: true');
   const worker = offload ? createWorkerBuild() : null;   // issue #467: the real server builds off the event loop
   const store = createViewStore({ build: worker ? worker.build : o => currentView(statfs ? { ...o, statfs } : o), ttlMs: viewTtlMs, staleMs: viewStaleMs, clock: () => Date.now(),
@@ -311,7 +312,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
     return send(303, 'text/plain; charset=utf-8', 'requested', { location: '/' });
   };
   const stepDone = stepDoneRoute({ root, allowedHost, originAllowed, refuseHost, refuseOrigin, tooLarge, badProof, supervised, peerPid, now, wake, source, store });   // issue #1155
-  return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source, store, originAllowed, wake }, async (req, res) => {
+  return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source, store, originAllowed, wake, github }, async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
     const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store, probe, registry, wake });

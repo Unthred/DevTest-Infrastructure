@@ -97,7 +97,7 @@ function withoutBody(res) {
 // modelsDir, routesDir and schemasDir are directory URLs. headers are the dashboard's security headers. getView resolves the prepared view.
 // root is the state root, getConfig returns the current validated configuration and guard holds the dashboard's write checks.
 export function createApiRouter({
-  modelsDir, routesDir, schemasDir, headers, allowedHost, now, tickAt, staleAfterMs, coreVersion, getView, root, getConfig, guard,
+  modelsDir, routesDir, schemasDir, headers, allowedHost, now, tickAt, staleAfterMs, coreVersion, getView, root, getConfig, guard, getGithub = () => null,
 }) {
   const schemas = loadSchemas(schemasDir);
   const ready = Promise.all([
@@ -129,7 +129,7 @@ export function createApiRouter({
     const readMethod = req.method === 'GET' || req.method === 'HEAD';
     const hit = firstMatch(routes, path, req.method === 'HEAD' ? 'GET' : req.method);
     if (hit) {
-      const context = { ...baseContext(url, hit.params, models, routes), headers, reply, fail, guard };
+      const context = { ...baseContext(url, hit.params, models, routes), headers, reply, fail, guard, github: getGithub };
       return hit.item.handle(req, req.method === 'HEAD' ? withoutBody(res) : res, context);
     }
     if (!readMethod) return fail(req, res, 405, 'method_not_allowed', 'The contract is read-only: use GET or HEAD.', { allow: 'GET, HEAD' });

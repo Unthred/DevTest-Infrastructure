@@ -8,6 +8,9 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { handler } from '../supervisor/dashserver.mjs';
+import { ensureStartedAt } from '../supervisor/closedreason-store.mjs';
+import { decisionCard } from '../supervisor/decisiontable.mjs';
+import { decisionHtml } from '../supervisor/decisioncard-ui.mjs';
 import { ATTENTIONS, KINDS, TABLE, TIERS, classify, findDeadEnds } from '../supervisor/api/attention.mjs';
 
 const NOW = Date.UTC(2026, 10, 12, 13, 0, 0);
@@ -34,7 +37,7 @@ const get = options => new Promise((resolve, reject) => {
 });
 
 // The attention list the dashboard builds from this state, as the page shows it: Needs you plus the warnings.
-async function attentionFrom(t, { cache, state, jobs = [] }) {
+async function attentionFrom(t, { cache, state, jobs = [], started = null }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'attn-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   removeLater(root);
@@ -42,6 +45,7 @@ async function attentionFrom(t, { cache, state, jobs = [] }) {
   for (const j of jobs) fs.writeFileSync(path.join(root, 'jobs', `${j.id}.json`), JSON.stringify(j));
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify(cache));
   if (state) fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify(state));
+  if (started) ensureStartedAt(root, started);
   const server = http.createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
@@ -194,4 +198,32 @@ test('the module imports nothing', () => {
   const source = fs.readFileSync(new URL('../supervisor/api/attention.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /^\s*import\s/m);
   assert.doesNotMatch(source, /Date\.now|new Date|process\.|require\(|fetch\(/);
+});
+
+// Issue #1306: closed-noreason is homeowner attention with the work_item.close_reason control, in the contract table and in the decision table.
+test('real data: the closed-noreason item for issue 895 is homeowner, closed_without_reason, with the close_reason control for every listed issue', async t => {
+  const issues = [{ number: 895, title: 'Explain everything', state: 'CLOSED', stateReason: 'NOT_PLANNED', closedAt: '2026-11-09T20:14:00Z', labels: [] },
+    { number: 896, title: 'Second', state: 'CLOSED', stateReason: 'DUPLICATE', closedAt: '2026-11-09T20:15:00Z', labels: [] }];
+  const item = byId(await attentionFrom(t, { cache: cacheOf([], issues), started: Date.UTC(2026, 10, 9, 19, 0, 0) }), 'closed-noreason');
+  assert.deepEqual(item.issues, [895, 896]);
+  assert.equal(item.since, Date.parse('2026-11-09T20:14:00Z'));
+  const known = new Set(['work_item.close_reason']);
+  const c = classify(item, known);
+  assert.deepEqual([c.kind, c.attention, c.reason_code], ['held_item', 'homeowner', 'closed_without_reason']);
+  assert.deepEqual(c.actions.map(a => [a.command, a.input, a.enabled, a.tier]), [['work_item.close_reason', { issues: '895,896' }, true, 'direct']]);
+  assert.deepEqual(findDeadEnds([c]), []);
+  assert.equal(classify(item, new Set()).actions[0].enabled, false);
+});
+
+test('closed-noreason-unreadable is a fault, and the decision table has an entry for both ids so neither is an error card', () => {
+  assert.deepEqual([classify({ id: 'closed-noreason-unreadable' }, []).attention, classify({ id: 'closed-noreason-unreadable' }, []).reason_code], ['fault', 'close_reason_record_unreadable']);
+  for (const id of ['closed-noreason', 'closed-noreason-unreadable']) assert.equal(decisionCard({ id, text: 'x' }).type, id);
+});
+
+test('the card of closed-noreason has a text box and a Record reason button naming every issue; the unreadable one has none', () => {
+  const html = decisionHtml({ id: 'closed-noreason', issues: [895, 896], card: decisionCard({ id: 'closed-noreason', text: 'x' }) });
+  assert.match(html, /<form method="post" action="\/api\/v1\/commands\/work_item\.close_reason" class="close-reason-form" data-issues="895,896">/);
+  assert.match(html, /<textarea name="reason"/);
+  assert.match(html, />Record reason<\/button>/);
+  assert.doesNotMatch(decisionHtml({ id: 'closed-noreason-unreadable', card: decisionCard({ id: 'closed-noreason-unreadable', text: 'x' }) }), /close-reason-form/);
 });

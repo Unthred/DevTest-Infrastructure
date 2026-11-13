@@ -16,6 +16,13 @@ const status = (pending, controls) => {
   return `<div class="sub decision-status" role="status" aria-live="polite" data-state="${state}"${text ? '' : ' hidden'}>${esc(text)}</div>`;
 };
 
+// Issue #1306: the control of the closed-noreason item is a text box and a button, not a card control. It sends the named command
+// work_item.close_reason for every issue the item lists (dashui/close-reason-ui.mjs); the page's access proof is added by withProof.
+const closeReasonForm = item => `<form method="post" action="/api/v1/commands/work_item.close_reason" class="close-reason-form" data-issues="${esc((item.issues || []).join(','))}">`
+  + '<label class="sub">Why were these dropped? <textarea name="reason" rows="2" maxlength="500"></textarea></label> '
+  + '<button class="btn close-reason-button" type="submit">Record reason</button>'
+  + '<div class="sub close-reason-status" role="status" aria-live="polite" hidden></div></form>';
+
 // item: a Needs you item with its `card`; `decision` is its by-hand next step text; `anchor` is the id of the element the card sits in.
 export function decisionHtml(item, anchor = '') {
   const card = item.card;
@@ -23,9 +30,10 @@ export function decisionHtml(item, anchor = '') {
   if (card.error) return `<div class="decision-card decision-error" role="alert"><div class="sub">Error: ${esc(card.error)}</div></div>`;
   const pending = card.pending || [];
   const open = card.controls.filter(c => !pending.includes(c.action));
+  const form = card.type === 'closed-noreason' && item.issues?.length ? closeReasonForm(item) : '';
   const acts = open.length ? `<div class="acts">${open.map(c => control(item.id, c, anchor)).join('')}</div>` : '';
   return `<div class="decision-card" data-decision="${esc(card.type)}"><div class="sub decision-reason">Why: ${esc(card.reason)}</div>`
     + `<div class="sub decision-clears">${esc(card.clears[0].toUpperCase() + card.clears.slice(1))}.</div>`
     + (item.decision ? `<div class="sub">Decision: ${esc(item.decision)}</div>` : '')
-    + acts + status(pending, card.controls) + (card.later ? `<div class="sub decision-later">${esc(card.later)}</div>` : '') + '</div>';
+    + form + acts + status(pending, card.controls) + (card.later ? `<div class="sub decision-later">${esc(card.later)}</div>` : '') + '</div>';
 }
