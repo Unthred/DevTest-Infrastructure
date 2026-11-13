@@ -31,10 +31,23 @@ export function handle(req, res, context) {
   context.guard.invalidateView();
   context.fail(req, res, 202, 'shouted', JSON.stringify(Object.keys(context.guard)));
 }`,
+  'guardcheck.mjs': `export const name = 'guardcheck'; export const method = 'POST'; export const path = 'guardcheck';
+import fs from 'node:fs';
+import nodePath from 'node:path';
+export function handle(req, res, context) {
+  const g = context.guard;
+  const bad = g.proofValid('nope');   // creates the token file on first use
+  const given = fs.readFileSync(nodePath.join(context.root, 'dashboard', 'write-token'), 'utf8').trim();
+  const first = g.reserveCooldown('k', 600000);
+  const blocked = g.reserveCooldown('k', 600000);
+  g.releaseCooldown('k');
+  const again = g.reserveCooldown('k', 600000);
+  context.fail(req, res, 202, 'checked', JSON.stringify({ first: first.ok, blocked: blocked.ok, again: again.ok, good: g.proofValid(given), bad }));
+}`,
   'broken.mjs': `export const name = 'broken'; export const method = 'GET'; export const path = 'broken';`,
 };
 
-async function serve(t, { sample = true } = {}) {
+async function serve(t, { sample = true, now = () => 10 * 60000 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'api1251-'));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   removeLater(root);
@@ -52,7 +65,7 @@ async function serve(t, { sample = true } = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
   const port = server.address().port;
-  try { server.on('request', handler({ wake: () => {}, root, config, host: '127.0.0.1', port, now: () => 10 * 60000 })); } finally { if (saved === undefined) delete process.env.DEVTEST_API_DIR; else process.env.DEVTEST_API_DIR = saved; }
+  try { server.on('request', handler({ wake: () => {}, root, config, host: '127.0.0.1', port, now })); } finally { if (saved === undefined) delete process.env.DEVTEST_API_DIR; else process.env.DEVTEST_API_DIR = saved; }
   const request = (p, method = 'GET', headers = {}) => new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => {
       let body = '';
@@ -122,6 +135,14 @@ test('a POST route module is called for POST and the guard holds the six checks'
   const r = await get('/api/v1/shout', 'POST');
   assert.equal(r.status, 202);
   assert.deepEqual(JSON.parse(JSON.parse(r.body).error.text), ['originAllowed', 'proofValid', 'reserveCooldown', 'releaseCooldown', 'invalidateView', 'wake']);
+});
+
+test('guard: a released cooldown can be reserved again with an advancing clock; proofValid accepts the token and rejects a wrong one', async t => {
+  let clock = 10 * 60000;
+  const get = await serve(t, { now: () => (clock += 1000) });
+  const r = await get('/api/v1/guardcheck', 'POST', { origin: `http://127.0.0.1:${get.port}` });
+  assert.equal(r.status, 202);
+  assert.deepEqual(JSON.parse(JSON.parse(r.body).error.text), { first: true, blocked: false, again: true, good: true, bad: false });
 });
 
 test('boundary: HEAD on a GET route has the same status and headers and no body', async t => {

@@ -19,12 +19,23 @@ const shortVersion = root => {
 };
 
 // Issue #1251: the dashboard's own write checks, handed to route modules so none is copied. Each wraps the function the dashboard uses.
+// The cooldown release only works with the timestamp that reserved the slot, so the guard remembers it per name.
 function makeGuard({ root, now, source, store, originAllowed, wake }) {
+  const reservedAt = new Map();
   return {
     originAllowed: req => originAllowed(req),
     proofValid: value => proofValid(root, value),
-    reserveCooldown: (name, ms) => reserveCooldown(root, name, now(), ms),
-    releaseCooldown: name => releaseCooldown(root, name, now()),
+    reserveCooldown: (name, ms) => {
+      const at = now();
+      const result = reserveCooldown(root, name, at, ms);
+      if (result.ok) reservedAt.set(name, at);
+      return result;
+    },
+    releaseCooldown: name => {
+      if (!reservedAt.has(name)) return;
+      releaseCooldown(root, name, reservedAt.get(name));
+      reservedAt.delete(name);
+    },
     invalidateView: () => store.invalidate(),
     wake: reason => wake(root, reason, source()),
   };
