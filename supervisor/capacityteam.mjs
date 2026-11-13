@@ -15,12 +15,11 @@ export function candidateRows(names, modes, mayTake) {
 }
 
 // Lower is preferred when several agents could fill the same slot (not reviews, which the dispatcher ranks itself). An implement ranks after
-// repairs; the owner before an agent taking over; an out owner last. Among implements the agent with the most remaining capacity relative to
-// its need comes first: the capacity term stays under 1, so the order above it still holds.
-export function workRank(act, ownerOut, spare) {
+// repairs; the owner before an agent taking over; an out owner last. Which agent runs the same job within one of those tiers is not decided here
+// but by agentchoice.mjs from spare allowance and the job's expected cost (issue #1166).
+export function workRank(act, ownerOut) {
   const implement = act.type === 'implement';
-  const capacityTerm = implement ? 0.5 * (1 - Math.tanh(spare)) : 0;
-  return (implement ? 10 : 0) + (act.reassignedFrom ? 1 : 0) + (implement && !act.reassignedFrom && ownerOut ? 20 : 0) + capacityTerm;
+  return (implement ? 10 : 0) + (act.reassignedFrom ? 1 : 0) + (implement && !act.reassignedFrom && ownerOut ? 20 : 0);
 }
 
 // The model context from the capacity: the cheaper model is kept on remaining capacity when it is known, else the percentage decides as before.
