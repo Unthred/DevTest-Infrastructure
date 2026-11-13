@@ -11,6 +11,7 @@
 //
 // Without a trusted capacity nothing here guesses: the caller falls back to the fixed high-water share and says so.
 
+import { isParked } from './parkhold.mjs';
 import { UNITS_NOTE, tokensText, configuredWarning, dailyCheck, shortWindowText } from './capacitycheck.mjs';
 export { UNITS_NOTE };
 
@@ -87,10 +88,12 @@ export function typicalTokens(jobs, kind) {
   return median(done.slice(0, RECENT_JOBS_PER_KIND).map(tokensOf));
 }
 
-// Tokens the open pull requests are projected to need before the reset: one review and one fix round each.
+// Tokens the agent's own open pull requests are projected to need before the reset: one fix round each. The review of an agent's own pull
+// request is done by another agent (D-024), so it is not charged here; the reviews this agent owes on others' pull requests are reserved
+// by the admission check (budget.mjs admits, via pendingReviews), not by this figure.
 export function projectedNeed({ jobs, openPrs }) {
   const count = Number.isSafeInteger(openPrs) && openPrs > 0 ? openPrs : 0;
-  return count * ((typicalTokens(jobs, 'review') || 0) + (typicalTokens(jobs, 'fix') || 0));
+  return count * (typicalTokens(jobs, 'fix') || 0);
 }
 
 // One agent's real-capacity view. `basis` is 'absolute' when a capacity is known, else 'percent': the caller then applies the fixed
@@ -115,7 +118,7 @@ export function summarise(input) {
   if (capacity === null) return { ...base, reason: `${learned.note}; the fixed share rule applies` };
   const remaining = capacity * (1 - usage.used), need = projectedNeed({ jobs, openPrs });
   const reserve = need + capacity * options.reserve_margin;
-  const result = { ...base, basis: 'absolute', remaining, need, reserve, belowReserve: remaining <= reserve, reason: note };
+  const result = { ...base, basis: 'absolute', remaining, need, reserve, openPrs: Number.isSafeInteger(openPrs) && openPrs > 0 ? openPrs : 0, belowReserve: remaining <= reserve, reason: note };
   return { ...result, text: describe(result) };
 }
 
@@ -133,7 +136,7 @@ export function headroomScores(entries) {
 export function describe(s) {
   if (!s || s.basis !== 'absolute') return s?.reason || 'capacity unknown';
   const main = `${Math.round(s.used * 100)}% used of about ${tokensText(s.capacity)} a week (${s.reason})`;
-  const parts = [`${main}; ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)}`,
+  const parts = [`${main}; ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)} for ${s.openPrs ?? 0} open pull requests of this agent`,
     shortWindowText(s.shortWindow), ...(s.warnings || []).map(w => `WARNING: ${w}`), UNITS_NOTE];
   return parts.filter(Boolean).join('; ');
 }
@@ -149,10 +152,10 @@ export function capacityView(s) {
 }
 
 // One agent's capacity summary for a tick: the weekly use of its live window (null when unknown), its job history and the open pull requests that
-// `owns` accepts (each is projected to need a review and a fix round before the reset). `settings` carries the optional starting capacity and reserve margin.
+// `owns` names the author agent of (each is projected to need one fix round); only those of `name` that are neither draft nor parked count. `settings` carries the optional starting capacity and reserve margin.
 export function capacityFor({ name, used, jobs, settings, prs, owns, resetsAt = null, shortWindow = null }) {
   const options = { ...ALLOWANCE_DEFAULTS, reserve_margin: settings.reserve_margin ?? ALLOWANCE_DEFAULTS.reserve_margin };
-  const openPrs = (prs || []).filter(owns).length;
+  const openPrs = (prs || []).filter(pr => owns(pr) === name && !pr.isDraft && !isParked(pr)).length;
   const configured = settings.starting_capacity?.[name] ?? null, override = settings.capacity?.[name] ?? null;
   return summarise({ used, jobs, openPrs, configured, override, resetsAt, shortWindow, options });
 }

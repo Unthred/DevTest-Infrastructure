@@ -3557,8 +3557,9 @@ export async function tickLockWait(root, { timeoutMs = 300000, pollMs = 500, say
   const deadline = now() + timeoutMs;
   let release = tickLock(root), told = false;
   while (!release) {
-    if (now() >= deadline) return null;
+    // Say it before the deadline check: a slow first lock attempt on a loaded machine must still tell the person why nothing happened.
     if (!told) { told = true; say(`a team tick is running; waiting up to ${Math.max(1, Math.round(timeoutMs / 1000))}s for it to finish`); }
+    if (now() >= deadline) return null;
     await sleep(pollMs);
     release = tickLock(root);
   }

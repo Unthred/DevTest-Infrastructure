@@ -1,7 +1,7 @@
 // Issue #1116: allowance in real capacity. Pure functions over plain data, plus the budget rule and the planner invariant that call them.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkUsage, learnCapacity, summarise, headroomScores, capacitySamples, projectedNeed, ALLOWANCE_DEFAULTS } from '../supervisor/capacity.mjs';
+import { checkUsage, learnCapacity, summarise, headroomScores, capacitySamples, projectedNeed, capacityFor, ALLOWANCE_DEFAULTS } from '../supervisor/capacity.mjs';
 import { assessAgent, admits, validateBudgetConfig, DEFAULT_BUDGET, HOUR, REVIEWS_ONLY_TYPES } from '../supervisor/budget.mjs';
 
 const WEEK = 7 * 24 * HOUR;
@@ -83,12 +83,12 @@ test('ranking falls back to the old spare share when any agent has no capacity',
 
 test('valid: the reserve is the projected need of the open PRs plus a margin, and switches at the absolute amount', () => {
   const jobs = [job('review', 40000, 0.1, T0, T0 + WEEK), job('fix', 60000, 0.12, T0 + HOUR, T0 + WEEK)];
-  assert.equal(projectedNeed({ jobs, openPrs: 3 }), 300000, 'three PRs x (40k review + 60k fix)');
+  assert.equal(projectedNeed({ jobs, openPrs: 3 }), 180000, 'three PRs x one 60k fix round, no review');
   const at = used => summarise({ used, jobs, openPrs: 3, configured: 1e6 });
-  assert.equal(at(0.5).reserve, 350000, '300k need + 5% margin of 1M');
-  assert.equal(at(0.64).belowReserve, false, '360k left is above the 350k reserve');
-  assert.equal(at(0.65).belowReserve, true, 'exactly at the reserve counts as at it');
-  assert.equal(at(0.7).belowReserve, true);
+  assert.equal(at(0.5).reserve, 230000, '180k need + 5% margin of 1M');
+  assert.equal(at(0.76).belowReserve, false, '240k left is above the 230k reserve');
+  assert.equal(at(0.78).belowReserve, true, '220k left is below the 230k reserve');
+  assert.equal(at(0.7).belowReserve, false, '300k left');
 });
 
 test('boundary: zero open PRs leaves only the margin as the reserve', () => {
@@ -153,4 +153,40 @@ test('takeover goes to the agent with the most remaining capacity relative to ne
   assert.equal(betterTaker('codex', rows), false);
   assert.equal(betterTaker('claude', [rows[0], row('codex', 0.5, 10e6, false)]), false, 'an ineligible rival does not hold the work back');
   assert.equal(betterTaker('claude', [rows[0], { ...rows[1], summary: summarise({ used: 0.5, jobs: [], openPrs: 0 }) }]), false, 'a missing capacity falls back to the old behaviour');
+});
+
+// Issue #1331: the reserve counts only the summarised agent's own open, unparked, non-draft pull requests.
+const ownerOf = pr => (/^(claude|codex)\//.exec(pr.headRefName || '') || [])[1] || null;
+const reserveJobs = [job('review', 40000, 0.1, T0, T0 + WEEK), job('fix', 60000, 0.12, T0 + HOUR, T0 + WEEK)];
+const forAgent = (name, prs) => capacityFor({ name, used: 0.5, jobs: reserveJobs, settings: { starting_capacity: { claude: 1e6, codex: 1e6 } }, prs, owns: ownerOf });
+const p = (n, branch, extra = {}) => ({ number: n, headRefName: branch, isDraft: false, labels: [], ...extra });
+
+test('valid: two own unparked pull requests and three of the other agent give a need of two fix rounds', () => {
+  const prs = [p(1, 'claude/issue-1-a'), p(2, 'claude/issue-2-a'), p(3, 'codex/issue-3-a'), p(4, 'codex/issue-4-a'), p(5, 'codex/issue-5-a')];
+  assert.equal(forAgent('claude', prs).need, 120000);
+  assert.equal(forAgent('codex', prs).need, 180000);
+  assert.match(forAgent('claude', prs).text, /reserve 170k tokens for 2 open pull requests of this agent/);
+});
+
+test('boundary: zero own pull requests leave only the margin; a parked and a draft own pull request count zero', () => {
+  const others = [p(3, 'codex/issue-3-a')];
+  assert.equal(forAgent('claude', others).need, 0);
+  assert.equal(forAgent('claude', others).reserve, 50000);
+  const held = [p(1, 'claude/issue-1-a', { labels: ['parked'] }), p(2, 'claude/issue-2-a', { isDraft: true })];
+  assert.equal(forAgent('claude', held).need, 0);
+  assert.match(forAgent('claude', held).text, /for 0 open pull requests/);
+});
+
+test('boundary: remaining exactly equal to the reserve still holds', () => {
+  const s = capacityFor({ name: 'claude', used: 0.75, jobs: [], settings: { starting_capacity: { claude: 1e6 }, reserve_margin: 0.25 }, prs: [], owns: ownerOf });
+  assert.equal(s.remaining, s.reserve);
+  assert.equal(s.belowReserve, true);
+});
+
+test('invalid: a branch with no agent prefix counts for nobody; no labels field is unparked; a missing fix cost counts zero', () => {
+  assert.equal(forAgent('claude', [p(1, 'feature/x'), p(2, 'main')]).need, 0);
+  const noLabels = { number: 9, headRefName: 'claude/issue-9-a' };
+  assert.equal(forAgent('claude', [noLabels]).need, 60000);
+  const noFix = capacityFor({ name: 'claude', used: 0.5, jobs: [job('review', 40000, 0.1, T0, T0 + WEEK)], settings: { starting_capacity: { claude: 1e6 } }, prs: [noLabels], owns: ownerOf });
+  assert.equal(noFix.need, 0);
 });
