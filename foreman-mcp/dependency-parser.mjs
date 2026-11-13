@@ -1,5 +1,5 @@
 const LINE = /^[ \t]*(?:[-*][ \t]+)?\**depends[ \t]+on\**[ \t]*:\**[ \t]*(.*?)[ \t]*$/i;
-const DECLARATION = /\bdepends[ \t]+on\b[ \t]*:/i;
+const DECLARATION = /\bdepends[ \t]+on\**[ \t]*:/i;
 const LIST = /^#\d+(?:[ \t]*,[ \t]*#\d+)*$/;
 export const DEPENDS_ON_EXAMPLE = 'Depends on: #12, #15';
 
