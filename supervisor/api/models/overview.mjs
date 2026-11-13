@@ -86,11 +86,18 @@ export function attentionItem(view, item, c) {
   };
 }
 
-function attentionOf(view) {
+// The names of the commands the loaded route modules export, the same source the meta model reads. A commands export that is not a list adds none.
+function knownCommandsOf(routes) {
+  const names = list(routes).flatMap(r => list(r?.commands).map(c => c?.name));
+  return names.filter(n => typeof n === 'string' && n);
+}
+
+function attentionOf(view, routes) {
+  const known = knownCommandsOf(routes);
   const needsYou = [];
   const faults = [];
   for (const item of list(view.panels?.needsYou)) {
-    const entry = attentionItem(view, item, classify(item, []));
+    const entry = attentionItem(view, item, classify(item, known));
     (entry.condition.attention === 'homeowner' ? needsYou : faults).push(entry);
   }
   return { needs_you: needsYou, faults };
@@ -152,7 +159,7 @@ export function build(view, context) {
   return {
     verdict: buildAppbar(view, context).system,
     stalls: stallsOf(view, context.now),
-    ...attentionOf(view),
+    ...attentionOf(view, context.routes),
     slots: slotsOf(view),
     planned: heldOf(view).map(h => plannedAction(view, h)),
     pipeline: pipelineOf(view),
