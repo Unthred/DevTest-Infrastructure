@@ -17,11 +17,14 @@ export const levelOf = (used, limits = {}) => {
 // One window of the reading as { state: 'known', used, level, resetsAt } or { state: 'unknown', reason }. An expired window (its reset
 // time has passed) is unknown: the old figure no longer describes anything.
 function windowFigure(reading, kinds, label, limits) {
-  if (!reading) return { state: 'unknown', reason: 'no allowance reading yet' };
+  if (!reading) return { state: 'unknown', code: 'no_reading', reason: 'no allowance reading yet' };
   const all = reading.limits.filter(l => kinds.includes(l.kind));
-  if (!all.length) return { state: 'unknown', reason: `${label} limit not reported by the provider` };
+  if (!all.length) return { state: 'unknown', code: 'not_reported', reason: `${label} limit not reported by the provider` };
   const live = all.filter(l => !l.expired).sort((a, b) => b.used - a.used);
-  if (!live.length) return { state: 'unknown', reason: `${label} window has reset; no new reading yet` };
+  if (!live.length) {
+    const resetsAt = Math.max(...all.map(l => l.resetsAt ?? 0)) || null;
+    return { state: 'unknown', code: 'window_expired_no_reading', reason: `${label} window has reset; no new reading yet`, resetsAt };
+  }
   return { state: 'known', used: live[0].used, level: levelOf(live[0].used, limits), resetsAt: live[0].resetsAt };
 }
 

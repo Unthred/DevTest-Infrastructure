@@ -56,7 +56,10 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
   const group = name => body.data.states.find(s => s.state === name)?.group;
   assert.equal(group('waiting_for_approval'), 'waiting');   // the contract name for the Inbox state the store calls pending
   assert.equal(group('stalled'), 'failed');
-  assert.deepEqual(body.data.models, [{ name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' }]);
+  assert.deepEqual(body.data.models, [
+    { name: 'appbar', path: '/api/v1/appbar', schema: 'appbar.schema.json' },   // issue #1253
+    { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
+  ]);
   assert.deepEqual([body.data.commands, body.data.events], [[], []]);
 });
 
