@@ -141,6 +141,9 @@ function swapCard(live, fresh, doc, hooks, prevRows) {
   if (prevRows) retainRows(nodes, rowMap(live, li => li), prevRows);
   for (const c of [...live.children]) if (!c.matches(KEEP)) c.remove();
   for (const c of nodes) live.append(c);
+  // A card whose own script draws its body from the server's data (the Work tab's Table and Board, issue #1224) draws it now, so the
+  // restore below finds the drawn body and not an empty one.
+  live.dispatchEvent(new CustomEvent('card-rebuilt', { bubbles: true }));
   restore(live, snap);
   hooks.afterSwap?.(live);
 }
