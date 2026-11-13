@@ -68,9 +68,17 @@ test('controls whose command a route module exports are enabled, the rest stay n
   assert.deepEqual(refusalOf(controls['work_item.accept_split']), NOT_BUILT);
 });
 
-test('the real routes folder exports only the Inbox decisions, so all three controls are disabled', async t => {
+test('the real routes folder: a control is enabled exactly when an installed route module exports its command', async t => {
+  const installed = new Set();
+  for (const f of fs.readdirSync(new URL('routes/', API)).filter(x => x.endsWith('.mjs'))) {
+    const mod = await import(new URL(`routes/${f}`, API));
+    for (const c of Array.isArray(mod.commands) ? mod.commands : []) installed.add(c.name);
+  }
   const controls = await overview(t, new URL('routes/', API));
-  for (const c of CONTROLS) assert.deepEqual(refusalOf(controls[c]), NOT_BUILT);
+  for (const c of CONTROLS) {
+    if (installed.has(c)) assert.equal(controls[c].enabled, true);
+    else assert.deepEqual(refusalOf(controls[c]), NOT_BUILT);
+  }
 });
 
 test('a commands export that is not a list leaves every control disabled', async t => {
