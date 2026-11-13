@@ -111,6 +111,15 @@ test('every id the builder makes in these fixtures is classified (none is unclas
   for (const item of items) assert.notEqual(classify(item, ALL).reason_code, 'unclassified', item.id);
 });
 
+test('real data: an unexplained hold from the planner state is an idle agent fault', async t => {
+  const state = { jobs: {}, unexplainedHolds: { k: { type: 'implement', agent: 'claude', ref: 1185, kind: 'unexplained', since: NOW - 3600000 } } };
+  const items = await attentionFrom(t, { cache: cacheOf([]), state });
+  const item = items.find(i => i.id.startsWith('unexplained-hold-'));
+  assert.ok(item, 'the view builder makes the item');
+  const c = classify(item, ALL);
+  assert.deepEqual([c.kind, c.attention, c.reason_code], ['idle_agent', 'fault', 'unexplained_hold']);
+});
+
 test('valid: a breaker halt is a fault with breaker.resume (person_only)', () => {
   const c = classify({ id: 'breaker-halt', text: 'halted', severity: 'action' }, ALL);
   assert.deepEqual([c.kind, c.attention, c.reason_code], ['breaker', 'fault', 'breaker_halt']);

@@ -28,7 +28,8 @@ export const TABLE = Object.freeze([
   row(/^breaker-error$/, 'breaker-error', 'breaker', 'fault', 'breaker_failed'),
   row(/^foreman-idle$/, 'foreman-idle', 'idle_agent', 'fault', 'foreman_idle'),
   row(/^idle-[\w-]+$/, 'idle-claude', 'idle_agent', 'fault', 'agent_idle'),
-  row(/^stalled-hold-/, 'stalled-hold-x', 'idle_agent', 'fault', 'unexplained_hold'),
+  row(/^unexplained-hold-/, 'unexplained-hold-implement-claude-1185', 'idle_agent', 'fault', 'unexplained_hold'),
+  row(/^stalled-hold-/, 'stalled-hold-x', 'idle_agent', 'fault', 'known_hold_stalled'),
   row(/^hold-cycle-/, 'hold-cycle-abcd', 'held_item', 'fault', 'hold_cycle_dropped'),
   row(/^decision-proposal-(D-\d+|[\w-]+?)-(\d+)$/, 'decision-proposal-D-040-12', 'decision', 'homeowner', 'decision_proposed', [
     act('decision.approve', 'person_only', false, (item, m) => ({ decision: m[1], pull: Number(m[2]) })),
