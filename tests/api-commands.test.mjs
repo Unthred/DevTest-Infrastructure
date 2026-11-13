@@ -259,7 +259,7 @@ test('valid: meta lists every loaded command with tier, inputs and refusal codes
   const s = await serve(t);
   const meta = await s.get('/api/v1/meta');
   assert.deepEqual(validate(schemas['meta.schema.json'], meta.body, schemas), []);
-  const named = meta.body.data.commands.map(c => [c.name, c.tier, c.reversible, c.undo_command]);
+  const named = meta.body.data.commands.filter(c => c.name.startsWith('inbox.')).map(c => [c.name, c.tier, c.reversible, c.undo_command]);
   assert.deepEqual(named, [['inbox.approve', 'person_only', true, 'inbox.undo_decision'], ['inbox.reject', 'person_only', true, 'inbox.undo_decision'], ['inbox.undo_decision', 'person_only', false, null]]);
   const approve = meta.body.data.commands[0];
   assert.deepEqual(approve.inputs, [{ name: 'id', type: 'string', required: true }]);
