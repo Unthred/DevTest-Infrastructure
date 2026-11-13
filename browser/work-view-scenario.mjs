@@ -107,6 +107,18 @@ try {
   check('the page has no sideways scroll (the table scrolls inside its frame)', geo.over <= 0, JSON.stringify(geo));
   check('every switch and filter button is at least 44 px high', geo.small === 0, JSON.stringify(geo));
   await page.screenshot({ path: path.join(out, `${name}-table.png`), fullPage: false });
+
+  // Issue #930 guarantee for the new card: a refresh in place that swaps the card keeps the viewer's place.
+  await page.locator('.wv-scroll').evaluate(e => { e.scrollLeft = 300; e.scrollTop = 40; });
+  const before = await page.locator('.wv-scroll').evaluate(e => ({ left: e.scrollLeft, top: e.scrollTop }));
+  const swaps = await page.evaluate(() => { window.__swaps = 0; document.addEventListener('card-rebuilt', () => { window.__swaps++; }); });
+  await page.waitForTimeout(1100);   // the page's generated-at stamp changes between fetches, so the card is swapped
+  await page.locator('.refresh-now').click();
+  await page.waitForFunction(() => window.__swaps > 0, null, { timeout: 8000 }).catch(() => {});
+  const after = await page.locator('.wv-scroll').evaluate(e => ({ left: e.scrollLeft, top: e.scrollTop }));
+  check('a refresh in place that swaps the card keeps the table drawn and its scroll place',
+    swaps === undefined && (await page.evaluate(() => window.__swaps)) > 0 && (await page.locator('.wv-table').count()) === 1
+    && after.left === before.left && after.top === before.top && before.left > 0, JSON.stringify({ before, after }));
   check('no script errors', errors.length === 0, errors.join('; '));
   await ctx.close();
 } catch (e) { check('the scenario ran to the end', false, String(e.stack || e).slice(0, 1500)); await page?.screenshot({ path: path.join(out, `${name}-failure.png`) }).catch(() => {}); } finally { await browser.close(); server.close(); }

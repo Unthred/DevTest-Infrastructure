@@ -51,6 +51,8 @@ function startResize(e, onDone) {
   addEventListener('pointerup', up);
 }
 
+// One Escape listener for the page, whichever copy of the card is current (the refresh in place swaps the card).
+let closeOpenPanel = null;
 export function initWorkView(root, { local = localStorage, session = sessionStorage } = {}) {
   if (root.dataset.wvReady) return;
   root.dataset.wvReady = '1';
@@ -150,7 +152,7 @@ export function initWorkView(root, { local = localStorage, session = sessionStor
     persist();
     draw();
   }));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && openKey) closePanel(); });
+  closeOpenPanel = () => { if (openKey) closePanel(); };
   draw();
 }
 
@@ -159,6 +161,9 @@ export const initAll = () => {
 };
 if (typeof document !== 'undefined' && document.querySelector) {
   initAll();
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOpenPanel?.(); });
+  // The refresh in place announces a rebuilt card before it restores scroll and focus; draw at once, not a microtask later.
+  document.addEventListener('card-rebuilt', initAll);
   // A card swapped in by the refresh in place (issue #930) is set up again from the saved choices.
   if (typeof MutationObserver === 'function') new MutationObserver(initAll).observe(document.body, { childList: true, subtree: true });
 }
