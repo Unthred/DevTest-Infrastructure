@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
+import { afterFormatRefusal, afterLabels, resolveAfter } from './draft-after.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 // issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
@@ -30,13 +31,15 @@ export function checkProposal(args) {
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
+  if (kind === 'issue_draft') allowed.push('after');   // issue #1259: earlier drafts this one is posted after
   if (kind === 'prompt') allowed.push('effect');   // issue #1238: optional, read_only or report_only
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, error: `unknown argument: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && (k === 'why' || k === 'effect')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
     if (v.length > (LIMITS[k] ?? 40)) return { ok: false, error: `${k} is longer than ${LIMITS[k]} characters` };
@@ -58,6 +61,11 @@ export function checkProposal(args) {
   return { ok: true, item };
 }
 
+// Issue #1259: what an issue draft waits for, as the titles of the drafts named in `after` (Foreman records them while it holds the draft back).
+const waitsForOf = (dir, s, item) => {
+  const labels = s.waitsFor ?? (item?.after && ['pending', 'approved'].includes(s.state) ? afterLabels(dir, item.after) : null);
+  return labels ? { waitsFor: labels } : {};
+};
 export function createInbox({ dir, baseUrl = null }) {
   // Issue #977: the dashboard link for an item, so the overseer can pass it on. Absent when no dashboard address is configured.
   const linkFor = id => { try { return baseUrl ? new URL(`/inbox/${id}`, baseUrl).href : null; } catch { return null; } };
@@ -81,6 +89,7 @@ export function createInbox({ dir, baseUrl = null }) {
       if (!dir) throw new Error('the inbox is not configured on this server');
       const c = checkProposal(args);
       if (!c.ok) throw new Error(c.error);
+      if (c.item.after) { const known = resolveAfter(dir, 'none', c.item.after); if (!known.ok) throw new Error(known.reason); }
       const w = waiting(), full = c.item.kind !== 'control' && w.total >= w.limit;   // a stop is never held back by a full queue (issue #1115)
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
@@ -105,7 +114,13 @@ export function createInbox({ dir, baseUrl = null }) {
         if (!fs.existsSync(path.join(items, `${id}.json`))) throw new Error('no such item');
         return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null, decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null, updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null, issue: s.issue ?? null, job: s.job ?? null };
+      return {
+        id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null,
+        decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null,
+        updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
+        issue: s.issue ?? null, job: s.job ?? null,
+        ...waitsForOf(dir, s, readJson(path.join(items, `${id}.json`))),
+      };
     },
     list({ search = '', kind = '', state = '', limit = 50 } = {}) {
       if (!dir) throw new Error('the inbox is not configured on this server');
