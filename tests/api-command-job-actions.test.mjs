@@ -80,34 +80,37 @@ const acceptedFor = (r, job) => {
   assert.match(r.body.result.target.label, new RegExp(job));
 };
 
-for (const [command, action] of [['job.resume', 'resume_job'], ['job.close', 'close_job']]) {
-  test(`valid: ${command} for ${JOB} records one approved ${action} the store loads, one wake`, async t => {
-    const s = await serve(t);
-    acceptedFor(await s.post(command, { job: JOB }), JOB);
-    assert.deepEqual(s.wakes, [command]);
-    const all = items(s.inbox);
-    assert.equal(all.length, 1);
-    assert.deepEqual([all[0].state, all[0].kind, all[0].action, all[0].target], ['approved', 'action', action, JOB]);
-    const loaded = store.loadItem(s.inbox, all[0].id);
-    assert.equal(loaded.ok, true);
-    assert.deepEqual([loaded.item.action, loaded.item.target, loaded.item.reason], [action, JOB, loaded.item.reason]);
-    assert.match(loaded.item.reason, FIXED);
-  });
-
-  test(`real dispatch: the item recorded by ${command} reaches the action runner with ${action} and ${JOB}`, async t => {
-    const s = await serve(t);
-    await s.post(command, { job: JOB });
-    const [status] = items(s.inbox);
-    const ran = [];
-    const runInboxAction = async (d, st, item) => {
-      ran.push([item.action, item.target]);
-      store.finish(d, st.id, { state: 'done', result: 'ok' }, NOW);
-    };
-    const team = { runInboxAction };
-    await dispatchApproved(team, store, s.inbox, status, store.loadItem(s.inbox, status.id).item, {});
-    assert.deepEqual(ran, [[action, JOB]]);
-  });
+async function checkRecorded(t, command, action) {
+  const s = await serve(t);
+  acceptedFor(await s.post(command, { job: JOB }), JOB);
+  assert.deepEqual(s.wakes, [command]);
+  const all = items(s.inbox);
+  assert.equal(all.length, 1);
+  assert.deepEqual([all[0].state, all[0].kind, all[0].action, all[0].target], ['approved', 'action', action, JOB]);
+  const loaded = store.loadItem(s.inbox, all[0].id);
+  assert.equal(loaded.ok, true);
+  assert.deepEqual([loaded.item.action, loaded.item.target, loaded.item.reason], [action, JOB, loaded.item.reason]);
+  assert.match(loaded.item.reason, FIXED);
 }
+
+async function checkDispatched(t, command, action) {
+  const s = await serve(t);
+  await s.post(command, { job: JOB });
+  const [status] = items(s.inbox);
+  const ran = [];
+  const runInboxAction = async (d, st, item) => {
+    ran.push([item.action, item.target]);
+    store.finish(d, st.id, { state: 'done', result: 'ok' }, NOW);
+  };
+  const team = { runInboxAction };
+  await dispatchApproved(team, store, s.inbox, status, store.loadItem(s.inbox, status.id).item, {});
+  assert.deepEqual(ran, [[action, JOB]]);
+}
+
+test('valid: job.resume for 867710c6 records one approved resume_job the store loads, one wake', t => checkRecorded(t, 'job.resume', 'resume_job'));
+test('valid: job.close for 867710c6 records one approved close_job the store loads, one wake', t => checkRecorded(t, 'job.close', 'close_job'));
+test('real dispatch: the item recorded by job.resume reaches the action runner with resume_job and 867710c6', t => checkDispatched(t, 'job.resume', 'resume_job'));
+test('real dispatch: the item recorded by job.close reaches the action runner with close_job and 867710c6', t => checkDispatched(t, 'job.close', 'close_job'));
 
 test('valid: meta lists both commands with their tier, no reason, no undo and one required text input job', async t => {
   const s = await serve(t);
