@@ -19,7 +19,8 @@ export function sanitizeColumns(raw, keys) {
 }
 
 // Grips carry data-grip="<column key>" and sit inside the column's th. Listeners sit on root, so a grip swapped in later still works.
-export function bindResize(root, widths, { apply, commit }) {
+// state.widths is read at every event: callers replace it when columns are toggled or a saved view is applied.
+export function bindResize(root, state, { apply, commit }) {
   const doc = root.ownerDocument ?? root;
   root.addEventListener('pointerdown', e => {
     const grip = e.target.closest?.('[data-grip]');
@@ -29,7 +30,7 @@ export function bindResize(root, widths, { apply, commit }) {
     const startWidth = grip.closest('th').getBoundingClientRect().width;
     const key = grip.dataset.grip;
     const move = ev => {
-      widths[key] = clampWidth(startWidth + ev.clientX - startX);
+      state.widths[key] = clampWidth(startWidth + ev.clientX - startX);
       apply();
     };
     const up = () => {
@@ -45,8 +46,8 @@ export function bindResize(root, widths, { apply, commit }) {
     if (!grip || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
     e.preventDefault();
     const key = grip.dataset.grip;
-    const now = widths[key] || Math.round(grip.closest('th').getBoundingClientRect().width);
-    widths[key] = clampWidth(now + (e.key === 'ArrowRight' ? KEY_STEP : -KEY_STEP));
+    const now = state.widths[key] || Math.round(grip.closest('th').getBoundingClientRect().width);
+    state.widths[key] = clampWidth(now + (e.key === 'ArrowRight' ? KEY_STEP : -KEY_STEP));
     apply();
     commit();
   });

@@ -15,16 +15,27 @@ test('sanitizeColumns drops unknown keys, clamps widths and never hides every co
 test('bindResize: an arrow key widens and narrows the column, within the limits, and saves', () => {
   const listeners = {};
   const root = { addEventListener: (type, fn) => { listeners[type] = fn; }, ownerDocument: { addEventListener() {}, removeEventListener() {} } };
-  const widths = { a: 100 };
+  const state = { widths: { a: 100 } };
   let applied = 0, committed = 0;
-  bindResize(root, widths, { apply: () => { applied += 1; }, commit: () => { committed += 1; } });
+  bindResize(root, state, { apply: () => { applied += 1; }, commit: () => { committed += 1; } });
   const grip = { dataset: { grip: 'a' }, closest: () => ({ getBoundingClientRect: () => ({ width: 100 }) }) };
   const press = key => listeners.keydown({ key, target: { closest: () => grip }, preventDefault() {} });
   press('ArrowRight');
-  assert.equal(widths.a, 116);
+  assert.equal(state.widths.a, 116);
   press('ArrowLeft');
   press('ArrowLeft');
-  assert.equal(widths.a, 84);
+  assert.equal(state.widths.a, 84);
   press('x');
   assert.deepEqual([applied, committed], [3, 3]);
+});
+
+test('bindResize keeps working when the caller replaces state.widths after a column toggle', () => {
+  const listeners = {};
+  const root = { addEventListener: (type, fn) => { listeners[type] = fn; }, ownerDocument: { addEventListener() {}, removeEventListener() {} } };
+  const state = { widths: { a: 100 } };
+  bindResize(root, state, { apply() {}, commit() {} });
+  state.widths = { a: 100, b: 60 };   // what the Jobs column toggle and a saved view do
+  const grip = { dataset: { grip: 'b' }, closest: () => ({ getBoundingClientRect: () => ({ width: 60 }) }) };
+  listeners.keydown({ key: 'ArrowRight', target: { closest: () => grip }, preventDefault() {} });
+  assert.equal(state.widths.b, 76);
 });

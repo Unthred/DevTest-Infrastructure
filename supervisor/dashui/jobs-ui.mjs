@@ -95,7 +95,7 @@ export function bindJobs({ loc = location, store = localStorage, doc = document,
     Object.assign(cols, sanitizeColumns({ ...cols, hidden: e.target.checked ? cols.hidden.filter(h => h !== k) : [...cols.hidden, k] }));
     applyColumns(doc, cols); commit();
   });
-  bindResize(doc, cols.widths, { apply: () => applyColumns(doc, cols), commit });
+  bindResize(doc, cols, { apply: () => applyColumns(doc, cols), commit });
 
   doc.addEventListener('submit', e => {
     if (!e.target.matches?.('[data-jobs-views]')) return;

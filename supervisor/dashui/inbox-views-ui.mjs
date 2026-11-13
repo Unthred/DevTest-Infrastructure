@@ -80,7 +80,7 @@ export function initInboxViews(root = document, store = localStorage, phone = ma
       save();
     });
   }
-  bindResize(el, prefs.widths, { apply: showColumns, commit: save });
+  bindResize(el, prefs, { apply: showColumns, commit: save });
 }
 
 // A card swapped in by the refresh in place is initialised in the same task, before the next paint.
