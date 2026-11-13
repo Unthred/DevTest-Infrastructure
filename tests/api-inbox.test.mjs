@@ -150,7 +150,7 @@ test('valid: every code of the table is reachable from a sentence the store writ
   assert.deepEqual(REASON_CODES.slice().sort(), [...Object.keys(sentences), 'action_failed', 'other'].sort());
 });
 
-test('valid: a waiting item and a failed item list their actions, disabled with not_built while no command exists', async t => {
+test('valid: a waiting item and a failed item list their actions, approve and reject enabled by the commands that exist, the rest not_built', async t => {
   const statuses = [
     { id: idOf(1), state: 'pending', kind: 'prompt', createdAt: NOW - 1, title: 'w' },
     { id: idOf(2), state: 'failed', kind: 'prompt', createdAt: NOW - 2, title: 'f', reason: 'x' },
@@ -161,9 +161,9 @@ test('valid: a waiting item and a failed item list their actions, disabled with 
   assert.deepEqual(by(1).actions.map(a => a.command), ['inbox.approve', 'inbox.reject', 'inbox.park']);
   assert.deepEqual(by(2).actions.map(a => a.command), ['inbox.requeue', 'inbox.dismiss']);
   assert.deepEqual(by(3).actions, []);
-  for (const [n, list] of [[1, by(1).actions], [2, by(2).actions]]) {
-    for (const a of list) assert.deepEqual([a.enabled, a.tier, a.refusal_code, a.input], [false, 'person_only', 'not_built', { id: by(n).id }]);
-  }
+  const unbuilt = [...by(1).actions.filter(a => a.command === 'inbox.park'), ...by(2).actions];   // issue #1257: approve and reject now exist
+  for (const a of unbuilt) assert.deepEqual([a.enabled, a.tier, a.refusal_code], [false, 'person_only', 'not_built']);
+  for (const a of by(1).actions.filter(a => a.command !== 'inbox.park')) assert.deepEqual([a.enabled, a.tier, a.refusal_code, a.input], [true, 'person_only', null, { id: by(1).id }]);
   assert.equal(by(1).attention, 'homeowner');
   assert.equal(by(2).attention, 'fault');
 });

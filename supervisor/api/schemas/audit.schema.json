@@ -1,0 +1,70 @@
+{
+  "$id": "audit.schema.json",
+  "title": "The audit model: reply of GET /api/v1/audit (issue #1257)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "undo": {
+      "type": "object",
+      "required": ["command", "input", "available", "until", "undone_by"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "input": { "type": "object" },
+        "available": { "type": "boolean" },
+        "until": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "undone_by": { "type": ["string", "null"], "pattern": "^[a-f0-9]{8}$" }
+      }
+    },
+    "condition": { "anyOf": [{ "type": "null" }, { "$ref": "common.schema.json#/$defs/condition" }] },
+    "entry": {
+      "type": "object",
+      "required": ["id", "at", "actor", "client", "command", "target", "input", "reason", "before", "after", "outcome", "refusal_code", "refusal_text", "undo"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
+        "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "actor": { "type": "string" },
+        "client": { "type": "string" },
+        "command": { "type": "string" },
+        "target": { "anyOf": [{ "type": "null" }, { "$ref": "common.schema.json#/$defs/ref" }] },
+        "input": { "type": ["object", "null"] },
+        "reason": { "type": ["string", "null"] },
+        "before": { "$ref": "#/$defs/condition" },
+        "after": { "$ref": "#/$defs/condition" },
+        "outcome": { "enum": ["applied", "accepted", "no_change", "refused"] },
+        "refusal_code": { "type": ["string", "null"] },
+        "refusal_text": { "type": ["string", "null"] },
+        "undo": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/undo" }] }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "audit" },
+        "data": {
+          "type": "object",
+          "required": ["direct_control", "summary", "entries"],
+          "additionalProperties": false,
+          "properties": {
+            "direct_control": { "type": "null" },
+            "summary": {
+              "type": "object",
+              "required": ["window_seconds", "applied", "refused", "undone"],
+              "additionalProperties": false,
+              "properties": {
+                "window_seconds": { "type": "integer", "minimum": 1 },
+                "applied": { "$ref": "#/$defs/count" },
+                "refused": { "$ref": "#/$defs/count" },
+                "undone": { "$ref": "#/$defs/count" }
+              }
+            },
+            "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+          }
+        }
+      }
+    }
+  ]
+}
