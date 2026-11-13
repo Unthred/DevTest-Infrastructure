@@ -3,6 +3,7 @@
 import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
+import { wasteCauses } from './wastecauses.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
 import { jobTableFields } from './jobs-fields.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
@@ -759,6 +760,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       ...assignmentFields(extra, team.assignments, names),   // issue #1121: extra plus assignments, faults and the issue rows' explanation
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
       headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
+      wasteCauses: wasteCauses(Object.values(breakerState.waste || {}), now),   // issue #1256
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
       refs: refsOf({ names, cache: c, jobs, state }),
       estimates,
