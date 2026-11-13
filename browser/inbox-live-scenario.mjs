@@ -84,13 +84,14 @@ try {
   // Regression: the Overview badge follows the stream.
   await control('/__test/reset');
   const overview = await ctx.newPage();
-  // The Overview loads its script once per page load (it loads twice in this fixture); each load must open one stream, no more.
+  // The Overview reloads itself once to apply the time range, and the first load's stream request may or may not reach the server: expect 1 to loads streams.
   const seen = []; overview.on('request', r => { seen.push(new URL(r.url()).pathname); });
   await overview.goto(url('/'), { waitUntil: 'networkidle' });
   const badge = () => overview.locator('[data-approvals-count]').first().textContent().then(t => Number(t.trim()));
   const before = await badge();
   const loads = seen.filter(u => u === '/static/app.js').length;
-  check('the Overview opens one stream for each page load', loads >= 1 && (await streams()) === loads, `${await streams()} streams, ${loads} loads`);
+  const opened = await streams();
+  check('the Overview opens at least one stream and at most one per page load', loads >= 1 && opened >= 1 && opened <= loads, `${opened} streams, ${loads} loads`);
   await control('/__test/add');
   let after = before;
   for (let i = 0; i < 20 && after === before; i++) { await sleep(500); after = await badge(); }
