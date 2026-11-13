@@ -3,6 +3,7 @@
 
 import { bindApproveAll } from './approve-all.mjs';
 import { bindDecisionCards } from './decision-ui.mjs';
+import { bindCloseReason } from './close-reason-ui.mjs';
 
 export const PRESSED = { approve: 'Approved ✓', reject: 'Rejected ✗' };
 export const OUTCOME_LABEL = { approve: 'Approved', reject: 'Rejected' };
@@ -41,6 +42,7 @@ export const lowerCount = (heading, by = 1) => String(heading).replace(/\((\d+)\
 if (typeof document !== 'undefined') bindApproveAll(postDecision);
 // Issue #1185: a decision card's controls post in the background (dashui/decision-ui.mjs), bound once here like Approve all.
 if (typeof document !== 'undefined') bindDecisionCards(postDecision);
+if (typeof document !== 'undefined') bindCloseReason();   // issue #1306
 
 // Issue #1262: a decided item shows the same outcome in every Inbox view that holds it (card, table row, compact row) and the two list views
 // lose its buttons. The pressed card keeps its buttons until the caller moves it to Decided; `pressed` is the element the click came from.

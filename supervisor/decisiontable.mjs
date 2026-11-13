@@ -54,6 +54,8 @@ const T = {
   inbox: { clears: 'clears when you approve or reject the proposal on this card', actions: [] },
   inboxfail: { clears: 'clears three days after it failed, or sooner when the work is done another way', actions: [] },
   inboxrefused: { clears: 'clears three days after the latest refusal; the overseer can propose again', actions: [] },
+  'closed-noreason': { clears: 'clears when a reason is recorded for every issue the item lists', actions: [] },
+  'closed-noreason-unreadable': { clears: 'clears when the record of close reasons can be read again', actions: [] },
   'hand-deploy': { clears: 'clears when the installed commit moves past the change', actions: [] },
   'upgrade-latched': { clears: 'clears when you clear the latch with the control on this card (or ai-supervisor self-upgrade clear-latch on Tower)', actions: ['clear_latch'] },
   'upgrade-refused': { clears: 'clears when a later main is installed or the refusal no longer applies', actions: [] },

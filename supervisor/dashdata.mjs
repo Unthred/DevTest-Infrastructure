@@ -17,6 +17,8 @@ import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
 import { limitResetStep } from './resetstep.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
+import { isDroppedClose } from './closedreason.mjs';
+import { ensureStartedAt } from './closedreason-store.mjs';
 
 // Issue #362: the hot file keeps the last 35 days for the planner; older snapshots rotate into compressed monthly archives and are never deleted.
 export const RETENTION_MS = HOT_WINDOW_MS;
@@ -114,7 +116,9 @@ const issueOfMerged = m => { const n = m.closingIssuesReferences?.[0]?.number ??
 // Recently merged PRs (number, title, time) for the "merged today" section of `team status`.
 export const compactMerged = merged => (merged || []).filter(m => Number.isSafeInteger(m.number) && typeof m.mergedAt === 'string')
   .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).slice(0, 30).map(m => ({ number: m.number, title: redact(m.title, 120), mergedAt: m.mergedAt, issue: issueOfMerged(m), ...(/^[0-9a-f]{40}$/.test(m.mergeCommit?.oid || '') ? { mergeSha: m.mergeCommit.oid } : {}) }));
-export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, 120), state: i.state,
+// Issue #1306: the close reason is kept with the close time; the title of an issue closed as not planned or duplicate keeps 300 characters, so the Needs you item names it exactly.
+export const compactIssues = issues => (issues || []).map(i => ({ number: i.number, title: redact(i.title, isDroppedClose(i) ? 300 : 120), state: i.state,
+  ...(typeof i.stateReason === 'string' ? { stateReason: i.stateReason.slice(0, 20) } : {}),
   // Issue #866: when the issue was opened and closed (ISO text from GitHub), for the headline progress numbers.
   ...(typeof i.createdAt === 'string' && Number.isFinite(Date.parse(i.createdAt)) ? { createdAt: i.createdAt } : {}), ...(typeof i.closedAt === 'string' && Number.isFinite(Date.parse(i.closedAt)) ? { closedAt: i.closedAt } : {}),
   labels: (i.labels || []).includes('needs-homeowner')
@@ -239,6 +243,7 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     cache.pullFiles = team.files instanceof Map ? Object.fromEntries([...team.files].map(([n, f]) => [n, Array.isArray(f) ? f.slice(0, 300).map(x => redact(String(x), 200)) : null])) : (prev.pullFiles || {}); }
   else { cache.pulls = prev.pulls || []; cache.issues = prev.issues || []; cache.delivered = prev.delivered || []; cache.merged = prev.merged || []; cache.mergedNumbers = prev.mergedNumbers || []; cache.pullFiles = prev.pullFiles || {}; cache.fetchedAt = prev.fetchedAt ?? null; }
   cache.dependencies = (team?.view ? dependencyPlain(team.dependencies) : null) ?? prev.dependencies ?? null;   // issue #1103
+  if (team?.view) ensureStartedAt(root, now);   // issue #1306: the first rebuild of the issue list after install fixes the start time
   atomicJson(cacheFile(root), cache);
   if (!team || (status !== 'ok' && status !== 'error')) return cache;
   const states = agentStates(team.c, jobs, now);

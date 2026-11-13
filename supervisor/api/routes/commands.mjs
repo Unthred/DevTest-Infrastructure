@@ -67,7 +67,7 @@ async function execute(context, command, request) {
     try { context.guard.wake(reason); } catch { /* the schedule is the fallback */ }
   };
   const inboxDir = context.config?.inbox?.dir ?? null;
-  const runContext = { now: context.now, root: context.root, inboxDir, reason: request.reason, wake };
+  const runContext = { now: context.now, root: context.root, inboxDir, reason: request.reason, wake, github: context.github, call: request.key };
   const done = await command.run(request.input, runContext);
   if (done.refusal_code) {
     context.guard.releaseCooldown(COOLDOWN_KEY);

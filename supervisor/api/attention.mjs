@@ -61,6 +61,11 @@ export const TABLE = Object.freeze([
   row(/^migration-failed$/, 'migration-failed', 'install', 'fault', 'migration_failed'),
   row(/^config-invalid$/, 'config-invalid', 'install', 'fault', 'configuration_invalid'),
   row(/^drift$/, 'drift', 'install', 'unknown', 'merged_not_installed'),
+  // Issue #1306: every issue closed as not planned or duplicate with no recorded reason, as one item; its control takes the listed numbers and a reason text.
+  row(/^closed-noreason$/, 'closed-noreason', 'held_item', 'homeowner', 'closed_without_reason', [
+    act('work_item.close_reason', 'direct', false, item => ({ issues: (Array.isArray(item.issues) ? item.issues : []).join(',') })),
+  ]),
+  row(/^closed-noreason-unreadable$/, 'closed-noreason-unreadable', 'held_item', 'fault', 'close_reason_record_unreadable'),
   row(/^hand-deploy$/, 'hand-deploy', 'homeowner_step', 'homeowner', 'hand_deploy', [], 'text'),
   row(/^history-storage$/, 'history-storage', 'homeowner_step', 'homeowner', 'history_storage', [], 'action'),
   row(/^homeowner-steps-(\d+)$/, 'homeowner-steps-5', 'homeowner_step', 'homeowner', 'homeowner_steps_listed', [], 'text'),

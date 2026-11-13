@@ -4,6 +4,7 @@
 import { readCache, readVersion, codeVersion, STALE_TICK_MS } from '../dashdata.mjs';
 import { proofValid, reserveCooldown, releaseCooldown } from '../dashwrite.mjs';
 import { createApiRouter } from './router.mjs';
+import { githubClient } from '../github.mjs';
 
 const SHORT = 7;
 const dirs = () => {
@@ -41,12 +42,13 @@ function makeGuard({ root, now, source, store, originAllowed, wake }) {
   };
 }
 
-export function withApi({ root, headers, allowedHost, now, cachedView, source, store, originAllowed, wake }, next) {
+// Issue #1306: the GitHub client a command may use (to comment on an issue). A client given by the caller (tests) replaces the real one.
+export function withApi({ root, headers, allowedHost, now, cachedView, source, store, originAllowed, wake, github = null }, next) {
   const getView = async () => (await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: false, allTime: false })).view;
   const api = createApiRouter({
     ...dirs(), root, getConfig: () => source(), headers,
     guard: makeGuard({ root, now, source, store, originAllowed, wake }), allowedHost, now, getView, staleAfterMs: STALE_TICK_MS,
-    tickAt: () => lastTickAt(root), coreVersion: () => shortVersion(root),
+    tickAt: () => lastTickAt(root), coreVersion: () => shortVersion(root), getGithub: () => github ?? githubClient(source()),
   });
   return (req, res) => {
     const [path] = (req.url || '/').split('?');
