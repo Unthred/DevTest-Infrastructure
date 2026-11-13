@@ -751,7 +751,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const breakerState = breakerStateOf(state.breaker || {}), breakerRunning = jobs.filter(j => j.status === 'running').map(j => ({ id: String(j.id).slice(0, 8), type: typeOfKind(j.kind || 'job'), ref: state.jobs?.[j.id]?.pr ?? state.jobs?.[j.id]?.issue ?? j.issue ?? null }));
     const breakerView = breakerHaltView(breakerState, breakerRunning);
     if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
-    if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
+    if (breakerView) attention.unshift({ id: 'breaker-halt', scope: breakerView.cause, text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
     const budget = budgetView(team);
     const resetAdvice = resetAdviceFor({ root, config, budget, jobs, allowance, now });   // issue #1162
     attention.push(...resetAdvice.attention);

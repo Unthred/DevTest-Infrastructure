@@ -18,8 +18,8 @@ const PROPOSAL_SCHEMA = {
   properties: {
     kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action'] },
     title: { type: 'string', maxLength: 200 },
-    action: { type: 'string', enum: ['new_review_attempt', 'clear_retry_cap', 'reopen', 'close_job', 'stop_job', 'resume_job', 'clear_latch'], description: 'kind action: the named action' },
-    target: { type: 'string', maxLength: 12, description: 'kind action: PR or issue number, or 8-character job id; omit for clear_latch' },
+    action: { type: 'string', enum: ['new_review_attempt', 'clear_retry_cap', 'reopen', 'close_job', 'stop_job', 'resume_job', 'clear_latch', 'resume_breaker'], description: 'kind action: the named action' },
+    target: { type: 'string', maxLength: 160, description: 'kind action: PR or issue number, or 8-character job id (any other action: at most 40 characters); omit for clear_latch; for resume_breaker @global, all or a halt key such as fix:blocked:postcondition_not_met (up to 160 characters)' },
     reason: { type: 'string', maxLength: 300, description: 'kind action: why' },
     prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' },
     body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' },
