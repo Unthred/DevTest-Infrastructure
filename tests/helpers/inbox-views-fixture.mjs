@@ -5,6 +5,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import * as inbox from '../../supervisor/inbox.mjs';
 
+export const DRAFTCHAIN_TITLE = 'An issue draft can name earlier drafts as prerequisites and Foreman fills in their issue numbers Draftchain';
+export const RACE_TITLE = 'Check the router logs for dropped packets Raceitem';
 export const LONG_TITLE = `Read only drift check ${'of every rule file in the shared rules repository '.repeat(3)}`.trim().slice(0, 190);
 const hex = () => crypto.randomBytes(16).toString('hex');
 
@@ -18,6 +20,8 @@ export function buildInbox(dir, now = Date.now()) {
     doneIssue: drop({ kind: 'issue_draft', title: 'Post-mortem: 3 jobs failed with cause deterministic', body: 'Three jobs failed for the same reason.' }, 5 * 86400000),
     failed: drop({ kind: 'prompt', title: "Tower's disk check, it can't start", prompt: 'Check the free space on the cache drive.' }, 2 * 86400000),
     long: drop({ kind: 'prompt', title: LONG_TITLE, prompt: 'Long title item.' }, 3600000),
+    draftchain: drop({ kind: 'issue_draft', title: DRAFTCHAIN_TITLE, body: 'Draft that names earlier drafts as prerequisites.' }, 8 * 3600000),
+    race: drop({ kind: 'prompt', title: RACE_TITLE, prompt: 'Read the router logs and count dropped packets.' }, 9 * 3600000),
     waiting: drop({ kind: 'prompt', title: 'Tidy the docs index', prompt: 'Fix the broken link in docs/README.md.' }, 7200000),
   };
   for (const id of [ids.donePrompt, ids.doneIssue, ids.failed, ids.long]) inbox.decide(dir, id, 'approve', now - 4 * 86400000);

@@ -92,7 +92,7 @@ async function page(search, records) {
   const out = renderRoute(view, matchRoute('/inbox'), { query: q(search), pathname: '/inbox' });
   return out.html;
 }
-const shown = html => [...html.matchAll(/data-inbox="([^"]+)"/g)].map(m => m[1]).join('');
+const shown = html => [...html.matchAll(/<li class="inbox-item" id="[^"]*" data-inbox="([^"]+)"/g)].map(m => m[1]).join('');
 const chipText = (html, id) => html.match(new RegExp(`data-chip="${id}"[^>]*>([^<]*)<span class="qf-n">(\\d+)`)).slice(1, 3).map(s => s.trim());
 
 test('GET /inbox renders both button rows with counts, and the dropdowns match the buttons', async () => {
@@ -110,7 +110,7 @@ test('GET /inbox?state=failed shows only failed items and the dropdown follows t
   const html = await page('state=failed', RECORDS);
   assert.equal(shown(html), 'fh');
   assert.match(html, /<option value="failed" selected>/);
-  assert.equal((await page('state=failed&kind=prompt', RECORDS)).match(/data-inbox="([^"]+)"/g).length, 1);
+  assert.equal((await page('state=failed&kind=prompt', RECORDS)).match(/<li class="inbox-item"/g).length, 1);
 });
 
 test('an empty result names the filters and offers Clear filters; with nothing in the Inbox it does not', async () => {
