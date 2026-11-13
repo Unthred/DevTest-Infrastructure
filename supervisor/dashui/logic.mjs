@@ -12,6 +12,7 @@ export const SEVERITIES = {
 export function severityOf(id) {
   const s = String(id || '');
   if (s.startsWith('dependency-malformed-')) return 'action';
+  if (/^churn(-|$)/.test(s)) return 'action';
   if (/^(homeowner|fixlimit|reviewlimit|reviewrefused|prclosed|tick-failed|job|rebase-lost|migration|split|decision|noreviewer|stalled|stall)(-|$)/.test(s)) return 'action';
   if (/^(ci|board-paused|tick-stale|no-tick|idle|pause|drift|lease|register|history)(-|$)/.test(s)) return 'warning';
   return 'info';

@@ -23,7 +23,7 @@ export { pendingProposals };
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
-import { consolidateNeedsYou } from './needsyou.mjs';
+import { consolidateNeedsYou, churnStopped, churnCard } from './needsyou.mjs';
 import { collectAssignments, idleRuleText, assignmentFields } from './issueassign.mjs';
 import { faultAttention } from './dashassign.mjs';
 import { hasReading, windowExpired } from './allowance.mjs';
@@ -324,8 +324,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   // Issue #610: `resume` refuses a stopped job, so the card offers the command only for held jobs that can be resumed (an unknown job keeps it).
   const resumeHint = n => { const ids = heldJobs(n).filter(id => ![...jobs].find(j => j.id === id && j.status === 'stopped')); return ids.length ? `To clear it now: ${ids.map(id => `ai-agent --supervisor resume ${id}`).join(' or ')} (uses allowance), or ` : 'A stopped job cannot be resumed. To clear it now: '; };
   const prCarded = new Set();   // PRs that already have a limit or needs-homeowner card; a failed job on one folds into it
-  const openPulls = new Set((cache?.pulls || []).map(p => p.number));
-  const fixLimited = new Set();
+  const openPulls = new Set((cache?.pulls || []).map(p => p.number)), fixLimited = new Set();
   const t = cache?.tick;
   if (!t) add('no-tick', 'No tick has ever been recorded: the dispatcher has not run since the dashboard was installed.');
   else {
@@ -372,6 +371,7 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
     const links = [{ text: names.pr(pr.number).text, url: web('pull', pr.number) }, ...[...jobs].filter(j => j.issue === pr.number && ['fix', 'cifix', 'rebase', 'review'].includes(j.kind)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 2).map(j => ({ text: names.job(j).text, url: names.job(j).url }))];
     if (fixLimit) add(`fixlimit-${pr.number}`, `${names.pr(pr.number).text} is still rejected after ${fixes} fix rounds (limit ${maxFix})`, { kind: 'pull', n: pr.number },
       { tried: `${fixes} fix round${fixes === 1 ? '' : 's'} on this PR; ${verdict === 'CHANGES' ? 'the reviewer still asks for changes' : 'CI is still red'}. Foreman starts no further fix jobs and posted a needs-homeowner notice on the PR.${held.has(pr.number) ? ' The CHANGES verdict was carried across a rebase and no fix commit has answered it, so the PR is held from rebase and review until you decide.' : ''} Each round was a fresh session on the same model; the final round could split out-of-scope findings. Foreman never moves a fix to a stronger model.${withheld.get(pr.number) ? ` No further round can run because ${withheld.get(pr.number)}.` : ''}`, action: held.has(pr.number) ? `Choose one: ${CARRIED_HOLD_OPTIONS}. The hold ends on a new head, a raised max_fix_attempts, a closed PR or a requested re-review; removing the needs-homeowner label does not release it.` : `Choose one: ${FIX_LIMIT_OPTIONS}. Remove the needs-homeowner label when done.`, links });
+    else if (churnStopped(state, pr, verdict)) add(...churnCard(pr, names.pr(pr.number).text, FIX_LIMIT_OPTIONS, links));
     else if (refusal) add(`reviewrefused-${pr.number}`, `${names.pr(pr.number).text}: the review's verdict file was refused (${refusal.error})${reviewLimit ? `, and the review limit of ${maxReview} attempts is reached` : ''}`, { kind: 'pull', n: pr.number },
       { tried: `A review job finished without a valid verdict file (${refusal.count} time${refusal.count === 1 ? '' : 's'} at this head), so no verdict reached GitHub. The reason: ${refusal.error}. The refused file is ${refusal.file}. A refused file records no verdict, so it does not use up the review attempts unless the refusals pass the review limit.`, action: `Read the verdict file and the review job ${String(refusal.job).slice(0, 8)} output, then review the PR by hand or push a new head to start a fresh review; remove the needs-homeowner label when done.`, links });
     else if (reviewLimit) add(`reviewlimit-${pr.number}`, `${names.pr(pr.number).text} could not be reviewed within ${maxReview} attempts`, { kind: 'pull', n: pr.number },
@@ -750,7 +750,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const breakerState = breakerStateOf(state.breaker || {}), breakerRunning = jobs.filter(j => j.status === 'running').map(j => ({ id: String(j.id).slice(0, 8), type: typeOfKind(j.kind || 'job'), ref: state.jobs?.[j.id]?.pr ?? state.jobs?.[j.id]?.issue ?? j.issue ?? null }));
     const breakerView = breakerHaltView(breakerState, breakerRunning);
     if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
-    if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
+    if (breakerView) attention.unshift({ id: 'breaker-halt', scope: breakerView.cause, text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
     const budget = budgetView(team);
     const resetAdvice = resetAdviceFor({ root, config, budget, jobs, allowance, now });   // issue #1162
     attention.push(...resetAdvice.attention);

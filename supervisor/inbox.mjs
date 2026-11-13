@@ -27,13 +27,23 @@ export const ACTIONS = {
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
   clear_latch: { target: 'latch', noun: 'upgrade', will: 'Clear the upgrade latch so the next tick may install merged work under the usual rules (issue #1160). Refused when no latch is set or an install is running. Nothing is merged or approved.' },
+  extra_fix_round: { target: 'pr', noun: 'pull request', will:
+    'Allow exactly one more fix job on the current head of this pull request, past the fix limit and the churn stop; the limits apply again after it (issue #1157). '
+    + 'Optional model: a model the branch author may write with (default: one different from the last fix round). Refused without a CHANGES verdict or red CI on the head, or while a fix job runs.' },
+  close_superseded: { target: 'pr', noun: 'pull request or issue', will:
+    'Close it with a comment naming the superseding items (superseded_by), after saving a pull request branch under saved/ (issue #1157). '
+    + 'Refused when a superseding item does not exist.' },
+  resume_breaker: { target: 'breaker', noun: 'breaker scope', will:
+    'Resume this tripped circuit breaker scope as `team breaker resume` does, recorded with who and why (issue #1157). Refused when it is not tripped.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
   release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
 };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
 export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
-const TARGET_RE = { latch: /^latch$/, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
+// A halt key is `${type}:${cause}` (breaker.wasteOf, up to 120 characters), so it holds colons.
+export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
+const TARGET_RE = { latch: /^latch$/, breaker: BREAKER_SCOPE, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
@@ -43,7 +53,8 @@ export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 FIELDS.prompt.push('effect');
 FIELDS.issue_draft.push('after');   // issue #1259
-FIELDS.control = FIELDS.action;
+FIELDS.control = FIELDS.action.slice();
+FIELDS.action.push('model', 'superseded_by');   // issue #1157: optional, and each belongs to one action
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
 // status record keeps the history. A rejected item keeps its file until the undo window has passed, because Undo returns it to pending.
@@ -90,9 +101,10 @@ export function validateItem(raw, { internal = false } = {}) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
+  Object.assign(max, { target: raw.action === 'resume_breaker' ? 160 : 12, model: 30, superseded_by: 60 });   // issue #1157: a breaker scope is longer than a number or job id
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || k === 'model' || (k === 'superseded_by' && raw.action !== 'close_superseded'))) continue;
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
@@ -115,7 +127,10 @@ export function validateItem(raw, { internal = false } = {}) {
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };
     if (spec.target === 'latch' && raw.target !== 'latch') return { ok: false, reason: 'target must be latch' };   // issue #1160
     if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
+    if (spec.target === 'breaker' && !TARGET_RE.breaker.test(raw.target)) return { ok: false, reason: 'target must be a breaker scope (a cause name, @global or all)' };
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
+    if (raw.model !== undefined && raw.action !== 'extra_fix_round') return { ok: false, reason: 'model is only accepted with extra_fix_round' };
+    if (raw.superseded_by !== undefined && raw.action !== 'close_superseded') return { ok: false, reason: 'superseded_by is only accepted with close_superseded' };
   }
   if (raw.kind === 'host_value') {
     if (!validateHostValue(raw.key, raw.value)) return { ok: false, reason: `key must be one of ${Object.keys(HOST_KEYS).join(', ')} with a value of the right shape` };
@@ -228,11 +243,15 @@ const effectNote = it => (PROMPT_EFFECTS.includes(it.effect)
   : ' It may change queue order or config, so new implement work waits for it.');
 
 const chainNote = (inboxDir, it) => (it.after ? ` It waits for the earlier drafts: ${afterLabels(inboxDir, it.after).join('; ')}; their issue numbers are written into its prerequisite line.` : '');
+// Issue #1157: the card shows every field the approval covers, so the optional worker and superseding numbers are part of the reason text.
+const reasonWithFields = it => [it.reason, it.model && `[worker: ${it.model}]`, it.superseded_by && `[superseded by: ${it.superseded_by}]`].filter(Boolean).join(' ');
+
 // Cards for the dashboard: pending items with exactly what will happen. Text is redacted again for display (defence in depth).
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
     if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
+    if (l.item.kind === 'action') l.item = { ...l.item, reason: reasonWithFields(l.item) };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
       waitsFor: it.after ? afterLabels(inboxDir, it.after) : undefined,

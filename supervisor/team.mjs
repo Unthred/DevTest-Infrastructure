@@ -51,7 +51,8 @@ import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
-import { dispatchApproved, unparkApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { dispatchApproved, depsOf, unparkedPulls } from './controlactions.mjs';
+import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, spendExtraFix, withExtraModel } from './routineactions.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -494,7 +495,7 @@ export class Team {
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
     Object.assign(base, modelCapacity(mode, this.modes?.[act.agent]?.capacity));   // issue #1116
-    const first = resolveModel(base);
+    const first = withExtraModel(this, act, kind, resolveModel(base));   // issue #1157: a granted extra fix round may name a model
     let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
     // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.
@@ -1226,7 +1227,7 @@ export class Team {
       // repeats to retry the notice, at most 3 times so it stays bounded. A green scanner check clears both markers (issue #451).
       const scanOnly = scannerOnly(checks);
       if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
-      const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
+      const escalated = !scanOnly && !openExtraFix(this, pr) && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1157: an extra round runs past it
       if (busy('cifix', key) || (escalated && (!this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
@@ -1234,9 +1235,9 @@ export class Team {
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? up : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
-      const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
-      const description = descriptionRoundFor(this, pr), escalated = !description && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1226
+      const key = verdictKey(pr.number, pr.headRefOid), extraFix = !!openExtraFix(this, pr);   // issue #1157: one granted round runs past the limit and churn
+      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || (this.churned(pr.number) && !extraFix)) continue;   // issue #864
+      const description = descriptionRoundFor(this, pr), escalated = !extraFix && !description && this.fixCount(pr.number) >= L.max_fix_attempts;
       if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}), ...(description ? { description: true } : {}) };
@@ -1978,12 +1979,12 @@ export class Team {
     if (hits.length !== 1) throw new SupervisorError(hits.length ? `job id ${prefix} is ambiguous` : `no job ${prefix}`);
     return hits[0];
   }
-  async applyInboxAction({ action, target, reason }, report) {
+  async applyInboxAction({ action, target, reason, model, superseded_by }, report) {
     const n = Number(target);
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
-    if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
+    if (ROUTINE_ACTIONS.has(action)) return applyRoutine(this, { action, target, reason, model, superseded_by });   // issues #1115, #1157
     if (action === 'clear_latch') {   // issue #1160; handinstall.mjs imports team.mjs through upgrade.mjs, so it is loaded here, not at the top
       const { handInstallHold } = await import('./handinstall.mjs');
       return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
@@ -3369,7 +3370,7 @@ export class Team {
       spec = { ...common, kind: 'fix', worktree: wt, issue: act.pr, ...await roundSpec(this, act, COMMON,
         fixPrompt({ pr: act.pr, head: act.head, branch: act.branch, escalatedInbox, requirementsFile: rq?.file })) };
       meta = { pr: act.pr, head: act.head, branch: act.branch, ...(act.escalated ? { escalated: true, ticket } : {}), ...(act.description ? { description: true } : {}) };
-      bump = () => countRound(this.s, act);
+      bump = () => { countRound(this.s, act); spendExtraFix(this, act); };
     } else if (act.type === 'rebase' || act.type === 'cifix') {
       const rebase = act.type === 'rebase';
       let rq = null;
@@ -3386,7 +3387,7 @@ export class Team {
       meta = fixJobMeta(act, rebase, ticket);
       const counter = rebase ? 'rebaseAttempts' : 'fixAttempts';
       bump = () => { if (act.scanOnly) { this.s.scanOnlyRounds[act.pr] = (this.s.scanOnlyRounds[act.pr] || 0) + 1; if (act.announced) this.s.scanOnlyAnnounced[act.pr] = true; return; }   // issue #400: never counted; later heads are skipped only once the homeowner item exists
-        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; };
+        this.s[counter][act.key] = (this.s[counter][act.key] || 0) + 1; if (!rebase) spendExtraFix(this, act); };
     } else if (act.type === 'continue') {
       const wt = await this.git.ensureWorktree({ path: await this.git.worktreeFor(act.branch) || path.join(base, `DevTest-Infrastructure-${act.agent}-${act.issue}`), branch: act.branch, base: `origin/${act.branch}` });
       spec = { ...common, kind: 'continue', worktree: wt, issue: act.issue, scope: `Continue draft PR #${act.pr} for issue #${act.issue} on ${act.branch}`, allowed_actions: ['read', 'edit', 'test', 'push_feature_branch', 'create_pr', 'update_issue'],

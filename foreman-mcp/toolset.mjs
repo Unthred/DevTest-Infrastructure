@@ -5,6 +5,7 @@ import { controlTools } from './controltools.mjs';
 import { withControls } from './controlview.mjs';
 import { redact } from './redact.mjs';
 import { stopRecordTool, viewReasons, DEFAULT_STOP_DIRS } from './stoprecord.mjs';
+import { withRoutineActions } from './proposeschema.mjs';
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
@@ -15,7 +16,7 @@ export function createToolset(options) {
   const extra = [stop, ...(options.inbox?.enabled ? controlTools({ inbox: options.inbox, waitMs: options.controlWaitMs ?? 20000 }) : [])];
   const own = name => extra.find(d => d.name === name);
   return {
-    list: () => [...base.list(), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY }))],
+    list: () => [...base.list().map(withRoutineActions), ...extra.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: annotations || READ_ONLY }))],
     has: name => base.has(name) || !!own(name),
     async call(name, args = {}) {
       const def = own(name);

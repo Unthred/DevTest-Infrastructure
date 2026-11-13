@@ -5,8 +5,12 @@
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ESC[c]);
 
+// Issue #1157: close_superseded takes one input, the superseding numbers.
+const input = c => (c.input === 'superseded_by'
+  ? '<input class="decision-input" type="text" name="superseded_by" required maxlength="60" placeholder="superseded by, e.g. 12, 13" aria-label="Superseded by (issue or pull request numbers)">'
+  : '');
 const control = (id, c, anchor) => `<form method="post" action="/decision" class="decision-form"><input type="hidden" name="card" value="${esc(id)}">`
-  + `<input type="hidden" name="control" value="${esc(c.action)}"><input type="hidden" name="back" value="${esc(anchor)}">`
+  + `<input type="hidden" name="control" value="${esc(c.action)}"><input type="hidden" name="back" value="${esc(anchor)}">${input(c)}`
   + `<button class="btn decision-control" type="submit" title="${esc(c.does)}">${esc(c.label)}</button></form>`;
 
 const status = (pending, controls) => {
