@@ -26,6 +26,14 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
   const rowIds = () => page.locator('tr[data-job]').evaluateAll(rs => rs.map(r => r.dataset.job));
   const nav = action => Promise.all([page.waitForNavigation({ waitUntil: 'networkidle' }), action()]);
+  // A real tap (phone) or click (desktop) at the middle of the element: the row opens its panel from any cell. The locator click is not used here
+  // because its hit test mis-reports a neighbour as covering the target in the stacked phone layout, where nothing overlaps (a mouse press and a touch tap at the same point work).
+  const tap = async loc => {
+    await loc.scrollIntoViewIfNeeded();
+    const b = await loc.boundingBox();
+    const [x, y] = [b.x + b.width / 2, b.y + b.height / 2];
+    if (profile.startsWith('phone')) await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
+  };
   const total = async n => (await page.locator(`[data-total="${n}"]`).textContent()).replace(/\s+/g, ' ').trim();
 
   await page.goto(url('/work'), { waitUntil: 'networkidle' });
@@ -43,7 +51,7 @@ try {
   check('the totals row shows the filtered set', (await total('Jobs')).endsWith('1') && /3,427,984/.test(await total('Wasted tokens')) && /£1\.21/.test(await total('Cost')) && /100%/.test(await total('Share wasted')),
     JSON.stringify([await total('Jobs'), await total('Tokens'), await total('Cost'), await total('Wasted tokens'), await total('Share wasted')]));
 
-  await nav(() => page.locator(`tr[data-job="${REBASE}"] td.c-kind`).click());
+  await nav(() => tap(page.locator(`tr[data-job="${REBASE}"] td.c-kind`)));
   const panel = page.locator(`[data-job-panel="${REBASE}"]`);
   check('clicking the row opens the side panel of 60b46719', await panel.count() === 1);
   const same = await panel.locator('[data-same-ref]').evaluateAll(l => l.map(x => x.dataset.sameRef));
@@ -52,7 +60,7 @@ try {
 
   // Columns: hide Model, resize Cause with the keyboard, and both survive a reload.
   await page.locator('.jobs-cols summary').click();
-  await page.locator('[data-col-toggle="model"]').uncheck();
+  await tap(page.locator('[data-col-toggle="model"]'));
   check('hiding Model hides its header and cells', !(await page.locator('th.c-model').isVisible()) && !(await page.locator('td.c-model').first().isVisible()));
   const grip = page.locator('[data-grip="cause"]');
   await grip.focus();
@@ -63,7 +71,7 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   check('the hidden column stays hidden after a reload', !(await page.locator('th.c-model').isVisible()));
   await page.locator('.jobs-cols summary').click();
-  await page.locator('[data-col-toggle="model"]').check();
+  await tap(page.locator('[data-col-toggle="model"]'));
 
   // Saved view: save the blocked, by cause view, leave, come back to the bare Jobs address and find it again.
   await page.locator('[data-jobs-views] input[name=name]').fill('Blocked by cause');

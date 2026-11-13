@@ -8,9 +8,14 @@ const MET = { true: 'Met', false: 'Not met' };
 
 const row = (label, value) => `<dt>${label}</dt><dd>${value}</dd>`;
 
-// The Needs you cards that name this job: their controls (resume, stop, close) are the shared decision card controls, posted to /decision.
+// The id of the retry-cap card for this job's kind and item: robust.mjs cappedItems() makes it from the "<kind>:<ref>" key.
+const retryCapId = job => (job.ref == null ? null : `retrycap-${`${job.kind}:${job.ref}`.replace(/[^A-Za-z0-9]/g, '-')}`);
+
+// The Needs you cards that name this job (its own cards, and the retry-cap card of its kind and item, whose control is retry): their controls
+// (resume, stop, close, clear retry cap) are the shared decision card controls, posted to /decision.
 function actions(job, view, h) {
-  const items = (view.panels?.needsYou || []).filter(a => JOB_CARD_ID.exec(String(a.id))?.[1] === job.id && a.card);
+  const named = a => JOB_CARD_ID.exec(String(a.id))?.[1] === job.id || (retryCapId(job) !== null && a.id === retryCapId(job));
+  const items = (view.panels?.needsYou || []).filter(a => named(a) && a.card);
   if (!items.length) return '<p class="sub" data-job-actions>No action applies to this job now: it is not waiting on a decision.</p>';
   return `<div data-job-actions>${items.map(a => `<div class="job-action">${decisionHtml(a, `job-act-${h.esc(a.id)}`)}</div>`).join('')}</div>`;
 }

@@ -235,6 +235,18 @@ test('the panel offers the shared decision card controls of this job and nothing
   assert.match(none, /No action applies to this job now/);
 });
 
+test('the panel offers the retry-cap card of the job\'s kind and item as its retry control', async () => {
+  const cap = { id: 'retrycap-rebase-1180', text: 'Foreman stopped the rebase of PR #1180 after repeated attempts.', severity: 'action', ref: { kind: 'pull', n: 1180 } };
+  const wrongItem = { id: 'retrycap-rebase-30', text: 'The rebase of PR #30 is stopped.', ref: { kind: 'pull', n: 30 } };
+  const view = await fixtureView({ needsYou: [cap, wrongItem].map(a => ({ ...a, card: decisionCard(a, {}) })) });
+  const panel = (await render(`view=jobs&job=${REBASE}`, view)).html;
+  const shown = panel.slice(panel.indexOf('data-job-panel='));
+  assert.match(shown, /name="control" value="clear_retry_cap"/);
+  assert.ok(!shown.includes('PR #30 is stopped'), 'the card of another item is not shown');
+  const review = (await render(`view=jobs&job=${REVIEW}`, view)).html;
+  assert.match(review, /No action applies to this job now/, 'a review job has another kind, so the rebase card does not apply');
+});
+
 test('an unknown job id and no selection both give a plain panel', async () => {
   assert.match((await render('view=jobs&job=deadbeef')).html, /No such job/);
   assert.match((await render('view=jobs')).html, /No job selected/);
