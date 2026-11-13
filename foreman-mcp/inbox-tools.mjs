@@ -24,6 +24,7 @@ const PROPOSAL_SCHEMA = {
     prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' },
     body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' },
     why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' },
+    effect: { type: 'string', enum: ['read_only', 'report_only'], description: 'kind prompt, optional: declare that the prompt only reads or only reports and never changes queue order or config, so it does not hold implement picks. The homeowner sees the declaration on the approval card' },
   },
   required: ['kind', 'title'],
   additionalProperties: false,

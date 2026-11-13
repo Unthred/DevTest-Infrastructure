@@ -35,7 +35,11 @@ const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
+// Issue #1238: a prompt may declare that it only reads or only reports. Such a prompt never changes queue order or config, so it never holds
+// implement picks. An absent effect means it may change them.
+export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
+FIELDS.prompt.push('effect');
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -85,8 +89,9 @@ export function validateItem(raw, { internal = false } = {}) {
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && k === 'why') continue;
+    if (v === undefined && (k === 'why' || k === 'effect')) continue;
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
+    if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
     if (raw.kind === 'host_value' && k === 'value') continue;   // checked against its key's exact shape below; the card must show it as it is
@@ -209,6 +214,12 @@ export function loadItem(inboxDir, id) {
   return v.ok ? { ok: true, item: v.item, status: s } : { ok: false, reason: v.reason };
 }
 
+// Issue #1238: what the card tells the homeowner about the order guard before they approve.
+const promptWill = it => 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' + effectNote(it);
+const effectNote = it => (PROMPT_EFFECTS.includes(it.effect)
+  ? ` The proposer declares it ${it.effect === 'read_only' ? 'read only' : 'report only'}: it does not hold new implement work back while it waits.`
+  : ' It may change queue order or config, so new implement work waits for it.');
+
 // Cards for the dashboard: pending items with exactly what will happen. Text is redacted again for display (defence in depth).
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
@@ -216,7 +227,7 @@ export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {
     if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
-      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
       text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   }).filter(card => (!kind || card.kind === kind) && (!state || card.state === state) && matchesInboxSearch(card, query));
 }
