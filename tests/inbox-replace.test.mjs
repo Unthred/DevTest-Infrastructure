@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import * as inbox from '../supervisor/inbox.mjs';
 import { createInbox } from '../foreman-mcp/inbox.mjs';
+import { resolveAfter } from '../foreman-mcp/draft-after.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { inboxToolDefs } from '../foreman-mcp/inbox-tools.mjs';
@@ -253,4 +254,20 @@ test('the withdraw is applied when the control item is picked up, with no timer:
   assert.equal(w.state(a).state, 'withdrawn');
   assert.equal(w.state(sent.id).state, 'done');
   assert.equal(inbox.pendingCards(w.dir).length, 0);
+});
+
+test('a withdrawn record is kept past keepDays while its replacement is pending, so the dependent still follows the link', async t => {
+  const w = world(t);
+  const motion = w.submit(MOTION);
+  const styles = w.submit(STYLES);
+  const marble = w.submit({ ...MARBLE, after: [styles] });
+  const copy = w.replace(styles, { ...STYLES, after: [motion] }).id;
+  inbox.scan(w.dir, 1);
+  const later = 15 * 86400000;
+  inbox.scan(w.dir, later);
+  assert.equal(w.state(styles).state, 'withdrawn');
+  assert.equal(w.state(copy).state, 'pending');
+  const resolved = resolveAfter(w.dir, marble, [styles]);
+  assert.equal(resolved.ok, true);
+  assert.deepEqual(resolved.ids, [copy]);
 });

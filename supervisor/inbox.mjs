@@ -222,10 +222,23 @@ function sweepFinished(inboxDir, now) {
     try { fs.unlinkSync(path.join(dirs(inboxDir).items, `${s.id}.json`)); } catch { /* none */ }
   }
 }
+// A withdrawn record is the only place a draft's link to its replacement is kept (issue #1316), so it stays while that replacement chain is live.
+function replacementIsLive(byId, status) {
+  const seen = new Set();
+  let cur = status;
+  while (cur && cur.state === 'withdrawn' && cur.replacedBy && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = byId.get(cur.replacedBy);
+  }
+  return Boolean(cur) && cur !== status && LIVE.includes(cur.state);
+}
 function prune(inboxDir, now) {
   const d = dirs(inboxDir);
-  for (const s of allStatuses(inboxDir)) {
+  const all = allStatuses(inboxDir);
+  const byId = new Map(all.map(s => [s.id, s]));
+  for (const s of all) {
     if (LIVE.includes(s.state) || !(now - (s.updatedAt || 0) > LIMITS.keepDays * 86400000)) continue;
+    if (replacementIsLive(byId, s)) continue;
     for (const f of [path.join(d.items, `${s.id}.json`), path.join(d.status, `${s.id}.json`)]) { try { fs.unlinkSync(f); } catch { /* already gone */ } }
   }
 }
