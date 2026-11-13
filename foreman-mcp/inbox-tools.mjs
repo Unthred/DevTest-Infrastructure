@@ -24,6 +24,7 @@ const PROPOSAL_SCHEMA = {
     prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' },
     body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' },
     why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' },
+    after: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: '^([a-f0-9]{8}|[a-f0-9]{32})$' }, description: 'kind issue_draft, optional: ids (8 or 32 characters, as foreman_propose returns them) of earlier issue drafts in this Inbox to post this one after. Foreman posts this draft only once all of them are posted as issues and writes their issue numbers into the Depends on line of the body; until then it waits and its status says which draft. If one of them is rejected, refused or fails, this draft fails and nothing is posted. Refused when it is not a list of 1 to 10 well formed ids, names this draft or an id that is not a known issue draft.' },
     effect: { type: 'string', enum: ['read_only', 'report_only'], description: 'kind prompt, optional: declare that the prompt only reads or only reports and never changes queue order or config, so it does not hold implement picks. The homeowner sees the declaration on the approval card' },
   },
   required: ['kind', 'title'],

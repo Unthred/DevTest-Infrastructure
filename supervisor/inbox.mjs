@@ -10,6 +10,7 @@ import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
+import { afterFormatRefusal, afterLabels, resolveAfter } from '../foreman-mcp/draft-after.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
@@ -41,6 +42,7 @@ export const ID_RE = /^[a-f0-9]{32}$/;
 export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 FIELDS.prompt.push('effect');
+FIELDS.issue_draft.push('after');   // issue #1259
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -90,7 +92,8 @@ export function validateItem(raw, { internal = false } = {}) {
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && (k === 'why' || k === 'effect')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
@@ -174,6 +177,8 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
     let raw; try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { refuse('not valid JSON'); continue; }
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
+    const chain = v.item.after ? resolveAfter(inboxDir, id, v.item.after) : { ok: true };   // issue #1259: the named drafts must be known issue drafts
+    if (!chain.ok) { setStatus(inboxDir, id, { state: 'refused', reason: chain.reason, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: chain.reason }, now); picked++; continue; }
     if (v.item.kind === 'control') {   // issue #1115: no card and no pending slot; the tick runs it and records who, why and the result
       setStatus(inboxDir, id, { state: 'approved', kind: 'control', hash, createdAt: now, title: v.item.title, control: { action: v.item.action, target: v.item.target, reason: v.item.reason, by: 'overseer' } }, now);
       audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
@@ -222,6 +227,7 @@ const effectNote = it => (PROMPT_EFFECTS.includes(it.effect)
   ? ` The proposer declares it ${it.effect === 'read_only' ? 'read only' : 'report only'}: it does not hold new implement work back while it waits.`
   : ' It may change queue order or config, so new implement work waits for it.');
 
+const chainNote = (inboxDir, it) => (it.after ? ` It waits for the earlier drafts: ${afterLabels(inboxDir, it.after).join('; ')}; their issue numbers are written into its prerequisite line.` : '');
 // Cards for the dashboard: pending items with exactly what will happen. Text is redacted again for display (defence in depth).
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
@@ -229,7 +235,8 @@ export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {
     if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
     return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
-      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+      waitsFor: it.after ? afterLabels(inboxDir, it.after) : undefined,
+      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.' + chainNote(inboxDir, it),
       text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
   }).filter(card => (!kind || card.kind === kind) && (!state || card.state === state) && matchesInboxSearch(card, query));
 }
