@@ -189,11 +189,14 @@ test('parseIssues reads commas and spaces, drops repeats and refuses anything el
   assert.equal(parseIssues(''), null);
 });
 
-test('the server keeps answering while a sweep is recorded: the real async client with a gh that takes 20 ms a call, 10 issues, no blocked timer', async t => {
+test('the server keeps answering while a sweep is recorded: the real async client with a gh that takes 20 ms a call, 10 issues, a second request answered first', async t => {
   const issues = Array.from({ length: 10 }, (_, k) => dropped(2000 + k));
   const calls = [];
+  let started;
+  const sweepStarted = new Promise(resolve => { started = resolve; });
   const gh = async (args, input) => {
     calls.push(args.slice(0, 2).join(' '));
+    started();
     await new Promise(resolve => setTimeout(resolve, 20));
     if (args[1] === 'view' && args.includes('comments')) return JSON.stringify({ comments: [] });
     if (args[1] === 'view') return JSON.stringify(issues.find(i => String(i.number) === args[2]));
@@ -201,14 +204,15 @@ test('the server keeps answering while a sweep is recorded: the real async clien
     return '';
   };
   const s = await serve(t, issues, { client: asyncGithubClient({ repository: 'o/r' }, gh) });
-  let longest = 0;
-  let last = Date.now();
-  const watch = setInterval(() => { const n = Date.now(); longest = Math.max(longest, n - last); last = n; }, 10);
-  const r = await s.close(issues.map(i => i.number).join(' '));
-  clearInterval(watch);
+  // By order, not by milliseconds (issue #1321): a request sent while the sweep is in flight must be answered before the sweep is.
+  const order = [];
+  const sweep = s.close(issues.map(i => i.number).join(' ')).then(r => { order.push('sweep'); return r; });
+  await sweepStarted;
+  const second = await s.get('/api/view.json').then(r => { order.push('second request'); return r; });
+  const r = await sweep;
+  assert.equal(second.status, 200);
+  assert.deepEqual(order, ['second request', 'sweep'], 'the second request was answered while the sweep was still running');
   assert.equal(r.body.outcome, 'applied');
   assert.equal(calls.length, 30);
-  // A synchronous client would block for the whole 600 ms of gh time; the bound sits well below that but above shared-runner scheduling jitter.
-  assert.ok(longest < 400, `the event loop was blocked for ${longest} ms`);
   assert.deepEqual(await s.needsYou(), []);
 });
