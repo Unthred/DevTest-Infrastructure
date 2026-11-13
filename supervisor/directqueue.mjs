@@ -22,6 +22,10 @@ export function shape(dq, list, agent = null) {
   return rows.map(r => r.n);
 }
 
+export const assignedTo = (dq, view, agent) => {
+  const open = new Set((view?.issues || []).filter(i => i.state === 'OPEN').map(i => i.number));
+  return Object.entries(dq?.entries || {}).filter(([n, e]) => e.agent === agent && open.has(Number(n))).map(([n]) => Number(n));
+};
 export const rankOf = (queue, n) => queue.indexOf(n) + 1;
 export const without = (queue, n) => queue.filter(x => x !== n);
 
