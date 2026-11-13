@@ -3,6 +3,7 @@
 // pull requests and jobs). Pure: the view in, plain JSON out. The table, the board and the side panel in the browser run on these rows
 // (dashui/worktable.mjs).
 import { formatCost } from './money.mjs';
+import { waitText } from './dependencies.mjs';
 
 const ACTIVE = new Set(['running']);
 const BLOCKED = /^(blocked by|needs the homeowner|stuck:|waiting on|waits:)/;
@@ -74,7 +75,7 @@ export function dependencyWait(view, number) {
   const e = view.dependencies?.issues?.[number];
   if (!e || e.met) return null;
   const refs = e.dependsOn.filter(d => d.state !== 'installed').map(d => d.number);
-  return { refs, reason: `waiting for ${e.reasons.join('; ')}`, since: Number.isFinite(e.since) ? e.since : null };
+  return { refs, reason: waitText(e), since: Number.isFinite(e.since) ? e.since : null };
 }
 
 // Who is working on it: the reviewer while a review job runs or the item waits for review, the implementer otherwise.
