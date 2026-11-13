@@ -15,13 +15,13 @@ function chip(kind, value, label, count, on) {
 const facetRow = (title, chips) => `<div class="wv-facet" role="group" aria-label="Filter by ${esc(title)}">`
   + `<span class="wv-facet-t">${esc(title)}</span>${chips.join('')}</div>`;
 
-function controlsHtml({ state, saved, shown, total }) {
+function controlsHtml({ state, saved, selected, shown, total }) {
   const groups = GROUPS.map(([k, l]) => `<option value="${k}"${state.group === k ? ' selected' : ''}>${esc(l)}</option>`).join('');
   const columns = COLUMNS.map(c => {
     const on = state.hidden.includes(c.key) ? '' : ' checked';
     return `<label class="wv-col"><input type="checkbox" data-col-toggle="${c.key}"${on}> ${esc(c.label)}</label>`;
   }).join('');
-  const views = saved.map(v => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join('');
+  const views = saved.map(v => `<option value="${esc(v.name)}"${v.name === selected ? ' selected' : ''}>${esc(v.name)}</option>`).join('');
   return `<div class="wv-controls"><label>Group by <select data-wv-group>${groups}</select></label>
 <details class="wv-cols"><summary class="btn">Columns</summary><div class="wv-colmenu">${columns}</div></details>
 <label>Saved views <select data-wv-saved aria-label="Saved views"><option value="">Choose a saved view</option>${views}</select></label>
@@ -32,7 +32,7 @@ function controlsHtml({ state, saved, shown, total }) {
 <span class="sub" data-wv-count role="status">${esc(countLine(shown, total))}</span></div>`;
 }
 
-export function filterBarHtml({ state, counts, values, saved, shown, total }) {
+export function filterBarHtml({ state, counts, values, saved, selected, shown, total }) {
   const f = state.filters;
   const states = STATES.map(([k, l]) => chip('state', k, l, counts.state[k] || 0, f.state.includes(k)));
   const agents = values.agent.map(a => chip('agent', a, a, counts.agent[a] || 0, f.agent.includes(a)));
@@ -40,7 +40,7 @@ export function filterBarHtml({ state, counts, values, saved, shown, total }) {
   const search = `<label class="wv-search"><input type="search" class="dl-q" aria-label="Search the queue" data-wv-q `
     + `placeholder="Search ref, title, agent, hold reason" value="${esc(f.q)}" maxlength="200"></label>`;
   return `<div class="wv-tools">${search}${facetRow('state', states)}${facetRow('agent', agents)}${labels.length ? facetRow('label', labels) : ''}`
-    + `${controlsHtml({ state, saved, shown, total })}</div>`;
+    + `${controlsHtml({ state, saved, selected, shown, total })}</div>`;
 }
 
 // ---- table

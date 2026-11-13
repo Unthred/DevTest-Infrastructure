@@ -128,3 +128,10 @@ test('sorting then grouping keeps rows inside their group in sort order', () => 
   const claude = groups.find(g => g.key === 'claude').rows.filter(r => r.rank);
   assert.deepEqual(claude.map(r => r.rank), [...claude.map(r => r.rank)].sort((a, b) => b - a));
 });
+
+test('the chosen saved view stays selected when the filter bar is drawn again, so Delete knows which one', () => {
+  const html = filterBarHtml({ state: defaultState(), counts: facetCounts(data.rows, emptyFilters()), values: facetValues(data.rows),
+    saved: [{ name: 'One', state: defaultState() }, { name: 'Two', state: defaultState() }], selected: 'Two', shown: 1, total: 1 });
+  assert.match(html, /<option value="Two" selected>/);
+  assert.doesNotMatch(html, /<option value="One" selected>/);
+});

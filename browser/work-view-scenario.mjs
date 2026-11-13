@@ -83,6 +83,13 @@ try {
   await page.locator('[data-wv-saved]').selectOption('Held by reason');
   check('choosing the saved view brings the filter and grouping back', (await rowRefs()).length === heldRefs.length && (await page.locator('[data-wv-group]').inputValue()) === 'holdReason');
 
+  check('the chosen saved view stays selected after it is applied', (await page.locator('[data-wv-saved]').inputValue()) === 'Held by reason');
+  await page.locator('[data-wv-delete]').click();
+  check('Delete saved view removes the chosen view', !(await page.locator('[data-wv-saved] option').allTextContents()).includes('Held by reason'));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.locator('.wv-table').waitFor();
+  check('the deleted view stays gone after a reload', !(await page.locator('[data-wv-saved] option').allTextContents()).includes('Held by reason'));
+
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-wv-csv]').click()]);
   const csv = fs.readFileSync(await download.path(), 'utf8');
   check('the CSV download is the current table: header, held rows only, #1169 with its hold reason', download.suggestedFilename() === 'work-queue.csv'

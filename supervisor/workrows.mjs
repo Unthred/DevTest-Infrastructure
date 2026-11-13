@@ -77,6 +77,9 @@ export function dependencyWait(view, number) {
   return { refs, reason: `waiting for ${e.reasons.join('; ')}`, since: Number.isFinite(e.since) ? e.since : null };
 }
 
+// Who is working on it: the reviewer while a review job runs or the item waits for review, the implementer otherwise.
+const roleOf = (jobs, state) => (jobs.some(j => ACTIVE.has(j.status) && j.kind === 'review') || state === 'waiting-review' ? 'reviewer' : 'implementer');
+
 // One row and its detail from what the caller found out about the item. `item` is the issue or pull request, `entries` its queue entries.
 function makeRow(ctx, item, entries, extra) {
   const { view, now, planned, attention, rankOf, rankOfKey } = ctx;
@@ -88,7 +91,7 @@ function makeRow(ctx, item, entries, extra) {
   const held = state === 'held' && hold;
   const row = {
     key, ref: item.ref, kind: item.kind, title: item.title || '', agent: item.agent || null,
-    role: extra.role || (state === 'waiting-review' ? 'reviewer' : 'implementer'), state,
+    role: roleOf(extra.jobs, state), state,
     rank: item.finishedToday ? null : rankOfKey(key), rankOf: item.finishedToday ? null : rankOf,
     waitsOn: extra.wait?.refs || item.waitsOn || [], waitsText: (est?.waits || []).map(w => w.text),
     holdReason: held ? hold.reason : null, holdSince: held ? hold.since : null,
@@ -150,7 +153,7 @@ export function buildWorkRows(view) {
   for (const r of rows) {
     if (r.kind !== 'issue' || r.state !== 'planned' || !OPEN_PR.test(r.reason)) continue;
     const pr = rows.find(x => x.kind === 'pr' && (view.prs || []).find(p => p.number === x.ref)?.issue === r.ref);
-    if (pr) r.state = pr.state;
+    if (pr) { r.state = pr.state; r.role = pr.role; }
   }
   rows.sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9) || a.ref - b.ref);
   return { rows, details, generatedAt: now, tz };

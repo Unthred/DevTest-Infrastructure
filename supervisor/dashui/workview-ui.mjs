@@ -61,6 +61,7 @@ export function initWorkView(root, { local = localStorage, session = sessionStor
   let state = sanitizeState(read(local, STATE_KEY) || defaultState());
   let saved = sanitizeSaved(read(local, SAVED_KEY));
   let openKey = read(session, OPEN_KEY);
+  let selectedView = '';   // the saved view chosen last, kept selected across redraws so Delete knows which one
   const rowOf = key => data.rows.find(r => r.key === key);
   const persist = () => write(local, STATE_KEY, state);
   const visibleRows = () => sortRows(filterRows(data.rows, state.filters), state.sortKey, state.sortDir);
@@ -73,7 +74,8 @@ export function initWorkView(root, { local = localStorage, session = sessionStor
     if (state.view === 'cards') { body.innerHTML = ''; return; }
     const rows = visibleRows();
     const bar = filterBarHtml({
-      state, counts: facetCounts(data.rows, state.filters), values: facetValues(data.rows), saved, shown: rows.length, total: data.rows.length
+      state, counts: facetCounts(data.rows, state.filters), values: facetValues(data.rows), saved,
+      selected: selectedView, shown: rows.length, total: data.rows.length
     });
     const main = state.view === 'board'
       ? boardHtml(boardColumns(rows))
@@ -121,8 +123,10 @@ export function initWorkView(root, { local = localStorage, session = sessionStor
       if (name.trim()) { saved = saveView(saved, name, state); remember(); }
     }],
     ['[data-wv-delete]', () => {
-      const name = body.querySelector('[data-wv-saved]').value;
-      if (name) { saved = deleteView(saved, name); remember(); }
+      if (!selectedView) return;
+      saved = deleteView(saved, selectedView);
+      selectedView = '';
+      remember();
     }],
     ['[data-row]', (el, e) => { if (!e.target.closest('a')) showPanel(el.dataset.row); }]
   ];
@@ -143,8 +147,9 @@ export function initWorkView(root, { local = localStorage, session = sessionStor
     if (t.matches('[data-wv-group]')) change(() => { state.group = t.value; });
     else if (t.matches('[data-col-toggle]')) {
       change(() => { state.hidden = t.checked ? state.hidden.filter(k => k !== t.dataset.colToggle) : [...state.hidden, t.dataset.colToggle]; });
-    } else if (t.matches('[data-wv-saved]') && t.value) {
-      change(() => { state = sanitizeState(saved.find(s => s.name === t.value)?.state ?? state); });
+    } else if (t.matches('[data-wv-saved]')) {
+      selectedView = t.value;
+      if (t.value) change(() => { state = sanitizeState(saved.find(s => s.name === t.value)?.state ?? state); });
     }
   });
   body.addEventListener('pointerdown', e => startResize(e, (key, width) => {

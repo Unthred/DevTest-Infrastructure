@@ -112,3 +112,20 @@ test('dependencyWait is null when all prerequisites are met or there is no recor
   assert.deepEqual(dependencyWait({ dependencies: { issues: { 5: { met: false, dependsOn: [{ number: 4, state: 'merged_not_installed' }], reasons: ['#4 merged but not installed yet'], since: 7 } } } }, 5),
     { refs: [4], reason: 'waiting for #4 merged but not installed yet', since: 7 });
 });
+
+test('the role follows the job: a running review makes the pull request row reviewer, an implementing issue stays implementer', async () => {
+  const data = await built(v => {
+    const p = v.prs.find(x => x.number === 1178);
+    p.jobs = [...p.jobs, { fullId: 'rv-1', id: 'rv-1', kind: 'review', status: 'running', agent: 'claude', ref: 1178 }];
+  });
+  assert.equal(rowOf(data, 'pr:1178').state, 'running');
+  assert.equal(rowOf(data, 'pr:1178').role, 'reviewer');
+  assert.equal(rowOf(data, 'issue:1155').role, 'implementer');
+});
+
+test('an issue that takes its pull request\'s waiting-review state takes its reviewer role too', async () => {
+  const data = await built();
+  for (const r of data.rows.filter(x => x.kind === 'issue' && x.state === 'waiting-review')) {
+    assert.equal(r.role, 'reviewer', `#${r.ref}`);
+  }
+});
