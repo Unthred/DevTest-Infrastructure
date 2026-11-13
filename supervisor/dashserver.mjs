@@ -36,6 +36,7 @@ import { DEFAULT_TEST_SLOTS } from './testslots.mjs';
 import nodePath from 'node:path';
 import { defaultRegistry } from './core.mjs';
 import { probeNow } from './probenow.mjs';
+import { outcomeRedirect } from './probeoutcome.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
@@ -335,7 +336,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         const out = await probe({ root, registry, config: source(), agent, now: at });
         if (out.error === 'overage-risk' || out.error === 'busy') releaseCooldown(root, `probe:${agent}`, at);   // nothing was spent
         store.invalidate();   // issue #467: the page after the probe must show its reading
-        return send(303, 'text/plain; charset=utf-8', out.ok ? 'refreshed\n' : 'no reading\n', { location: `/usage?probe=${out.ok ? 'ok' : 'failed'}` });
+        const to = outcomeRedirect(agent, out); return send(303, 'text/plain; charset=utf-8', to.body, { location: to.location });
       } catch (error) {
         releaseCooldown(root, `probe:${agent}`, at);
         return send(error instanceof SupervisorError ? 404 : 500, 'text/plain; charset=utf-8', error instanceof SupervisorError ? 'unknown agent' : 'probe failed');

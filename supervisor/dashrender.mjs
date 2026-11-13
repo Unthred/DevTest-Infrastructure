@@ -20,6 +20,7 @@ import { meaningfulRange } from './estimate.mjs';
 import { CLIENT_POLL_MS, readingStatus } from './procsample.mjs';
 import { resetsCard } from './resetscard.mjs';
 import { allowanceBody as allowanceCard } from './allowancecard.mjs';
+import { outcomeFromQuery, outcomeNote } from './probeoutcome.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -748,9 +749,14 @@ function activityPage(view, query, path) {
 }
 // One agent's allowance card (issue #75, supervisor/allowancecard.mjs): the helpers it needs are passed in.
 const allowanceBody = (u, now, name = '') => allowanceCard({ esc, badge, lt, dur, pct, inFuture, ago, empty }, u, now, name);
+// Issue #1330: each agent's allowance card; a refresh just asked for adds the sentence saying what it found, under the card's Refresh allowance button.
+function usageAgentCards(view, query, now) {
+  return Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true,
+    body: budgetBlock(view, name) + allowanceBody(u, now, name) + outcomeNote(outcomeFromQuery(query, name), u, now, { esc, lt, ago }) })).join('');
+}
 function usagePage(view, query, path) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE, now = view.generatedAt;
-  const win = Object.entries(view.usage).map(([name, u]) => card({ id: `u-${name}`, title: `Allowance: ${name}`, span: 6, movable: true, body: budgetBlock(view, name) + allowanceBody(u, now, name) })).join('');
+  const win = usageAgentCards(view, query, now);
   const chart = card({ id: 'u-chart', title: `Allowance used over time (${range})`, span: 12, expandable: true, tools: rangeSelector(path, query, range), movable: true, body: lineChart({ series: allowanceSeries(view, range), resets: allResets(view, range), expected: allExpected(view), now, range, title: 'allowance used over time' }) });
   const toks = view.graphs.tokensPerPr.slice(-12).map(m => ({ label: `PR #${m.pr}${m.agent ? ' ' + m.agent : ''}`, value: m.tokens, series: m.agent || 'unknown', colour: colourOf(m.agent) }));
   const tokChart = card({ id: 'u-tok', title: 'Tokens per merged PR', span: 12, expandable: true, movable: true, body: barChart({ rows: toks, title: 'tokens per merged PR', emptyTitle: 'No merged PR has recorded tokens' }) });
