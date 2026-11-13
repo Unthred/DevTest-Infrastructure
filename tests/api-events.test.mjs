@@ -224,11 +224,16 @@ test('HEAD answers 200 with no body and holds no stream open', async t => {
 
 test('valid: heartbeats keep to the 15 second limit (here 120 ms) even while other events are sent between them', async t => {
   const { open, root } = await serve(t);
+  const openedAt = Date.now();
   const s = await open();
   for (let i = 0; i < 12; i++) { append(root, { type: 'model_changed', models: ['meta'] }); await sleep(40); }
+  // Events must not reset the heartbeat timer: several beats arrive during the 480 ms burst itself (about 4 expected).
+  assert.ok(ofType(s, 'heartbeat').length >= 2, 'heartbeats were sent during the burst of other events');
   await until(() => ofType(s, 'heartbeat').length >= 4);
   const times = ofType(s, 'heartbeat').map(e => Date.parse(e.data.at));
   assert.ok(times.length >= 4, 'several heartbeats arrived');
+  const firstBeat = Date.parse(ofType(s, 'heartbeat')[0].data.at) - openedAt;
+  assert.ok(firstBeat <= 300, `first heartbeat ${firstBeat} ms after opening is within the limit`);
   // 60 ms of allowance for timer jitter under load (a 124 ms gap failed once in a full run); a missed beat would be 240 ms.
-  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 180,`gap ${times[i] - times[i - 1]} ms is within the limit`);
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] - times[i - 1] <= 180, `gap ${times[i] - times[i - 1]} ms is within the limit`);
 });
