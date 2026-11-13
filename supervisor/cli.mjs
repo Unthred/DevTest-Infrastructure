@@ -38,6 +38,7 @@ import { ghRunner } from './github.mjs';
 import { updateIndex } from './issueindex.mjs';
 import { isStatusIssue } from './statusissue.mjs';
 import { redact } from './redact.mjs';
+import { gitFailure, worktreeForBranch, refuseStuckRebase } from './worktreelookup.mjs';
 import { saveWork } from './savework.mjs';
 import { admissionProbe } from './admissionprobe.mjs';
 import { probeNow } from './probenow.mjs';
@@ -146,8 +147,12 @@ function realJobs(root, registry) {
     create: async spec => { const job = await createJob(root, spec, registry); startWorker(root, job.id, registry); return job; }
   };
 }
-function realGit(repoPath) {
-  const git = (...args) => { const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 }); if (r.status !== 0) throw new SupervisorError(`git ${args[0]} failed`); return r.stdout.trim(); };
+export function realGit(repoPath) {
+  const git = (...args) => {
+    const r = spawnSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', timeout: 60000 });
+    if (r.status !== 0) throw new SupervisorError(gitFailure(args[0], r));
+    return r.stdout.trim();
+  };
   return {
     // range-diff equality (issue #79); refs are fetched first so both heads and the base are present
     rangeEqual: async ({ base, oldHead, newHead }) => { git('fetch', '--quiet', 'origin'); return rangeEqual({ repoPath, base, oldHead, newHead }); },
@@ -172,8 +177,9 @@ function realGit(repoPath) {
     },
     // issue #995: remove a worktree whose work is already saved, and its local branch (the work is on a saved/ branch)
     removeWorktree: async ({ worktree, branch }) => { git('worktree', 'remove', '--force', worktree); if (branch) spawnSync('git', ['-C', repoPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 60000 }); },
-    worktreeFor: async branch => { const out = git('worktree', 'list', '--porcelain').split('\n\n'); const hit = out.find(b => b.includes(`branch refs/heads/${branch}`)); return hit ? hit.split('\n')[0].replace('worktree ', '') : null; },
+    worktreeFor: async branch => worktreeForBranch(git('worktree', 'list', '--porcelain'), branch),
     ensureWorktree: async ({ path: wt, branch, base }) => {
+      refuseStuckRebase(git('worktree', 'list', '--porcelain'), branch);
       if (fs.existsSync(wt)) {
         // An existing directory is reused only if it is a linked worktree of THIS repository (resolved from its own absolute path).
         let common = null;
@@ -719,4 +725,7 @@ async function main() {
   if (command === 'release') { releaseLeases(root, job); print(job); return; }
   throw new SupervisorError('unknown command');
 }
-main().catch(error => { console.error(`ai-supervisor: ${error instanceof SupervisorError ? error.message : error.message}`); process.exitCode = 2; });
+// A test imports this module for realGit without running the command line (issue #1276).
+if (!process.env.AI_SUPERVISOR_IMPORT_ONLY) {
+  main().catch(error => { console.error(`ai-supervisor: ${error.message}`); process.exitCode = 2; });
+}
