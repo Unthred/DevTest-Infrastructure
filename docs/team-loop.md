@@ -104,7 +104,7 @@ The team loop then, once per issue:
 
 - **Approve split** files the items once through `acceptSplit` (the marker makes a repeat or a crash half way safe), checks every item body with the dependency parser first (a refusal files nothing), writes a `Depends on:` line only for a prerequisite item, links the items to the PR in each body and in the `Split accepted` comment, and queues them for the author. The PR stays parked and its branch is kept.
 - **Reject split** files nothing, leaves the PR parked and shows the standing options (wait for an allowance reset, change the approach, or fix it by hand).
-- Once every filed item has merged, Foreman closes the PR as superseded (`closePull`). If the GitHub App is not allowed to close it, the card names the missing permission (Contents write) as a homeowner step instead of failing silently, and the close is retried on the next pass.
+- Once every filed item has merged, the record is marked `itemsMerged` and the card asks the homeowner to close the PR as superseded with the **Close as superseded** action of issue #1157 (it saves the branch under `saved/`, refuses when a superseding item is missing and records who, when and why). Foreman closes nothing itself, so the branch is kept while the PR is parked; the PR page shows the same. Until #1157 is merged that action does not exist, and the PR waits parked.
 
 The tests are `tests/split-stuck.test.mjs` (the real tick and the real accept path over fake GitHub and jobs, including the real data of PR 1139) and the browser check `tests/splitstuck-browser.mjs` (desktop 1280 and phone 390).
 

@@ -159,30 +159,25 @@ test('rejection files nothing, leaves the PR parked with its standing options, a
   await w.team.tick(); assert.equal(w.calls.created.length, 1, 'no second planning job or card after a rejection');
 });
 
-test('the PR is closed as superseded only after every item has merged, and its branch is kept', async t => {
+test('merged items mark the parked PR ready to close and Foreman does not close it', async t => {
   const w = await proposed(t);
   await click(w, 'approve_split');
-  await w.team.tick(); assert.deepEqual(w.calls.closed, []);
+  await w.team.tick();
   w.team.delivered = new Set([2000]);
-  await w.team.notifyFixLimit({ notified: [], skipped: [], actions: [] }); assert.deepEqual(w.calls.closed, [], 'one of two items merged is not enough');
-  w.team.delivered = new Set([2000, 2001]);
   await w.team.notifyFixLimit({ notified: [], skipped: [], actions: [] });
-  assert.equal(w.calls.closed.length, 1); assert.match(w.calls.closed[0][1], /Superseded by #2000, #2001/); assert.match(w.calls.closed[0][1], /branch is kept/);
-  assert.equal(w.team.s.stuckSplits[11].status, 'closed');
-  await w.team.notifyFixLimit({ notified: [], skipped: [], actions: [] }); assert.equal(w.calls.closed.length, 1);
-});
-
-test('a close the App is not permitted to make names the missing permission as a homeowner step', async t => {
-  const w = await proposed(t);
-  await click(w, 'approve_split'); w.team.delivered = new Set([2000, 2001]);
-  w.gh.failClose = 'gh pr close failed: Resource not accessible by integration';
+  assert.notEqual(w.team.s.stuckSplits[11].itemsMerged, true, 'one of two items merged is not enough');
+  w.team.delivered = new Set([2000, 2001]);
   const report = { notified: [], skipped: [], actions: [] };
   await w.team.notifyFixLimit(report);
   const rec = w.team.s.stuckSplits[11];
-  assert.equal(rec.status, 'filed'); assert.match(rec.closeBlocked, /Contents write/); assert.match(rec.closeBlocked, /homeowner step/);
+  assert.equal(rec.itemsMerged, true); assert.equal(rec.status, 'filed'); assert.ok(report.notified.some(x => x.splitItemsMerged));
+  assert.equal(typeof w.gh.closePull, 'undefined', 'Foreman has no close of its own; #1157 owns the close');
+  assert.ok(w.gh.pulls.some(p => p.number === 11), 'the PR is still open and parked');
   const [card] = withStuckSplits([], { state: w.team.s, names, open: new Set([11]), repo: 'o/r' });
-  assert.match(card.tried, /Contents write/); assert.equal(card.severity, 'action');
-  w.gh.failClose = null; await w.team.notifyFixLimit(report); assert.equal(w.team.s.stuckSplits[11].status, 'closed');
+  assert.match(card.tried, /closed as superseded/); assert.match(card.action, /#1157/); assert.equal(card.severity, 'action');
+  const again = { notified: [], skipped: [], actions: [] };
+  await w.team.notifyFixLimit(again); assert.deepEqual(again.notified, [], 'noted once');
+  w.gh.pulls = []; await w.team.notifyFixLimit(again); assert.equal(w.team.s.stuckSplits[11].status, 'closed');
 });
 
 // The real data of PR 1139 (4 fix rounds, source issue 1127), with the file lists of the ten pull requests that were open beside it on 12 Nov 2026.

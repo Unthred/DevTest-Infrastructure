@@ -19,7 +19,7 @@ export function splitFacts(state, n) {
   const rec = recordOf(state, n);
   if (!rec) return null;
   return { code: rec.status, status: STATUS[rec.status] ?? rec.status, parked: rec.parked === true, parkError: rec.parkError ?? null, reason: rec.reason, error: rec.error ?? null,
-    closeBlocked: rec.closeBlocked ?? null, items: itemsOf(rec) };
+    itemsMerged: rec.itemsMerged === true, items: itemsOf(rec) };
 }
 
 const list = f => f.items.map((x, i) => `${i + 1}. ${x.number ? `#${x.number} ` : ''}${x.title} (${x.files.join(', ')})`).join('; ');
@@ -30,9 +30,12 @@ function cardFor(f, name) {
   const tail = ` Standing options: ${STANDING_OPTIONS}.`;
   if (f.code === 'proposed') return { text: `${name} is parked and a split into ${f.items.length} items is proposed`, tried: `${parkedText(f)} Proposed items: ${list(f)}. Nothing is filed until you approve.`,
     action: 'Approve split files these items and links them to the PR. Reject split files nothing and leaves the PR parked.' };
-  if (f.code === 'filed') return { text: `${name} is parked until its ${f.items.length} split items have merged`, homeowner: !!f.closeBlocked,
-    tried: `${parkedText(f)} Items: ${list(f)}. Foreman closes the PR as superseded after every item has merged and keeps its branch.${f.closeBlocked ? ` ${f.closeBlocked}.` : ''}`,
-    action: f.closeBlocked ? 'Grant the GitHub App Contents write (a homeowner step), then close the PR as superseded.' : 'Nothing to decide now; the items are queued.' };
+  if (f.code === 'filed' && f.itemsMerged) return { text: `${name} is parked and all ${f.items.length} split items have merged`, homeowner: true,
+    tried: `${parkedText(f)} Items: ${list(f)}. Every item has merged, so the PR can be closed as superseded. The branch is kept until then.`,
+    action: 'Close the PR as superseded with the Close as superseded action (issue #1157), which saves the branch under saved/ first.' };
+  if (f.code === 'filed') return { text: `${name} is parked until its ${f.items.length} split items have merged`, homeowner: false,
+    tried: `${parkedText(f)} Items: ${list(f)}. Once every item has merged, this card asks you to close the PR as superseded. The branch is kept.`,
+    action: 'Nothing to decide now; the items are queued.' };
   if (f.code === 'planning') return { text: `${name} is parked; a split into smaller items is being drafted`, homeowner: false, tried: `${parkedText(f)} A read-only planning job reads the issue, the diff, the verdicts and the open PR file lists.`, action: 'Nothing to decide yet.' };
   return { text: `${name} is parked and ${f.code === 'rejected' ? 'its split was rejected' : 'no usable split could be drafted'}`,
     tried: `${parkedText(f)}${f.error ? ` Draft refused: ${f.error}.` : ''}${tail}`, action: `Decide which: ${STANDING_OPTIONS}.` };
@@ -56,6 +59,6 @@ export function withStuckSplits(attention, { state, names, open, repo }) {
 export function splitFactsHtml(f, { esc, issueLink }) {
   if (!f) return '';
   const items = f.items.length ? `<dt>Split items</dt><dd>${f.items.map(x => `${x.number ? `${issueLink(x.number)} ` : ''}${esc(x.title)}`).join('<br>')}</dd>` : '';
-  const blocked = f.closeBlocked ? `<dt>Closing</dt><dd>${esc(f.closeBlocked)}</dd>` : '';
+  const blocked = f.itemsMerged ? '<dt>Closing</dt><dd>every item has merged; close as superseded (issue #1157)</dd>' : '';
   return `<dt>Parked</dt><dd>${f.parked ? 'yes' : 'not yet'}: ${esc(f.reason)}</dd><dt>Split</dt><dd>${esc(f.status)}${f.error ? ` (${esc(f.error)})` : ''}</dd>${items}${blocked}`;
 }

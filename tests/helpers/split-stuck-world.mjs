@@ -21,7 +21,7 @@ export function stuckWorld(t, { pr, others = {}, fixRounds = 4, fix = 4, verdict
   const files = { [pr.number]: pr.files, ...others };
   const gh = {
     pulls: [pull(pr.number, pr.branch, pr.head), ...Object.keys(others).map(n => pull(Number(n), `claude/issue-${n}-x`, String(n % 10).repeat(40)))],
-    issues: [], failClose: null,
+    issues: [],
     listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues, listMergedPulls: async () => [],
     listPullFiles: async n => files[n] || [], pullBody: async () => 'body', board: async () => {},
     comment: async (n, body) => calls.comments.push([n, body]), hasComment: async (n, marker) => calls.comments.some(([x, b]) => x === n && b.includes(marker)),
@@ -29,7 +29,6 @@ export function stuckWorld(t, { pr, others = {}, fixRounds = 4, fix = 4, verdict
     addLabelAsApp: async (n, l) => { calls.labels.push([n, l, 'app']); gh.pulls.find(p => p.number === n)?.labels.push(l); },
     findIssueByMarker: async marker => gh.issues.find(i => i.body?.includes(marker))?.number || null,
     createIssue: async (title, body) => { const number = 2000 + gh.issues.length; gh.issues.push({ number, title, state: 'OPEN', body, labels: [] }); calls.issues.push([number, title, body]); return number; },
-    closePull: async (n, text) => { if (gh.failClose) throw new Error(gh.failClose); calls.closed.push([n, text]); gh.pulls = gh.pulls.filter(p => p.number !== n); },
   };
   const jobs = { seq: 0, states: {}, listActive: async () => [], get: async id => jobs.states[id] || null,
     create: async spec => { const id = (++jobs.seq).toString(16).padStart(32, '0'); calls.created.push(spec); jobs.states[id] = { id, status: 'queued', provider: spec.provider }; return { id }; } };

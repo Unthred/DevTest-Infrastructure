@@ -12,7 +12,6 @@ import { readStuckDraft, itemBody, bodyFault, STANDING_OPTIONS } from './splitst
 
 const HEAD = /^[0-9a-f]{40}$/;
 const PROMPT = fs.readFileSync(new URL('./splitstuck-prompt.txt', import.meta.url), 'utf8');
-const PERMISSION = /resource not accessible|permission|forbidden|\b403\b/i;
 
 const records = team => (team.s.stuckSplits ||= {});
 const agentOf = (team, pr) => Object.entries(team.c.agents).find(([, a]) => typeof pr.headRefName === 'string' && pr.headRefName.startsWith(a.branch_prefix))?.[0] ?? null;
@@ -145,21 +144,13 @@ export async function rejectStuckSplit(team, n) {
   return `PR #${n}: split rejected; nothing filed; the PR stays parked`;
 }
 
-// The parked PR is closed as superseded only after every new item has merged. Its branch is kept (the close does not delete it).
+// The parked PR is closed as superseded only after every new item has merged, and only by the close as superseded action of issue #1157
+// (it saves the branch under saved/, refuses when a superseding item is missing and records who, when and why). This module does not close
+// anything itself: when the last item has merged it marks the record `itemsMerged`, and the card asks the homeowner for that action.
 async function closeWhenMerged(team, n, rec, pr, report) {
-  if (!pr) { rec.status = 'closed'; team.save(); return; }   // closed by someone else, or by an earlier pass that crashed before recording it
-  if (!rec.filed.every(i => team.delivered?.has(i))) return;
-  const text = `Superseded by ${rec.filed.map(i => `#${i}`).join(', ')}, which have all merged; this PR was parked and its split was approved. The branch is kept.`;
-  try { await team.gh.closePull(n, text); } catch (error) {
-    const message = redact(error?.message || error, 200);
-    const blocked = PERMISSION.test(message) ? 'the GitHub App lacks the Contents write permission needed to keep a saved copy of the branch; this is a homeowner step: grant it, then close the PR as superseded' : null;
-    if (rec.closeError !== message) { Object.assign(rec, { closeError: message, closeBlocked: blocked }); team.save(); }
-    (report.skipped ||= []).push({ what: `close superseded PR ${n}`, reason: blocked || message });
-    return;
-  }
-  Object.assign(rec, { status: 'closed', closedAt: team.clock.now() });
-  delete rec.closeError;
-  delete rec.closeBlocked;
+  if (!pr) { rec.status = 'closed'; team.save(); return; }   // closed by the #1157 action, by someone else, or by an earlier pass
+  if (rec.itemsMerged || !rec.filed.every(i => team.delivered?.has(i))) return;
+  Object.assign(rec, { itemsMerged: true, itemsMergedAt: team.clock.now() });
   team.save();
-  (report.notified ||= []).push({ pr: n, splitSuperseded: rec.filed });
+  (report.notified ||= []).push({ pr: n, splitItemsMerged: rec.filed });
 }
