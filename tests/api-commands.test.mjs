@@ -12,6 +12,7 @@ import { validate } from '../supervisor/api/validate.mjs';
 import { hashOf } from '../supervisor/inbox.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 import { readSince } from '../supervisor/api/eventlog.mjs';
+import { parseRequest } from '../supervisor/api/command-request.mjs';
 
 const NOW = Date.UTC(2026, 10, 12, 13, 2, 0);
 const API = new URL('../supervisor/api/', import.meta.url);
@@ -274,4 +275,27 @@ test('invalid: an item edited after it was picked up is refused with item_change
   const r = await s.post('inbox.approve', ask('00000001'));
   assert.deepEqual([r.status, r.body.refusal_code], [409, 'item_changed']);
   assert.equal(statusFile(s.root, 1).state, 'refused', 'the store marks an item whose file changed as refused');
+});
+
+test('valid and invalid: request bodies fit command-request.schema.json exactly when parseRequest accepts them', () => {
+  const fits = body => validate(schemas['command-request.schema.json'], body, schemas).length === 0;
+  const accepted = body => parseRequest(JSON.stringify(body)).request !== undefined;
+  const base = { input: { id: '00000001' }, reason: null, idempotency_key: KEY };
+  const cases = [
+    [base, true],
+    [{ ...base, reason: 'because', dry_run: true }, true],
+    [{ ...base, idempotency_key: 'a'.repeat(64) }, true],
+    [{ input: base.input, reason: null }, false],
+    [{ ...base, idempotency_key: 'short' }, false],
+    [{ ...base, idempotency_key: 'a'.repeat(65) }, false],
+    [{ ...base, idempotency_key: 'bad key!!' }, false],
+    [{ ...base, reason: 7 }, false],
+    [{ ...base, input: [] }, false],
+    [{ ...base, dry_run: 'yes' }, false],
+    [{ ...base, extra: 1 }, false],
+  ];
+  for (const [body, expected] of cases) {
+    assert.equal(fits(body), expected, `schema verdict for ${JSON.stringify(body)}`);
+    assert.equal(accepted(body), expected, `parseRequest verdict for ${JSON.stringify(body)}`);
+  }
 });
