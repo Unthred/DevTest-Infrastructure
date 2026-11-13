@@ -63,3 +63,44 @@ export function openStream(handlers, deps = {}) {
   }, CHECK_MS);
   return { state: () => state, close: () => { source.close(); stopEvery(timer); } };
 }
+
+// Issue #1288: sends one command and returns the parsed reply, applied or refused alike. It never throws and never navigates: a network
+// failure, a missing proof or an answer that is not JSON comes back shaped like a refusal with the code no_answer, so a screen shows one
+// kind of message. The access proof is read from the page's foreman-proof meta element and sent in the x-foreman-proof header.
+const COMMAND_NAME = /^[a-z]+(?:[._][a-z]+)*$/;
+const KEY_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+const refusal = (command, code, text) => ({
+  ok: false, command, outcome: 'refused', audit_id: null, refusal_code: code, refusal_text: text, result: null, undo: null, cursor: null,
+});
+const noAnswer = (command, text) => refusal(command, 'no_answer', text);
+
+export function newIdempotencyKey(random = globalThis.crypto) {
+  const bytes = random.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, byte => KEY_CHARS[byte % KEY_CHARS.length]).join('');
+}
+
+const proofOf = doc => doc?.querySelector?.('meta[name="foreman-proof"]')?.getAttribute('content') || null;
+
+// deps: fetchFn, doc (the page), newKey. Tests pass them; the page uses the defaults.
+export async function sendCommand(name, input, reason = null, dryRun = false, key = null, deps = {}) {
+  if (typeof name !== 'string' || !COMMAND_NAME.test(name)) {
+    return refusal(String(name), 'bad_command_name', 'That is not a command name: use lower case words joined by dots and underscores.');
+  }
+  const proof = proofOf(deps.doc ?? globalThis.document);
+  if (!proof) return noAnswer(name, 'The page has no access proof, so the command was not sent. Reload the page.');
+  const fetchFn = deps.fetchFn ?? globalThis.fetch.bind(globalThis);
+  const body = { input: input ?? {}, reason: reason ?? null, idempotency_key: key ?? (deps.newKey ?? newIdempotencyKey)() };
+  if (dryRun) body.dry_run = true;
+  try {
+    const response = await fetchFn(`${BASE}commands/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'x-foreman-proof': proof },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    const reply = await response.json();
+    return reply && typeof reply === 'object' && typeof reply.ok === 'boolean' ? reply : noAnswer(name, 'The answer was not in the expected form.');
+  } catch {
+    return noAnswer(name, 'No answer came back, so the command may not have been applied. Check the page before trying again.');
+  }
+}
