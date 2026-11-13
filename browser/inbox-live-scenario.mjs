@@ -64,7 +64,10 @@ try {
   await page.evaluate(() => document.activeElement?.blur?.());
   await sleep(9000);
   await control('/__test/add');
-  check('after a search typed over 8 seconds earlier, the new card still arrives', (await visibleWithin('cards', NEW_TITLE) || await visibleWithin('table', NEW_TITLE) || await visibleWithin('compact', NEW_TITLE)));
+  // One wait on whichever pane is shown, so the boundary keeps to the stated 10 seconds overall.
+  const arrived = await page.locator('[data-iv] [data-pane]:visible').getByText(NEW_TITLE, { exact: false }).first()
+    .waitFor({ state: 'visible', timeout: WITHIN_MS }).then(() => true, () => false);
+  check('after a search typed over 8 seconds earlier, the new card still arrives', arrived);
   check('the typed search is kept', (await page.locator('input[name=search]').inputValue()) === 'typed words');
   check('the boundary run did not load the page again', (await page.evaluate(() => window.__loaded)) === 'boundary-load');
 
