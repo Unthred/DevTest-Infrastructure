@@ -1,6 +1,7 @@
 // Issue #1219: the pure logic of the Inbox view switch (Cards, Table, Compact list). No DOM and no I/O: the server renderer
 // (supervisor/inbox-views.mjs) and the browser script (inbox-views-ui.mjs) both import it, so the tests run the code the page runs.
 import { compareValues } from './logic.mjs';
+import { sanitizeColumns } from './table-columns.mjs';
 
 export const VIEWS = ['cards', 'table', 'compact'];
 export const VIEW_LABELS = { cards: 'Cards', table: 'Table', compact: 'Compact list' };
@@ -9,8 +10,6 @@ export const COLUMNS = [
   { key: 'age', label: 'Age' }, { key: 'source', label: 'Source' }, { key: 'result', label: 'Result' },
 ];
 export const COLUMN_KEYS = COLUMNS.map(c => c.key);
-export const MIN_COL_PX = 60;
-export const MAX_COL_PX = 800;
 export const STORE_KEY = 'dash.inbox.views';
 
 const STATE_MARK = { pending: ['◔', 'waiting'], done: ['✓', 'done'], failed: ['✗', 'failed'], rejected: ['✗', 'rejected'], refused: ['✗', 'refused'] };
@@ -47,7 +46,11 @@ export function rowOf(rec, now) {
   };
 }
 
-const sortValue = (row, key) => (key === 'age' ? row.created : key === 'title' || key === 'kind' || key === 'state' || key === 'source' || key === 'result' ? (row[key] ? row[key].toLowerCase() : null) : null);
+const TEXT_KEYS = ['title', 'kind', 'state', 'source', 'result'];
+const sortValue = (row, key) => {
+  if (key === 'age') return row.created;
+  return TEXT_KEYS.includes(key) && row[key] ? row[key].toLowerCase() : null;
+};
 // Age is older-first when descending: a larger age is an earlier creation time, so the number sorted is the creation time reversed.
 export function sortRows(rows, key, dir = 'asc') {
   if (!COLUMN_KEYS.includes(key)) return rows.slice();
@@ -59,10 +62,6 @@ export function sortRows(rows, key, dir = 'asc') {
 // Phone default is the Compact list, desktop default is the Table (requirement 5).
 export const defaultView = phone => (phone ? 'compact' : 'table');
 export function sanitizePrefs(raw, { phone = false } = {}) {
-  const r = raw && typeof raw === 'object' ? raw : {};
-  const hidden = Array.isArray(r.hidden) ? [...new Set(r.hidden.filter(k => COLUMN_KEYS.includes(k)))] : [];
-  const widths = {};
-  if (r.widths && typeof r.widths === 'object') for (const k of COLUMN_KEYS) if (Number.isFinite(r.widths[k])) widths[k] = Math.min(MAX_COL_PX, Math.max(MIN_COL_PX, Math.round(r.widths[k])));
-  // At least one column stays: a table with none would be an empty box.
-  return { view: VIEWS.includes(r.view) ? r.view : defaultView(phone), hidden: hidden.length >= COLUMN_KEYS.length ? [] : hidden, widths };
+  const view = VIEWS.includes(raw?.view) ? raw.view : defaultView(phone);
+  return { view, ...sanitizeColumns(raw, COLUMN_KEYS) };
 }

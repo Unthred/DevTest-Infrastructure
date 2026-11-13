@@ -67,7 +67,7 @@ test('saved preferences: phone defaults to Compact list, desktop to Table; junk 
   assert.equal(sanitizePrefs({ view: 'bogus' }).view, 'table');
   assert.deepEqual(sanitizePrefs({ hidden: ['source', 'nope', 'source'] }).hidden, ['source']);
   assert.deepEqual(sanitizePrefs({ hidden: COLUMNS.map(c => c.key) }).hidden, []);
-  assert.deepEqual(sanitizePrefs({ widths: { title: 5, kind: 99999, state: 'x', age: 120.4 } }).widths, { title: 60, kind: 800, age: 120 });
+  assert.deepEqual(sanitizePrefs({ widths: { title: 5, kind: 99999, state: 'x', age: 120.4 } }).widths, { title: 48, kind: 800, age: 120 });
 });
 
 const idsIn = (html, re) => [...html.matchAll(re)].map(m => m[1]);

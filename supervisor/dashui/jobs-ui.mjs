@@ -1,22 +1,16 @@
 // Jobs view in the browser (issue #1220): hide and resize columns, saved views per viewer, a row click that opens the side panel, and the CSV
 // of the current table. The table itself, its filters, groups and totals are drawn by the server from the address. All the choices here are
 // kept in localStorage, like the card layout. Pure helpers are exported so the tests run the code the page runs.
+import { bindResize, sanitizeColumns as sanitizeKeys } from './table-columns.mjs';
 import { COLUMN_KEYS, allJobRows, applyFilters, jobsQuery, parseJobsQuery, sortRows, toCsv } from './jobs-table.mjs';
 
 export const KEYS = { cols: 'dash.jobs.cols', views: 'dash.jobs.views', last: 'dash.jobs.last' };
-export const MIN_WIDTH = 48, MAX_WIDTH = 800;
 
 const readJson = (store, key, fallback) => { try { const v = JSON.parse(store.getItem(key)); return v ?? fallback; } catch { return fallback; } };
 const writeJson = (store, key, v) => { try { store.setItem(key, JSON.stringify(v)); return true; } catch { return false; } };
 
-// Column choices: which columns are hidden and how wide the others are. Anything unknown or out of range is dropped.
-export function sanitizeColumns(raw) {
-  const r = raw && typeof raw === 'object' ? raw : {};
-  const hidden = Array.isArray(r.hidden) ? [...new Set(r.hidden.filter(k => COLUMN_KEYS.includes(k)))] : [];
-  const widths = {};
-  for (const [k, w] of Object.entries(r.widths && typeof r.widths === 'object' ? r.widths : {})) if (COLUMN_KEYS.includes(k) && Number.isFinite(w)) widths[k] = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(w)));
-  return { hidden: hidden.length >= COLUMN_KEYS.length ? [] : hidden, widths };   // hiding every column would leave nothing to show
-}
+// Column choices: which columns are hidden and how wide the others are (the shared rules in table-columns.mjs).
+export const sanitizeColumns = raw => sanitizeKeys(raw, COLUMN_KEYS);
 export const visibleColumns = cols => COLUMN_KEYS.filter(k => !cols.hidden.includes(k));
 
 // A saved view is the address query of the table plus the column choices. Names are short plain text; there are at most 20.
@@ -68,26 +62,6 @@ function applyColumns(doc, cols) {
   }
 }
 
-function bindResize(doc, cols, commit) {
-  doc.addEventListener('pointerdown', e => {
-    const grip = e.target.closest?.('[data-grip]');
-    if (!grip) return;
-    e.preventDefault();
-    const th = grip.closest('th'), startX = e.clientX, startW = th.getBoundingClientRect().width, key = grip.dataset.grip;
-    const move = ev => { cols.widths[key] = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(startW + ev.clientX - startX))); applyColumns(doc, cols); };
-    const up = () => { doc.removeEventListener('pointermove', move); doc.removeEventListener('pointerup', up); commit(); };
-    doc.addEventListener('pointermove', move); doc.addEventListener('pointerup', up);
-  });
-  doc.addEventListener('keydown', e => {
-    const grip = e.target.closest?.('[data-grip]');
-    if (!grip || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-    e.preventDefault();
-    const key = grip.dataset.grip, now = cols.widths[key] || Math.round(grip.closest('th').getBoundingClientRect().width);
-    cols.widths[key] = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, now + (e.key === 'ArrowRight' ? 16 : -16)));
-    applyColumns(doc, cols); commit();
-  });
-}
-
 // The tools bar and the views list are drawn by the server inside a card that a refresh in place replaces, so they are made ready again after
 // every swap, and every listener sits on the document (like the column toggle and the grips) so a swapped-in button still works.
 function fillViews(doc, store, chosen = null) {
@@ -121,7 +95,7 @@ export function bindJobs({ loc = location, store = localStorage, doc = document,
     Object.assign(cols, sanitizeColumns({ ...cols, hidden: e.target.checked ? cols.hidden.filter(h => h !== k) : [...cols.hidden, k] }));
     applyColumns(doc, cols); commit();
   });
-  bindResize(doc, cols, commit);
+  bindResize(doc, cols.widths, { apply: () => applyColumns(doc, cols), commit });
 
   doc.addEventListener('submit', e => {
     if (!e.target.matches?.('[data-jobs-views]')) return;

@@ -21,9 +21,16 @@ let failed = true;
 try {
   const ctx = await browser.newContext({ ...PROFILES[profile], serviceWorkers: 'block', locale: 'en-GB', timezoneId: 'UTC' });
   await ctx.route('**/*', r => (isAllowed(r.request().url(), port) ? r.continue() : r.abort('blockedbyclient')));
+  // The app bar's agent item (.ai-stale, issue #1221) makes every dashboard page 15 px too wide at 390, on main as well. That is not this
+  // page, so the fixture leaves that one item out and the sideways-scroll checks below measure the Inbox itself.
+  await ctx.addInitScript(() => addEventListener('DOMContentLoaded', () => {
+    const style = document.createElement('style');
+    style.textContent = '.agent-item{display:none!important}';
+    document.head.append(style);
+  }));
   const page = await ctx.newPage();
   const errors = []; page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
-  const open = async () => { await page.goto(`http://127.0.0.1:${port}/inbox`, { waitUntil: 'networkidle' }); };
+  const open = async () => { await page.goto(`http://127.0.0.1:${port}/inbox?state=all`, { waitUntil: 'networkidle' }); };
   const pane = n => page.locator(`[data-iv] [data-pane="${n}"]`);
   const visiblePanes = async () => { const v = []; for (const n of ['cards', 'table', 'compact']) if (await pane(n).isVisible()) v.push(n); return v.join(','); };
   const noSideways = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
