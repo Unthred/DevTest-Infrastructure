@@ -219,3 +219,20 @@ test('the builder does not read a clock or change its input', () => {
   assert.equal(JSON.stringify(view), before);
   assert.deepEqual(board(view), a);
 });
+
+test('waiting: a continue action (next list keyed by the issue, plan ledger by the pull request) is held, and gone once launched', () => {
+  const next = { panels: { needsYou: [], next: [{ agent: 'claude', type: 'continue', ref: 50 }] }, prs: [{ number: 51, issue: 50, status: 'open', title: 'PR 51' }], issues: [{ number: 50, title: 'Fifty' }] };
+  const held = board(baseView({ ...next, planned: [{ type: 'continue', agent: 'claude', ref: 51, outcome: 'held', kind: 'slot', reason: 'slot full' }] })).waiting;
+  assert.deepEqual(held.map(x => [x.place, x.number, x.job_type, x.held?.kind]), [[1, 50, 'continue', 'slot']]);
+  assert.equal(board(baseView({ ...next, planned: [{ type: 'continue', agent: 'claude', ref: 51, outcome: 'launched' }] })).waiting.length, 0);
+});
+
+test('verdict recorded on the review job survives a later review of the same head replacing the head record', () => {
+  const view = baseView({
+    jobs: [review('r1', at(13, 4), { verdict: 'CHANGES' }), review('r2', at(13, 6), { verdict: 'PASS' }), review('r3', at(13, 8))],
+    verdicts: [{ pr: 1244, verdict: 'PASS', at: at(13, 6, 5) }], prs: [{ number: 1244, issue: 1224, status: 'open', title: 'PR 1244' }],
+  });
+  assert.deepEqual(['r1', 'r2'].map(id => landedOf(view, id).box), ['changes_asked', 'passed']);
+  assert.equal(landedOf(view, 'r3').laps, 1, 'the CHANGES review of the same pull request is one lap');
+  assert.equal(board(view).counts.changes_asked, 1);
+});

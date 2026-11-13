@@ -99,7 +99,7 @@ Issue #1310. `GET /api/v1/liveboard` gives a screen everything it needs to draw 
 
 ### The box table
 
-The first row that matches wins. A review's verdict is the first verdict on its pull request recorded after the job started and before the next review job of that pull request started.
+The first row that matches wins. A review's verdict is the one recorded on its own job when it was ingested; for older jobs without one, the first verdict on its pull request recorded after the job started and before the next review job of that pull request started.
 
 | Box | A job lands here when |
 | --- | --- |

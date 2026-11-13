@@ -380,7 +380,7 @@ test('verdict trust: only the job inbox counts; comment text, wrong head, wrong 
   assert.deepEqual(w.team.s.verdicts, {}); assert.equal(rec.ingested, false);
   // finished + valid: recorded from job state, comment posted with the marker
   w.jobs.states[id].status = 'completed';
-  const report = { ingested: [] }; await w.team.ingest(report);
+  const report = { ingested: [] }; await w.team.ingest(report); assert.equal(rec.verdict, 'PASS', 'the job keeps its own verdict (#1310)');
   assert.equal(w.team.s.verdicts[`10:${H(1)}`].verdict, 'PASS'); assert.equal(w.team.s.verdicts[`10:${H(1)}`].reviewer, 'claude');
   assert.match(w.calls.comments.at(-1)[1], /^<!-- devtest-verdict v1 job=/);
 });

@@ -14,6 +14,7 @@ export function jobTableFields(job, state) {
   const tokens = job.usage && Number.isFinite(job.usage.inputTokens) && Number.isFinite(job.usage.outputTokens) ? job.usage.inputTokens + job.usage.outputTokens : null;
   const reason = job.incompleteReason || null;
   return {
+    verdict: state?.jobs?.[job.id]?.verdict ?? null, // Issue #1310: the review job's own verdict, for the live board.
     cause, causeLabel: cause ? FAIL_CAUSES[cause] : null, causeDetail: record?.detail ? redact(record.detail, 300) : null,
     costGbp: gbpAmount(job.usage?.costUsdEstimate),
     wastedTokens: tokens == null ? null : WASTING.has(job.status) ? tokens : 0,

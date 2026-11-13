@@ -50,8 +50,9 @@ function jobsOf(view, look) {
   return { jobs, skipped };
 }
 
-// The verdict a review job produced: the first on its pull request from its start until the next review job of that pull request starts.
+// The verdict a review job produced: the one recorded on the job, else (older jobs) the first on its pull request from its start until the next review job of that pull request starts.
 function verdictOf(job, all, verdicts) {
+  if (job.row.verdict === 'PASS' || job.row.verdict === 'CHANGES') return job.row.verdict; // recorded on the job itself
   const next = all.filter(j => j.row.kind === 'review' && j.row.ref === job.number && j.startedAt > job.startedAt).map(j => j.startedAt);
   const until = next.length ? Math.min(...next) : Infinity;
   const mine = verdicts.filter(v => v.pr === job.number && Number.isFinite(v.at) && v.at >= job.startedAt && v.at < until);
@@ -131,8 +132,11 @@ function outOf(agent, jobs, view, now) {
 function waitingOf(view, look) {
   const ledger = list(view.planned);
   const issues = new Map(list(view.issues).map(i => [i.number, i]));
+  // A continue action carries the issue and the pull request; the next list keys it by the issue, the plan ledger by the pull request.
+  const prOfIssue = new Map(list(view.prs).filter(x => Number.isSafeInteger(x.issue)).map(x => [x.issue, x.number]));
+  const ledgerRefs = p => (p.type === 'continue' && prOfIssue.has(p.ref) ? [p.ref, prOfIssue.get(p.ref)] : [p.ref]);
   const entryOf = p => {
-    const row = ledger.find(l => l.type === p.type && (l.agent ?? null) === (p.agent ?? null) && l.ref === p.ref);
+    const row = ledger.find(l => l.type === p.type && (l.agent ?? null) === (p.agent ?? null) && ledgerRefs(p).includes(l.ref));
     return { p, row };
   };
   return list(view.panels?.next).map(entryOf).filter(({ row }) => row?.outcome !== 'launched').map(({ p, row }, index) => {
