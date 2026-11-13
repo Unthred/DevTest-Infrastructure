@@ -120,13 +120,13 @@ test('the short window room is what is left after its recent rate runs to its re
   assert.match(act.choice.candidates[0].skipped, /short window cannot cover the job/);
 });
 
-test('work is conserved: a job nobody can take does not hold another agent's lower-ranked work', async t => {
+test('work is conserved: an unfilled job holds only its own group', async t => {
   const failing = [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'ci' }];
   const red = { ...pr(40, 'claude/issue-7-x', H(1)), statusCheckRollup: failing };
   const w = world(t, { budget: CAPS, issues: OPEN, pulls: [red], jobRecords: [...history('claude', 1e5, 0), ...history('codex', 1e5, 10)],
     allowance: { claude: withShort('claude', 0.1, 0.97), codex: withShort('codex', 0.1, 0.1) } });
   const plan = await w.team.plan();
-  assert.equal(implementOf(plan)[0]?.agent, 'codex', 'the free implementer slot runs the other agent\'s own implement');
+  assert.equal(implementOf(plan)[0]?.agent, 'codex', 'the free implementer slot runs the other agent own implement');
   assert.ok(!/job waits/.test(w.team.held.codex?.implement || ''), 'no false hold reason on the job that runs');
 });
 
