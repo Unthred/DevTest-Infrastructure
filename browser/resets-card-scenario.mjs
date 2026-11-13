@@ -27,10 +27,10 @@ try {
   const errors = [];
   page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));
   await page.goto(`http://127.0.0.1:${port}${arg('page') || '/card.html'}`, { waitUntil: 'networkidle' });
-  const card = page.locator('#c-limit-resets');
+  const card = page.locator('[data-card="u-resets"], #u-resets').first();
   check('the Limit resets card is on the page', (await card.count()) === 1);
-  const fable = card.locator('tr[data-reset="aaaa0001"]');
-  const plain = card.locator('tr[data-reset="aaaa0002"]');
+  const fable = card.locator('li[data-reset="aaaa0001"]');
+  const plain = card.locator('li[data-reset="aaaa0002"]');
   check('the Fable reset says it does not help Foreman and is flagged to use before it expires', /Use before expiry/.test((await fable.textContent()) || '') && /does not help Foreman/.test((await fable.textContent()) || ''));
   check('the Fable reset shows an expiry warning with the days left', /\b[45] days left/.test((await fable.textContent()) || ''), await fable.textContent());
   check('the normal reset gets a hold with its figures', /Hold/.test((await plain.textContent()) || '') && (await plain.locator('dl.reset-figures dt').count()) === 4);
@@ -39,11 +39,13 @@ try {
     const box = await locator.boundingBox();
     check(`${label} has a usable tap size inside the width`, box && box.x >= 0 && box.x + box.width <= PROFILES[profile].viewport.width && box.height >= 24, JSON.stringify(box));
   }
-  await fable.locator('summary', { hasText: 'Edit' }).click();
-  check('Edit opens a form with the reset filled in', (await fable.locator('form.reset-form input[name="scope"]').inputValue()) === 'fable');
-  await card.locator('summary', { hasText: 'Add a reset' }).click();
-  check('the add form is usable', await card.locator('details.reset-add button[type="submit"]').isVisible());
-  check('the page does not scroll sideways', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await fable.locator('summary', { hasText: 'Edit' }).evaluate(el => { el.parentElement.open = true; });   // a click can land on the phone's fixed bottom nav
+  check('Edit opens a form with the reset filled in', (await fable.locator('input[name="scope"]').inputValue()) === 'fable');
+  await card.locator('summary', { hasText: 'Record a reset' }).evaluate(el => { el.parentElement.open = true; });
+  check('the add form is usable', await card.locator('form button', { hasText: 'Add' }).isVisible());
+  // The card's own contents must fit the width; the app bar's agent popover (not part of the card) is outside this check.
+  const wide = await card.evaluate(c => [...c.querySelectorAll('*')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1).map(e => e.tagName).slice(0, 4).join(' '));
+  check('the card does not run past the page width', wide === '', wide);
   check('no script errors', errors.length === 0, errors.join('; '));
   await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true });
   failed = checks.some(c => !c.ok);

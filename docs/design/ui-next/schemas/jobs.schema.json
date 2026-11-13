@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobs.schema.json",
+  "title": "Read model: jobs (GET /api/v1/jobs?status=&kind=&agent=&cause=&target=&limit=&cursor=)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "jobs" },
+    "data": {
+      "type": "object",
+      "required": ["summary", "page", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "object",
+          "required": ["window_seconds", "running", "paused", "ended", "tokens", "cost_pence"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": { "type": "integer" },
+            "running": { "type": "integer" },
+            "paused": { "type": "integer" },
+            "ended": { "type": "integer" },
+            "tokens": { "type": "integer" },
+            "cost_pence": { "type": ["integer", "null"] }
+          }
+        },
+        "page": {
+          "type": "object",
+          "required": ["total", "matched", "returned", "next_cursor"],
+          "additionalProperties": false,
+          "properties": {
+            "total": { "type": "integer" }, "matched": { "type": "integer" }, "returned": { "type": "integer" },
+            "next_cursor": { "type": ["string", "null"] }
+          }
+        },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/job" } }
+      }
+    }
+  },
+  "$defs": {
+    "job": {
+      "type": "object",
+      "required": ["id", "full_id", "kind", "role", "agent", "model", "effort", "condition", "cause_code", "cause_text", "trigger", "target", "tokens", "cost_pence", "cost_basis", "started_at", "ended_at", "duration_seconds", "attempts", "has_transcript", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/short_id" },
+        "full_id": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "kind": { "type": "string", "description": "implement, continue, review, fix, cifix, rebase, inbox, probe." },
+        "role": { "type": "string", "enum": ["implementer", "reviewer", "rebaser", "inbox", "other"] },
+        "agent": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "effort": { "type": ["string", "null"] },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "cause_code": { "type": ["string", "null"], "description": "Why the job ended as it did, as a stable code (for example postcondition_not_met)." },
+        "cause_text": { "type": ["string", "null"] },
+        "trigger": { "type": ["string", "null"], "description": "What started it: schedule, job_end, install, inbox, approve, direct." },
+        "target": { "anyOf": [{ "$ref": "common.schema.json#/$defs/ref" }, { "type": "null" }] },
+        "tokens": { "$ref": "common.schema.json#/$defs/tokens" },
+        "cost_pence": { "type": ["integer", "null"], "minimum": 0 },
+        "cost_basis": { "type": "string", "enum": ["usage_equivalent", "billed", "unknown"], "description": "usage_equivalent: a plan job priced as if it were paid for. billed: real credit spent." },
+        "started_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+        "ended_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+        "duration_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "has_transcript": { "type": "boolean" },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+      }
+    }
+  }
+}

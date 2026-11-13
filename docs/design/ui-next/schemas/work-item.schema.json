@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "work-item.schema.json",
+  "title": "Read model: work_item (GET /api/v1/work-items/{key}), everything known about one work item or change, for the side panel",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "work_item" },
+    "data": {
+      "type": "object",
+      "required": ["item", "requirements", "expected_files", "checks", "reviews", "fix", "rebase", "split", "decision_proposal", "jobs", "timeline"],
+      "additionalProperties": false,
+      "properties": {
+        "item": { "$ref": "queue.schema.json#/$defs/queue_item" },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["row", "text", "when", "status", "evidence"],
+            "additionalProperties": false,
+            "properties": {
+              "row": { "type": "integer" },
+              "text": { "type": "string" },
+              "when": { "type": "string", "enum": ["before_pr", "after_install", "homeowner_only"] },
+              "status": { "type": "string", "enum": ["met", "not_met", "pending", "unknown"] },
+              "evidence": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "expected_files": { "type": "array", "items": { "type": "string" } },
+        "checks": {
+          "type": "object",
+          "required": ["state", "passed", "failed", "pending"],
+          "additionalProperties": false,
+          "properties": {
+            "state": { "type": "string", "enum": ["passing", "failing", "pending", "unknown"] },
+            "passed": { "type": "integer" }, "failed": { "type": "integer" }, "pending": { "type": "integer" }
+          }
+        },
+        "reviews": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["round", "reviewer", "model", "verdict", "head", "at", "findings"],
+            "additionalProperties": false,
+            "properties": {
+              "round": { "type": "integer" },
+              "reviewer": { "type": ["string", "null"] },
+              "model": { "type": ["string", "null"] },
+              "verdict": { "type": "string", "enum": ["pass", "changes"] },
+              "head": { "type": ["string", "null"] },
+              "at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["blocking", "scope", "text"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "blocking": { "type": "boolean" },
+                    "scope": { "type": "string", "enum": ["code", "description_only", "tests", "docs", "unknown"] },
+                    "text": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "fix": {
+          "type": "object",
+          "required": ["rounds", "limit", "limit_reached"],
+          "additionalProperties": false,
+          "properties": { "rounds": { "type": "integer" }, "limit": { "type": ["integer", "null"] }, "limit_reached": { "type": "boolean" } }
+        },
+        "rebase": {
+          "type": "object",
+          "required": ["attempts", "capped", "cause_code", "cause_text"],
+          "additionalProperties": false,
+          "properties": {
+            "attempts": { "type": "integer" }, "capped": { "type": "boolean" },
+            "cause_code": { "type": ["string", "null"] }, "cause_text": { "type": ["string", "null"] }
+          }
+        },
+        "split": {
+          "type": ["object", "null"],
+          "required": ["state", "parts"],
+          "additionalProperties": false,
+          "properties": {
+            "state": { "type": "string", "enum": ["drafting", "proposed", "accepted", "rejected"] },
+            "parts": { "type": "array", "items": { "type": "object", "required": ["title", "files"], "additionalProperties": false, "properties": { "title": { "type": "string" }, "files": { "type": "array", "items": { "type": "string" } } } } }
+          }
+        },
+        "decision_proposal": {
+          "type": ["object", "null"],
+          "required": ["key", "title", "state"],
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "description": "A stable key that never changes. The register number (D-0nn) is assigned at merge and is given separately." },
+            "number": { "type": ["string", "null"] },
+            "title": { "type": "string" },
+            "state": { "type": "string", "enum": ["proposed", "approved", "rejected", "superseded"] }
+          }
+        },
+        "jobs": { "type": "array", "items": { "$ref": "jobs.schema.json#/$defs/job" } },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["at", "kind", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+              "kind": { "type": "string" },
+              "text": { "type": "string" },
+              "actor": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

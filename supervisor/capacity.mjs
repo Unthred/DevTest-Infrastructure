@@ -10,13 +10,17 @@
 //               plus a margin; an agent whose remaining capacity falls to the reserve is reviews-only.
 //
 // Without a trusted capacity nothing here guesses: the caller falls back to the fixed high-water share and says so.
+
+import { UNITS_NOTE, tokensText, configuredWarning, dailyCheck, shortWindowText } from './capacitycheck.mjs';
+export { UNITS_NOTE };
+
 export const isWeekly = w => /^seven_day|week/.test(w?.type || '') || (Number.isFinite(w?.windowMinutes) && w.windowMinutes >= 10000);
 
 export const ALLOWANCE_DEFAULTS = { reserve_margin: 0.05, capacity_windows: 4, min_window_delta: 0.03, min_trusted_windows: 2 };
 const RESET_TOLERANCE_MS = 10 * 60000;
 const RECENT_JOBS_PER_KIND = 10;
 
-const tokensOf = job => (job?.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : 0);
+export const tokensOf = job => (job?.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : 0);
 const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= RESET_TOLERANCE_MS;
 const median = values => {
   if (!values.length) return null;
@@ -48,6 +52,7 @@ export function capacitySamples(jobs) {
   const perWindow = [];
   for (let i = 1; i < readings.length; i++) {
     const delta = readings[i].used - readings[i - 1].used;
+    // A fall in use, including an applied limit reset (issue #1159), has a negative delta and is skipped here, so it never feeds capacity.
     if (!sameReset(readings[i].resetsAt, readings[i - 1].resetsAt) || readings[i].tokens <= 0 || delta <= 0) continue;
     let entry = perWindow.find(w => sameReset(w.resetsAt, readings[i].resetsAt));
     if (!entry) perWindow.push(entry = { resetsAt: readings[i].resetsAt, tokens: 0, delta: 0 });
@@ -59,8 +64,9 @@ export function capacitySamples(jobs) {
 
 // Capacity in tokens per week. Trusted only from at least `min_trusted_windows` windows that each moved far enough to be a signal;
 // one window, however clean, is not trusted alone (it falls back to the configured starting value).
-export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEFAULTS }) {
-  const usable = capacitySamples(jobs).filter(w => w.delta >= options.min_window_delta).slice(-options.capacity_windows);
+// `exceptResetsAt` leaves one window out, so the daily check (issue #1167) compares today with the earlier windows, not with an average that contains today.
+export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEFAULTS, exceptResetsAt = null }) {
+  const usable = capacitySamples(jobs).filter(w => w.delta >= options.min_window_delta && !sameReset(w.resetsAt, exceptResetsAt)).slice(-options.capacity_windows);
   const start = Number.isFinite(configured) && configured > 0 ? configured : null;
   if (usable.length >= options.min_trusted_windows) {
     const tokens = usable.reduce((s, w) => s + w.tokens, 0), delta = usable.reduce((s, w) => s + w.delta, 0);
@@ -89,16 +95,27 @@ export function projectedNeed({ jobs, openPrs }) {
 
 // One agent's real-capacity view. `basis` is 'absolute' when a capacity is known, else 'percent': the caller then applies the fixed
 // high-water share and `reason` says why. `belowReserve` is null when it cannot be told.
-export function summarise({ used, jobs, openPrs, configured = null, options = ALLOWANCE_DEFAULTS }) {
+// `override` is the hand-set capacity (wins over a learned value); `configured` is the starting value used only until a learned one is trusted.
+export function summarise(input) {
+  const { used, jobs, openPrs, configured = null, override = null, resetsAt = null, shortWindow = null, options = ALLOWANCE_DEFAULTS } = input;
   const usage = checkUsage(used);
   const learned = learnCapacity({ jobs, configured, options });
-  const base = { used: usage.ok ? usage.used : null, capacity: learned.capacity, capacitySource: learned.source, confidence: learned.confidence, windows: learned.windows,
-    remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
+  const fixed = Number.isFinite(override) && override > 0 ? override : null;
+  const capacity = fixed ?? learned.capacity;
+  const learnedCapacity = learned.source === 'learned' ? learned.capacity : null;
+  const note = fixed !== null ? 'configured capacity, set by hand' : learned.note;
+  const prior = Number.isFinite(resetsAt) ? learnCapacity({ jobs, options, exceptResetsAt: resetsAt }) : null;
+  const priorCapacity = prior?.source === 'learned' ? prior.capacity : null;
+  const current = Number.isFinite(resetsAt) ? capacitySamples(jobs).find(w => sameReset(w.resetsAt, resetsAt)) : null;
+  const warnings = [fixed !== null ? configuredWarning(fixed, learnedCapacity) : null,
+    dailyCheck({ current, learned: priorCapacity, minDelta: options.min_window_delta })].filter(Boolean);
+  const base = { used: usage.ok ? usage.used : null, capacity, capacitySource: fixed !== null ? 'configured' : learned.source,
+    confidence: fixed !== null ? 'configured' : learned.confidence, windows: learned.windows, learnedCapacity, warnings, shortWindow, remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
   if (!usage.ok) return { ...base, reason: `${usage.reason}; the fixed share rule applies` };
-  if (learned.capacity === null) return { ...base, reason: `${learned.note}; the fixed share rule applies` };
-  const remaining = learned.capacity * (1 - usage.used), need = projectedNeed({ jobs, openPrs });
-  const reserve = need + learned.capacity * options.reserve_margin;
-  const result = { ...base, basis: 'absolute', remaining, need, reserve, belowReserve: remaining <= reserve, reason: learned.note };
+  if (capacity === null) return { ...base, reason: `${learned.note}; the fixed share rule applies` };
+  const remaining = capacity * (1 - usage.used), need = projectedNeed({ jobs, openPrs });
+  const reserve = need + capacity * options.reserve_margin;
+  const result = { ...base, basis: 'absolute', remaining, need, reserve, belowReserve: remaining <= reserve, reason: note };
   return { ...result, text: describe(result) };
 }
 
@@ -112,27 +129,32 @@ export function headroomScores(entries) {
   return Object.fromEntries(entries.map(e => [e.agent, e.summary.remaining / (e.summary.need + scale)]));
 }
 
-const tokensText = n => (Number.isFinite(n) ? (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`) + ' tokens' : 'unknown');
 // "42% used of about 6.0M tokens a week (learned from 3 weekly windows); 3.5M left, reserve 0.4M"
 export function describe(s) {
   if (!s || s.basis !== 'absolute') return s?.reason || 'capacity unknown';
-  return `${Math.round(s.used * 100)}% used of about ${tokensText(s.capacity)} a week (${s.reason}); ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)}`;
+  const main = `${Math.round(s.used * 100)}% used of about ${tokensText(s.capacity)} a week (${s.reason})`;
+  const parts = [`${main}; ${tokensText(s.remaining)} left, reserve ${tokensText(s.reserve)}`,
+    shortWindowText(s.shortWindow), ...(s.warnings || []).map(w => `WARNING: ${w}`), UNITS_NOTE];
+  return parts.filter(Boolean).join('; ');
 }
 
+const shortWindowView = w => (w ? { used: w.used, resetsAt: Number.isFinite(w.resetsAt) ? new Date(w.resetsAt).toISOString() : null } : null);
 // The figures the dashboard and the MCP tools show per agent: used percent, learned capacity, remaining capacity, reserve amount, and why.
 export function capacityView(s) {
   if (!s) return null;
   const round = n => (Number.isFinite(n) ? Math.round(n) : null);
   return { basis: s.basis, usedPercent: Number.isFinite(s.used) ? Math.round(s.used * 1000) / 10 : null, capacity: round(s.capacity), source: s.capacitySource, confidence: s.confidence, windows: s.windows,
-    remaining: round(s.remaining), reserve: round(s.reserve), need: round(s.need), belowReserve: s.belowReserve, text: s.text ?? s.reason };
+    remaining: round(s.remaining), reserve: round(s.reserve), need: round(s.need), belowReserve: s.belowReserve, learnedCapacity: round(s.learnedCapacity), warnings: s.warnings ?? [],
+    shortWindow: shortWindowView(s.shortWindow), unitsNote: UNITS_NOTE, text: s.text ?? s.reason };
 }
 
 // One agent's capacity summary for a tick: the weekly use of its live window (null when unknown), its job history and the open pull requests that
 // `owns` accepts (each is projected to need a review and a fix round before the reset). `settings` carries the optional starting capacity and reserve margin.
-export function capacityFor({ name, used, jobs, settings, prs, owns }) {
+export function capacityFor({ name, used, jobs, settings, prs, owns, resetsAt = null, shortWindow = null }) {
   const options = { ...ALLOWANCE_DEFAULTS, reserve_margin: settings.reserve_margin ?? ALLOWANCE_DEFAULTS.reserve_margin };
   const openPrs = (prs || []).filter(owns).length;
-  return summarise({ used, jobs, openPrs, configured: settings.starting_capacity?.[name] ?? null, options });
+  const configured = settings.starting_capacity?.[name] ?? null, override = settings.capacity?.[name] ?? null;
+  return summarise({ used, jobs, openPrs, configured, override, resetsAt, shortWindow, options });
 }
 
 // The one definition of remaining capacity: capacity x unused share, where `used` may include cost already planned this tick.

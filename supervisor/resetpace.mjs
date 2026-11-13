@@ -1,11 +1,12 @@
 // Issue #1162: an agent's full pace in tokens per hour of work, from its job history. Pure.
 // Pace is tokens spent divided by the hours at least one job was running (overlapping jobs count once), so idle gaps do not lower it:
 // the question a reset asks is what Foreman could spend if it kept working until the natural reset.
+import { tokensOf } from './capacity.mjs';
+
 const HOUR = 3600000;
 const LOOKBACK_MS = 14 * 24 * HOUR;
 const MIN_BUSY_HOURS = 1;
 
-const tokensOf = job => (job?.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : 0);
 
 function mergedHours(intervals) {
   const sorted = [...intervals].sort((a, b) => a[0] - b[0]);

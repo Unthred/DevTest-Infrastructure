@@ -6,6 +6,7 @@ import { latestAllowance } from './dashdata.mjs';
 import { outOfAllowance } from './interim.mjs';
 import { weeklyUtilization } from './models.mjs';
 import { weeklyAtOf } from './team.mjs';
+import { readDecisionRef } from './decisionfilesio.mjs';
 
 // jobs: job records. probes: the tick cache's model-free allowance probes. events: [{ job, kind }] (the usage_limit evidence).
 // hadLimit(id) may replace the events lookup (the tick reads a job's events only when asked).
@@ -34,6 +35,19 @@ export function readHeadRegister(config, pr) {
   if (headRegisters.size > 500) headRegisters.clear();
   headRegisters.set(key, text); return text;
 }
+
+// Issue #1229: the decision files a pull request's head has and main has (empty when unreadable; an unreadable head adds no proposal).
+const headFiles = new Map();
+export function readHeadDecisionFiles(config, pr) {
+  const key = `${pr.number}:${pr.headRefOid}`;
+  if (headFiles.has(key)) return headFiles.get(key);
+  if (!/^[0-9a-f]{40}$/.test(pr.headRefOid || '')) return new Map();
+  const files = readDecisionRef(config.repo_path, pr.headRefOid);
+  if (headFiles.size > 500) headFiles.clear();
+  if (files.size) headFiles.set(key, files);
+  return files;
+}
+export const readMainDecisionFiles = config => readDecisionRef(config.repo_path, 'origin/main');
 
 // The decision register that counts is the one merged into main, not a working copy. Returns '' when it cannot be read.
 export function readRegister(config) {

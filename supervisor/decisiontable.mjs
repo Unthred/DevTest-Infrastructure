@@ -12,6 +12,7 @@ export const CONTROLS = {
   close_job: { label: 'Close job', target: 'job', does: 'Closes this overtaken job after saving its work to a branch on the remote.' },
   reopen: { label: 'Reopen issue', target: 'issue', does: 'Clears the implemented mark so Foreman can start the issue again.' },
   unpark: { label: 'Unpark', target: 'any', does: 'Removes the parked label so the planner may take it again.' },
+  clear_latch: { label: 'Clear upgrade latch', target: 'latch', does: 'Clears the upgrade latch so the next tick may install merged work. Refused when no latch is set or an install is running.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };
 
@@ -37,9 +38,10 @@ const T = {
   'selfcheck-review': { clears: 'clears when a review records a verdict at this head or a new head is pushed', actions: ['new_review_attempt', 'park'] },
   selfcheck: { clears: 'clears when the host condition passes the next check', actions: [] },
   'homeowner-pr': { clears: 'clears when the needs-homeowner label is removed: the holding job is resumed, or a new head moves past it', actions: ['park'] },
+  'after-install': { clears: 'clears when the After install checks of the pull request are marked done', actions: [], later: NO_BUTTON },
   'homeowner-steps': { clears: 'clears when the pull request is merged, closed or its head changes', actions: [], later: NO_BUTTON },
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
-  'decision-proposal': { clears: 'clears when the register entry is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
+  'decision-proposal': { clears: 'clears when the decision (a register entry or its docs/decisions file) is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
   decision: { clears: 'clears when the register entry reads homeowner-approved on main', actions: [], later: NO_BUTTON },
   stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['park'] },
   'stall-check-error': { clears: 'clears when the next stalled-PR check succeeds', actions: [] },
@@ -53,7 +55,7 @@ const T = {
   inboxfail: { clears: 'clears three days after it failed, or sooner when the work is done another way', actions: [] },
   inboxrefused: { clears: 'clears three days after the latest refusal; the overseer can propose again', actions: [] },
   'hand-deploy': { clears: 'clears when the installed commit moves past the change', actions: [] },
-  'upgrade-latched': { clears: 'clears when you run the clear-latch command', actions: [] },
+  'upgrade-latched': { clears: 'clears when you clear the latch with the control on this card (or ai-supervisor self-upgrade clear-latch on Tower)', actions: ['clear_latch'] },
   'upgrade-refused': { clears: 'clears when a later main is installed or the refusal no longer applies', actions: [] },
   'dashboard-restart-failed': { clears: 'clears when the dashboard restarts on the installed commit', actions: [] },
   'dashboard-stale': { clears: 'clears when the dashboard is restarted on the installed commit', actions: [] },
@@ -61,6 +63,8 @@ const T = {
   'config-invalid': { clears: 'clears when team.local.json is valid again', actions: [] },
   'migration-failed': { clears: 'clears when the configuration migration succeeds on a later tick', actions: [] },
   'cap-deadlock': { clears: 'clears when one of the open pull requests can move or is closed', actions: [] },
+  'hold-cycle': { clears: 'clears when the prompt that was waiting has run or is undone', actions: [] },
+  'stalled-hold': { clears: 'clears when the hold ends or its control is used', actions: [] },
   'foreman-idle': { clears: 'clears when Foreman starts the waiting work', actions: [] },
   idle: { clears: 'clears when the agent starts the waiting work', actions: [] },
   pause: { clears: 'clears when the agent resumes or the pause is confirmed', actions: [] },
@@ -89,13 +93,14 @@ export const typeOf = id => {
 const clean = (t, n) => redact(String(t ?? '').replace(/\s+/g, ' ').trim(), n);
 // The reason is never empty: the item's explanation and what it says, then a plain fallback naming the type.
 export function reasonOf(item, type) {
-  const parts = [clean(item.text, 300), clean(item.tried, 300)].filter(Boolean);
+  const parts = [clean(item.text, 700), clean(item.tried, 300)].filter(Boolean);
   return parts.length ? parts.join(' ') : `Foreman stopped on a "${type}" item and recorded no further detail.`;
 }
 
 const JOB_ID = /^(?:job|selfcheck-job)-([a-f0-9]{8})/;
 // The target is always taken from the item, never from the request.
 function targetFor(item, spec) {
+  if (spec.target === 'latch') return item.id === 'upgrade-latched' ? 'latch' : null;   // no target: a fixed word
   if (spec.target === 'job') return JOB_ID.exec(String(item.id))?.[1] ?? null;
   const ref = item.ref;
   if (!ref || !Number.isSafeInteger(ref.n) || ref.n < 1) return null;

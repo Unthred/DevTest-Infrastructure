@@ -1,0 +1,485 @@
+{
+ "contract" : "1.0",
+ "cursor" : "e-000412",
+ "data" : {
+  "checks" : {
+   "failed" : 0,
+   "passed" : 6,
+   "pending" : 0,
+   "state" : "passing"
+  },
+  "decision_proposal" : {
+   "key" : "prop-direct-queue-control",
+   "number" : null,
+   "state" : "proposed",
+   "title" : "The overseer may change the queue directly once a change has been discussed"
+  },
+  "expected_files" : [
+   "foreman-mcp/controltools.mjs",
+   "supervisor/controlactions.mjs",
+   "tests/direct-control.test.mjs",
+   "docs/foreman-mcp.md"
+  ],
+  "fix" : {
+   "limit" : 3,
+   "limit_reached" : true,
+   "rounds" : 3
+  },
+  "item" : {
+   "actions" : [
+    {
+     "command" : "work_item.fix_description",
+     "enabled" : true,
+     "input" : {
+      "key" : "change-1192"
+     },
+     "primary" : true,
+     "reversible" : false,
+     "tier" : "approval"
+    },
+    {
+     "command" : "work_item.accept_split",
+     "enabled" : false,
+     "input" : {
+      "key" : "change-1192"
+     },
+     "refusal_code" : "no_split_proposed",
+     "refusal_text" : "No split has been proposed for this PR yet.",
+     "reversible" : false,
+     "tier" : "approval"
+    },
+    {
+     "command" : "work_item.allow_fix_round",
+     "enabled" : true,
+     "input" : {
+      "key" : "change-1192"
+     },
+     "reversible" : false,
+     "tier" : "approval"
+    },
+    {
+     "command" : "work_item.clear_retry_cap",
+     "enabled" : true,
+     "input" : {
+      "key" : "change-1192"
+     },
+     "reversible" : false,
+     "tier" : "approval"
+    },
+    {
+     "command" : "work_item.park",
+     "enabled" : true,
+     "input" : {
+      "key" : "change-1192"
+     },
+     "reversible" : true,
+     "tier" : "direct"
+    }
+   ],
+   "agent" : "claude",
+   "change" : {
+    "checks" : "passing",
+    "fix_limit" : 3,
+    "fix_rounds" : 3,
+    "head" : "9a2cd36",
+    "rebase_attempts" : 2,
+    "review_rounds" : 4,
+    "verdict" : "changes"
+   },
+   "condition" : {
+    "attention" : "homeowner",
+    "reason_code" : "fix_limit_reached",
+    "reason_text" : "1 blocking finding remains and it is about the description only: the description gives a wrong line count. The rebase is also capped after 2 attempts with the same cause.",
+    "since" : "2026-11-12T17:05:00Z",
+    "state" : "stuck_at_fix_limit"
+   },
+   "estimated_start_at" : null,
+   "key" : "change-1192",
+   "number" : 1192,
+   "parent_key" : "issue-1164",
+   "prerequisites" : {
+    "declared" : [],
+    "line_state" : "none",
+    "open" : [],
+    "raw_line" : null
+   },
+   "project" : "Unthred/devtest-infrastructure",
+   "rank" : null,
+   "rank_of" : null,
+   "source" : "github",
+   "stage" : "fixing",
+   "title" : "Overseer controls the queue directly over the MCP (#1164)",
+   "type" : "change",
+   "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+  },
+  "jobs" : [
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T17:05:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 317,
+    "duration_seconds" : 2580,
+    "effort" : "medium",
+    "ended_at" : "2026-11-12T17:05:00Z",
+    "full_id" : "a41f09c24aaca37f133d17f8bb3d2194",
+    "has_transcript" : true,
+    "id" : "a41f09c2",
+    "kind" : "fix",
+    "model" : "sonnet",
+    "role" : "implementer",
+    "started_at" : "2026-11-12T16:22:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1204551,
+     "output" : 41230,
+     "total" : 1245781
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T16:18:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1260,
+    "effort" : null,
+    "ended_at" : "2026-11-12T16:18:00Z",
+    "full_id" : "7be2d310b06cdf5f5f24e92b253084bf",
+    "has_transcript" : true,
+    "id" : "7be2d310",
+    "kind" : "review",
+    "model" : null,
+    "role" : "reviewer",
+    "started_at" : "2026-11-12T15:57:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 688120,
+     "output" : 9844,
+     "total" : 697964
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 2,
+    "cause_code" : "rebase_refused_lost_changes",
+    "cause_text" : "Rebase refused: the result would lose changes.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "rebase_refused_lost_changes",
+     "reason_text" : "Rebase refused: the result would lose changes.",
+     "since" : "2026-11-12T15:40:00Z",
+     "state" : "failed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 347,
+    "duration_seconds" : 1140,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T15:40:00Z",
+    "full_id" : "c3d9e8f16f1005b36280f56ac76d5a22",
+    "has_transcript" : true,
+    "id" : "c3d9e8f1",
+    "kind" : "rebase",
+    "model" : "sonnet",
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T15:21:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1480002,
+     "output" : 12410,
+     "total" : 1492412
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : "rebase_refused_lost_changes",
+    "cause_text" : "Rebase refused: the result would lose changes.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "rebase_refused_lost_changes",
+     "reason_text" : "Rebase refused: the result would lose changes.",
+     "since" : "2026-11-12T14:12:00Z",
+     "state" : "failed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 327,
+    "duration_seconds" : 1020,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T14:12:00Z",
+    "full_id" : "09ab77e44e78c7eeb4311da2962d8ea8",
+    "has_transcript" : true,
+    "id" : "09ab77e4",
+    "kind" : "rebase",
+    "model" : "sonnet",
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T13:55:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1391877,
+     "output" : 11902,
+     "total" : 1403779
+    },
+    "trigger" : "schedule"
+   }
+  ],
+  "rebase" : {
+   "attempts" : 2,
+   "capped" : true,
+   "cause_code" : "rebase_refused_lost_changes",
+   "cause_text" : "Rebase refused: the result would lose changes."
+  },
+  "requirements" : [
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 1,
+    "status" : "met",
+    "text" : "Each control is a separate MCP tool or action with a required reason, so the reason is recorded.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 2,
+    "status" : "met",
+    "text" : "Every direct action is written to an audit trail: who, what, target, before and after state, reason, time.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 3,
+    "status" : "met",
+    "text" : "Each action validates the target and refuses clearly with the reason in the response.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 4,
+    "status" : "met",
+    "text" : "Each action is idempotent and returns the resulting state.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : null,
+    "row" : 5,
+    "status" : "pending",
+    "text" : "The homeowner can undo or reverse any direct action from the dashboard.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 6,
+    "status" : "met",
+    "text" : "A single switch on the dashboard turns direct control off, returning the MCP to read plus propose. Default on.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 7,
+    "status" : "met",
+    "text" : "Direct actions cannot widen limits, bypass review gates, or approve their own proposals.",
+    "when" : "before_pr"
+   },
+   {
+    "evidence" : "tests/direct-control.test.mjs",
+    "row" : 8,
+    "status" : "met",
+    "text" : "Job ids accept the short 8 character form everywhere and the full form where it is unambiguous.",
+    "when" : "before_pr"
+   }
+  ],
+  "reviews" : [
+   {
+    "at" : "2026-11-12T09:40:00Z",
+    "findings" : [
+     {
+      "blocking" : true,
+      "scope" : "code",
+      "text" : "The switch is read once at start, so turning direct control off does not stop a command already queued."
+     },
+     {
+      "blocking" : true,
+      "scope" : "tests",
+      "text" : "No test covers a refusal for each restricted action."
+     },
+     {
+      "blocking" : false,
+      "scope" : "docs",
+      "text" : "docs/foreman-mcp.md does not list the new tools."
+     }
+    ],
+    "head" : "4be1a07",
+    "model" : null,
+    "reviewer" : "codex",
+    "round" : 1,
+    "verdict" : "changes"
+   },
+   {
+    "at" : "2026-11-12T12:05:00Z",
+    "findings" : [
+     {
+      "blocking" : true,
+      "scope" : "code",
+      "text" : "An undo of a reorder restores the rank but not the entry that was displaced."
+     }
+    ],
+    "head" : "71c0d2e",
+    "model" : null,
+    "reviewer" : "codex",
+    "round" : 2,
+    "verdict" : "changes"
+   },
+   {
+    "at" : "2026-11-12T14:50:00Z",
+    "findings" : [
+     {
+      "blocking" : true,
+      "scope" : "description_only",
+      "text" : "The requirements table in the description cites a test that was renamed."
+     }
+    ],
+    "head" : "c58f3a1",
+    "model" : null,
+    "reviewer" : "codex",
+    "round" : 3,
+    "verdict" : "changes"
+   },
+   {
+    "at" : "2026-11-12T16:18:00Z",
+    "findings" : [
+     {
+      "blocking" : true,
+      "scope" : "description_only",
+      "text" : "The description gives a wrong line count for the audit module."
+     }
+    ],
+    "head" : "9a2cd36",
+    "model" : null,
+    "reviewer" : "codex",
+    "round" : 4,
+    "verdict" : "changes"
+   }
+  ],
+  "split" : null,
+  "timeline" : [
+   {
+    "actor" : "claude",
+    "at" : "2026-11-11T23:12:00Z",
+    "kind" : "implement",
+    "text" : "Draft PR opened by the implement job 2d6f1b83."
+   },
+   {
+    "actor" : "codex",
+    "at" : "2026-11-12T09:40:00Z",
+    "kind" : "review",
+    "text" : "Review round 1: changes (2 blocking findings)."
+   },
+   {
+    "actor" : "codex",
+    "at" : "2026-11-12T12:05:00Z",
+    "kind" : "review",
+    "text" : "Review round 2: changes (1 blocking finding)."
+   },
+   {
+    "actor" : "claude",
+    "at" : "2026-11-12T14:12:00Z",
+    "kind" : "rebase",
+    "text" : "Rebase attempt 1 refused: lost changes."
+   },
+   {
+    "actor" : "codex",
+    "at" : "2026-11-12T14:50:00Z",
+    "kind" : "review",
+    "text" : "Review round 3: changes (1 description only finding)."
+   },
+   {
+    "actor" : "claude",
+    "at" : "2026-11-12T15:40:00Z",
+    "kind" : "rebase",
+    "text" : "Rebase attempt 2 refused: lost changes. Retry cap applied (2 attempts, same cause)."
+   },
+   {
+    "actor" : "codex",
+    "at" : "2026-11-12T16:18:00Z",
+    "kind" : "review",
+    "text" : "Review round 4: changes (1 description only finding)."
+   },
+   {
+    "actor" : "foreman",
+    "at" : "2026-11-12T16:20:00Z",
+    "kind" : "decision",
+    "text" : "Decision proposal waits for the homeowner."
+   },
+   {
+    "actor" : "claude",
+    "at" : "2026-11-12T17:05:00Z",
+    "kind" : "fix",
+    "text" : "Fix round 3 completed. Fix limit (3) reached."
+   }
+  ]
+ },
+ "freshness" : {
+  "age_seconds" : 233,
+  "reason_code" : null,
+  "reason_text" : null,
+  "stale_after_seconds" : 600,
+  "state" : "fresh",
+  "tick_at" : "2026-11-12T22:00:07Z"
+ },
+ "generated_at" : "2026-11-12T22:04:00Z",
+ "model" : "work_item"
+}

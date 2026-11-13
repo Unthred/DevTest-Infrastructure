@@ -1,0 +1,1 @@
+If you cannot finish the rebase at all (conflicts that are not mechanical, a check or tool you may not use or fix), run `ai-supervisor rebase-stop --worktree <this worktree> --old <oldHead from step 1> --reason "<why, in one or two sentences>"` before you stop, so Foreman asks the homeowner once instead of running you again with the same result.

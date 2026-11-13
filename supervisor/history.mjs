@@ -2,6 +2,7 @@
 // archives, merge and unblock overflow is appended to archive files, and a deduplicated, allowlisted timeline of everything the
 // team did is kept from the first job. The tick WRITES these files; the dashboard only READS them. No function here calls GitHub or a
 // model, except `githubBackfill`, which runs only from the explicit `history backfill` command with an injected gh runner.
+import { limitResetEntries } from './resetsentries.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -116,6 +117,7 @@ export function collectEntries({ config, root, jobs, events, state, incidents = 
   const merges = [...(state?.mergeLog || []), ...(root ? parseLines(readText(mergeArchiveFile(root))) : [])];
   for (const m of merges) out.push(mergeEntry(m));
   for (const [id, tj] of Object.entries(state?.jobs || {})) if (tj.kind === 'rebase' && tj.rebase && Number.isFinite(tj.at)) out.push({ id: `rebase:${id}`, at: tj.at, kind: 'rebase', job: id, pr: tj.pr, head: tj.rebase.newHead, detail: `${tj.rebase.commits?.length ?? 0} commit(s)${tj.rebase.lost?.length ? `, ${tj.rebase.lost.length} lost` : ''}` });
+  for (const [id, tj] of Object.entries(state?.jobs || {})) if (tj.description && Number.isFinite(tj.at)) out.push({ id: `description:${id}`, at: tj.at, kind: 'description', job: id, pr: tj.pr, head: tj.head, agent: tj.agent });
   const unblocks = [...(state?.unblock?.log || []), ...(root ? parseLines(readText(unblockArchiveFile(root))) : [])];
   for (const u of unblocks) if (Number.isFinite(u.at)) out.push({ id: `unblock:${u.at}:${u.tk}:${u.target}`, at: u.at, kind: 'unblock', ...(u.tk === 'issue' ? { issue: u.target } : { pr: u.target }), detail: `${u.what}: ${u.result}` });
   for (const i of incidents) if (i?.kind === 'migration' && Number.isFinite(i.at)) out.push({ id: `migration:${i.number}:${i.at}`, at: i.at, kind: 'migration', event: i.result, detail: `${String(i.number).padStart(3, '0')}-${i.name}` });
@@ -129,7 +131,7 @@ export function verdictEntry(key, v, stage) {
 export const mergeEntry = m => ({ id: `merge:${m.pr}`, at: m.mergedAt, kind: 'merge', pr: m.pr, issue: m.issue ?? undefined, agent: m.agent ?? undefined, reviewer: m.reviewer ?? undefined });
 
 // Called from the tick. Best effort for the caller; returns the number of new entries.
-export const recordTimeline = (root, inputs) => appendTimeline(root, collectEntries({ ...inputs, root }));
+export const recordTimeline = (root, inputs) => appendTimeline(root, [...collectEntries({ ...inputs, root }), ...limitResetEntries({ root, config: inputs.config })]);
 // Called where a verdict is about to be deleted, so the review outcome stays in the timeline.
 export function archiveVerdict(root, key, v, stage) { const e = verdictEntry(key, v, stage); return e ? appendTimeline(root, [e]) : 0; }
 
@@ -186,8 +188,9 @@ export function entryText(e) {
   else if (e.kind === 'verdict') t = `${e.reviewer || 'reviewer'}: ${e.verdict} on ${ref}${e.head ? ` at ${e.head}` : ''}`;
   else if (e.kind === 'merge') t = `merged ${ref}${e.agent ? ` (${e.agent})` : ''}${e.reviewer ? `, reviewed by ${e.reviewer}` : ''}`;
   else if (e.kind === 'rebase') t = `rebase of ${ref}${e.head ? ` to ${e.head}` : ''}${e.detail ? `: ${e.detail}` : ''}`;
-  else if (e.kind === 'limit_reset') t = `${who}${e.detail || 'limit reset applied'}`;
+  else if (e.kind === 'description') t = `${who}description round on ${ref}${e.head ? ` at ${e.head}` : ''}: description edited, no commit pushed`;
   else if (e.kind === 'unblock') t = `Foreman unblocked ${ref}: ${e.detail || ''}`;
+  else if (e.kind === 'limit_reset') t = `${who}${e.detail || 'limit reset applied'}`;
   else t = `config migration ${e.detail || ''} ${e.event || ''}`;
   return redact(t.replace(/\s+/g, ' ').trim(), 300);
 }

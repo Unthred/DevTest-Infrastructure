@@ -5,6 +5,8 @@
 //   use_now | hold | lost_cause | use_before_expiry
 // and the figures behind it are always given: tokens restored, tokens Foreman could spend at full pace before the natural reset, that usable
 // share, and the hours left. Only the homeowner can apply a reset (claude.ai); Foreman advises.
+import { tokensText } from './capacitycheck.mjs';
+
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 const MIN_FIVE_HOUR_LEFT = 2;
@@ -12,7 +14,6 @@ const HELD_MODES = new Set(['reviews_only', 'waiting']);
 
 const round = value => (Number.isFinite(value) ? Math.round(value) : null);
 const percent = share => `${Math.round(share * 100)}%`;
-const tokensText = n => (Number.isFinite(n) ? (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`) + ' tokens' : 'unknown');
 const spanText = hours => (hours >= 48 ? `${Math.round(hours / 24 * 10) / 10} days` : `${Math.max(0, Math.round(hours * 10) / 10)} hours`);
 
 const isWeeklyType = type => /^seven_day|week|secondary/.test(type || '');
@@ -131,3 +132,6 @@ export function adviseAgent({ records, name, view, windows = [], models = [], pa
     return { id: rec.id, agent: name, limit: rec.limit, scope: rec.scope, expiry: rec.expiry, ...withExpiry(rec, advice, { now, settings, nextUsefulAt }), spacing: spacingText(group, now) };
   });
 }
+
+// The verdicts that raise a Needs you item.
+export const NOTIFY_VERDICTS = new Set(['use_now', 'use_before_expiry']);

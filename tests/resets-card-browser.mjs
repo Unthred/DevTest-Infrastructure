@@ -23,9 +23,10 @@ for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), 
 fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: now - 60000, status: 'ok', lastOkAt: now - 60000 }, fetchedAt: now - 60000, pulls: [], issues: [] }));
 fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ verdicts: {}, jobs: {} }));
 const day = 86400000;
-fs.writeFileSync(path.join(root, 'team', 'limit-resets.json'), JSON.stringify({ version: 1, records: [
-  { id: 'aaaa0001', agent: 'claude', limit: 'weekly', scope: 'fable', expiry: now + 5 * day, state: 'available', createdAt: now },
-  { id: 'aaaa0002', agent: 'claude', limit: 'weekly', scope: 'all', expiry: now + 120 * day, state: 'available', createdAt: now }] }));
+const dateIn = days => new Date(now + days * day).toISOString().slice(0, 10);
+fs.writeFileSync(path.join(root, 'limit-resets.json'), JSON.stringify({ version: 1, resets: [
+  { id: 'aaaa0001', agent: 'claude', limit: 'weekly', scope: 'fable', expires: dateIn(5), usedAt: null, createdAt: now },
+  { id: 'aaaa0002', agent: 'claude', limit: 'weekly', scope: 'all', expires: dateIn(120), usedAt: null, createdAt: now }] }));
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } } };
 const view = await currentView({ root, config, now, tz: 'UTC' });
 const html = freezeLivePanels(renderRoute(view, { page: 'usage' }, { query: new URLSearchParams(), pathname: '/usage' }).html).replace(/<meta http-equiv="refresh"[^>]*>/, '');

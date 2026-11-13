@@ -12,10 +12,13 @@ import { SupervisorError } from './core.mjs';
 import { redact } from './redact.mjs';
 import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
 import { isWeekly } from './capacity.mjs';
+import { restoredIn, sinceLastReset } from './resetdetect.mjs';
 import { validateResetsConfig } from './resetsettings.mjs';
+import { DEFAULT_READING_MAX_AGE_MINUTES, readingInfo } from './readingfresh.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
+DEFAULT_BUDGET.reading_max_age_minutes = DEFAULT_READING_MAX_AGE_MINUTES;   // issue #1163
 // Early in a window one or two percent over an hour is noise, not a rate: projections use at least this share of the window as elapsed time (issue #159).
 export const MIN_ELAPSED_FRACTION = 0.05;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
@@ -24,8 +27,9 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
-const CAPACITY_KEYS = ['starting_capacity', 'reserve_margin', 'resets'];   // issue #1116; resets: issue #1162
+const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin', 'resets'];   // issue #1116; resets: issue #1162
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
+KEYS.push('reading_max_age_minutes');   // issue #1163
 
 export function validateBudgetConfig(b, agentNames) {
   if (b === undefined) return;
@@ -36,6 +40,7 @@ export function validateBudgetConfig(b, agentNames) {
   if ('enabled' in b && typeof b.enabled !== 'boolean') throw new SupervisorError('invalid budget config: enabled');
   num('projected_limit', 0.5, 1.5); num('high_water', 0.5, 1); num('high_water_min_hours', 0, 168); num('recent_hours', 1, 168); num('recent_min_window_hours', 0, 168); num('recent_min_samples', 2, 10000); num('exhausted_at', 0.9, 1);
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
+  num('reading_max_age_minutes', 5, 1440);
   validateCapacityKeys(b, agentNames);
   validateResetsConfig(b.resets);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
@@ -45,10 +50,12 @@ export function validateBudgetConfig(b, agentNames) {
 // Issue #1116: starting_capacity maps an agent to its weekly capacity in tokens; reserve_margin is the share of capacity kept on top of the projected need.
 function validateCapacityKeys(b, agentNames) {
   if ('reserve_margin' in b && !(Number.isFinite(b.reserve_margin) && b.reserve_margin >= 0 && b.reserve_margin <= 0.5)) throw new SupervisorError('invalid budget config: reserve_margin');
-  if (!('starting_capacity' in b)) return;
-  const c = b.starting_capacity;
-  const ok = c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([n, v]) => agentNames.includes(n) && Number.isFinite(v) && v > 0);
-  if (!ok) throw new SupervisorError('invalid budget config: starting_capacity must map configured agents to a positive token count');
+  for (const key of ['starting_capacity', 'capacity']) {
+    if (!(key in b)) continue;
+    const c = b[key];
+    const ok = c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([n, v]) => agentNames.includes(n) && Number.isFinite(v) && v > 0);
+    if (!ok) throw new SupervisorError(`invalid budget config: ${key} must map configured agents to a positive token count`);
+  }
 }
 export const budgetSettings = config => ({ ...DEFAULT_BUDGET, ...(config?.budget || {}) });
 // Whether an agent's role lets it take another agent's implementation work. Default: every agent may.
@@ -59,6 +66,11 @@ const live = (allowance, now) => (allowance?.windows || []).filter(w => Number.i
 const top = ws => [...ws].sort((a, b) => b.utilization - a.utilization)[0] || null;
 // The weekly window that matters (the most used one when a provider reports several), or null when unknown or already reset.
 export const weeklyWindow = (allowance, now) => top(live(allowance, now).filter(isWeekly));
+// Issue #1167: the short (non-weekly) window shown beside the weekly capacity figure, or null.
+export function shortWindowOf(allowance, now) {
+  const w = top(live(allowance, now).filter(x => !isWeekly(x)));
+  return w ? { used: w.utilization, resetsAt: w.resetsAt } : null;
+}
 const median = xs => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 10 * 60000;
 const tokens = j => (j?.usage ? (j.usage.inputTokens || 0) + (j.usage.outputTokens || 0) : 0);
@@ -74,7 +86,8 @@ export function weeklyHistory(snapshots, agent, current = null) {
 // Recent burn in fraction-of-allowance per hour, from readings of the same weekly window over the last `hours`.
 // Needs two readings at least two hours apart; otherwise null (the window average is used alone).
 export function recentRate(history, resetsAt, now, hours) {
-  const pts = history.filter(p => sameReset(p.resetsAt, resetsAt) && now - p.at <= hours * HOUR && p.at <= now);
+  // Issue #1159: readings from before a limit reset the homeowner applied describe use that was given back, so they are left out.
+  const pts = sinceLastReset(history, resetsAt).filter(p => sameReset(p.resetsAt, resetsAt) && now - p.at <= hours * HOUR && p.at <= now);
   if (pts.length < 2) return null;
   const span = (pts.at(-1).at - pts[0].at) / HOUR;
   return span >= 2 ? Math.max(0, (pts.at(-1).used - pts[0].used) / span) : null;
@@ -127,6 +140,7 @@ const hrs = h => (h >= 48 ? `${Math.round(h / 24 * 10) / 10} days` : `${Math.rou
 export function assessAgent({ allowance, jobs = [], history = [], settings = DEFAULT_BUDGET, now, latched = null, capacity = null }) {
   const out = { mode: 'normal', reason: null, until: null, known: false, used: null, resetsAt: null, hoursLeft: null, ratePerHour: null, rateSource: null, projected: null, runsOutAt: null,
     shortWindow: null, observedAt: allowance?.observedAt ?? null, overage: allowance?.billing?.usingOverage === true, creditsAvailable: allowance?.billing?.creditsAvailable === true, costs: { perToken: null, typical: {}, cost: () => null } };
+  out.reading = readingInfo(allowance, now, settings);   // issue #1163: time, age, source and limit kinds of the reading behind every figure here
   if (settings.enabled === false) { out.reason = 'allowance-aware scheduling is switched off'; return out; }
   if (!allowance || !Array.isArray(allowance.windows)) {
     const reported = reportedLimit(allowance, now);
@@ -137,7 +151,8 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   if (short) out.shortWindow = { used: short.utilization, resetsAt: short.resetsAt };
   if (weekly) {
     const windowH = (weekly.windowMinutes || WEEK_MINUTES) / 60, hoursLeft = (weekly.resetsAt - now) / HOUR;
-    const average = weekly.utilization / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
+    // The window average counts what an applied reset gave back, or the burn would read lower than it was (issue #1159).
+    const average = (weekly.utilization + restoredIn(history, weekly.resetsAt)) / Math.max(windowH * MIN_ELAPSED_FRACTION, windowH - hoursLeft);
     // Just after a reset little has been used and a short burst extrapolates wildly (4% used read as 299%, issue #619). The recent rate
     // is blended in gradually (issue #698): weight 0 until the window has run half the recent-rate span, rising linearly to 1 at the full
     // span, so the estimate has no cliff at recent_hours (4% used, +4% in 3 h read 29% at 23 h and 196% at 24 h with a hard cutoff).

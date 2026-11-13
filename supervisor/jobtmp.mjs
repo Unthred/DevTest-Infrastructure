@@ -8,7 +8,6 @@ import path from 'node:path';
 
 export const SWEEP_AGE_MS = 6 * 3600000;
 export const DISK_HOLD_PERCENT = 80;
-export const SWAP_HOLD_PERCENT = 90;
 export const jobTmpRoot = root => path.join(root, 'tmp');
 export const jobTmpName = id => `job-${String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)}`;
 
@@ -67,14 +66,14 @@ export function topConsumers(dirs, n = 5) {
   for (const d of dirs) { let names = []; try { names = fs.readdirSync(d); } catch { continue; } for (const name of names.slice(0, 400)) rows.push({ path: path.join(d, name), bytes: sizeOf(path.join(d, name)) }); }
   return rows.sort((a, b) => b.bytes - a.bytes).slice(0, n);
 }
-// { hold, reasons, disk, swap, top } — hold when the root volume is over 80% or swap over 90%. Readers are injectable for tests.
-export function hostPressure({ disk = readDisk(), swap = readSwap(), dirs = [os.tmpdir()], diskLimit = DISK_HOLD_PERCENT, swapLimit = SWAP_HOLD_PERCENT } = {}) {
+// { hold, reasons, disk, swap, top } — hold when the root volume is over 80%. Swap used never holds (issue #1151): memory pressure is
+// judged by hostpressure.mjs from swap activity and available memory. Readers are injectable for tests.
+export function hostPressure({ disk = readDisk(), swap = readSwap(), dirs = [os.tmpdir()], diskLimit = DISK_HOLD_PERCENT } = {}) {
   const reasons = [];
   if (disk && disk.percent > diskLimit) reasons.push(`the root volume is ${disk.percent}% full`);
-  if (swap && swap.percent > swapLimit) reasons.push(`swap is ${swap.percent}% used`);
   return { hold: reasons.length > 0, reasons, disk, swap, top: reasons.length ? topConsumers(dirs) : [] };
 }
-export const pressureText = p => `${p.reasons.join(' and ')}; new job starts are held until it recovers (under ${DISK_HOLD_PERCENT}% disk, ${SWAP_HOLD_PERCENT}% swap).${p.top.length ? ` Largest: ${p.top.map(t => `${t.path} ${(t.bytes / 1048576).toFixed(0)} MB`).join('; ')}.` : ''}`;
+export const pressureText = p => `${p.reasons.join(' and ')}; new job starts are held until it recovers (under ${DISK_HOLD_PERCENT}% disk).${p.top.length ? ` Largest: ${p.top.map(t => `${t.path} ${(t.bytes / 1048576).toFixed(0)} MB`).join('; ')}.` : ''}`;
 
 // Leak guard (issue #1007): a fresh TMPDIR inside the inherited one for a test run. finish() removes it and returns what the run left behind.
 export function guardTmp(env = process.env, base = env.TMPDIR || os.tmpdir()) {

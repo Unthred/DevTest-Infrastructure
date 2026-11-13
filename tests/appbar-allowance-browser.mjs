@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+// Tower-only browser check of the app bar agent items (issues #1178, #1221), in the pinned Chromium container (same path as tests/appbar-allowance-browser.mjs).
+// Renders the real Usage page from a throwaway supervisor state, with the real figures of 12 Nov 2026 put into the view (claude idle, weekly 14%, 5 hour 1%; codex paused on an Implementer job, weekly 31%, no 5 hour figure), stages the real static files and
+// runs browser/appbar-allowance-scenario.mjs at 1280, 1440, 1920 and a phone width. Results go to the directory in argv[2]. Run `node browser/prepare-cache.mjs` first.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { createPlan, runContainer, releaseVolumes, targetSocketPath } from '../docker/runner.mjs';
+import { createStaticServer, listenOnSocket } from '../browser/static-server.mjs';
+import { stageProject } from './stage-project.mjs';
+import { currentView } from '../supervisor/dashserver.mjs';
+import { renderRoute } from '../supervisor/dashrender.mjs';
+import { stageDashui, freezeLivePanels } from './helpers/dashui-stage.mjs';
+
+const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const outDir = path.resolve(process.argv[2] || '');
+if (!process.argv[2]) { console.error('usage: node tests/appbar-allowance-browser.mjs <output-dir>'); process.exit(2); }
+const now = Date.UTC(2026, 10, 12, 23, 30);   // the reading below is 14 minutes old at this time, as on 12 Nov
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'appbaralloc-'));
+for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
+fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: now - 60000, status: 'ok', lastOkAt: now - 60000 }, fetchedAt: now - 60000, pulls: [], issues: [] }));
+fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ mergeLog: [] }));
+const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir: path.join(root, 'inbox') },
+  github_app: { app_id: 1, installation_id: 2, key_file: '/nowhere/key.pem' }, limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [] } } };
+for (const d of ['items', 'status']) fs.mkdirSync(path.join(root, 'inbox', d), { recursive: true });
+const view = await currentView({ root, config: { ...config, agents: { claude: config.agents.claude, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } } }, now, tz: 'UTC' });
+const lim = (kind, used, resetsAt, expired = false) => ({ kind, label: kind, used, resetsAt, expired });
+const reading = limits => ({ limits, stale: false, ageMinutes: 14, maxAgeMinutes: 60, observedAt: now - 14 * 60000 });
+view.budget = {
+  claude: { reading: reading([lim('weekly_all', 0.14, Date.UTC(2026, 10, 19, 4)), lim('session_5h', 0.01, Date.UTC(2026, 10, 13, 0, 40))]) },
+  codex: { reading: reading([lim('weekly_all', 0.31, Date.UTC(2026, 10, 18, 9))]) }
+};
+const codexAgent = view.agents.find(x => x.name === 'codex');
+Object.assign(codexAgent, { state: 'paused', jobs: [{ role: 'implementer' }] });
+const html = freezeLivePanels(renderRoute(view, { page: 'usage' }, { query: new URLSearchParams(), pathname: '/usage' }).html).replace(/<meta http-equiv="refresh"[^>]*>/, '');
+const lock = JSON.parse(fs.readFileSync(path.join(here, 'docker/images.lock.json'), 'utf8'));
+const storageRoot = path.join('/mnt/cache/appdata/devtest-infrastructure/appbaralloc', crypto.randomBytes(6).toString('hex'));
+const uid = process.getuid() === 0 ? 99 : process.getuid(), gid = process.getgid() === 0 ? 100 : process.getgid();
+const stage = stageProject(here, uid, gid), project = stage.project;
+const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: { cpus: 2, memoryMb: 2048, pids: 256, shmMb: 256, timeoutMs: 240000, diskMb: 256, cacheMb: 64 } };
+const site = fs.mkdtempSync('/mnt/cache/appdata/devtest-infrastructure/appbaralloc-site-');
+fs.mkdirSync(path.join(site, 'static'), { recursive: true }); stageDashui(site, path.join(here, 'supervisor', 'dashui'));
+fs.writeFileSync(path.join(site, 'card.html'), html);
+for (const f of fs.readdirSync(site, { recursive: true })) { const p = path.join(site, f); fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o755 : 0o644); }
+fs.chmodSync(site, 0o755);
+const failures = [];
+const run = async (name, spec, dir) => {
+  const runId = crypto.randomBytes(8).toString('hex');
+  const plan = createPlan({ project, runId, image: 'playwright', ...spec, targets: dir ? ['fixture'] : [] }, cfg);
+  const server = dir ? await listenOnSocket(createStaticServer(dir), targetSocketPath(storageRoot, runId, 'fixture'), { uid, gid }) : null;
+  try {
+    const r = await runContainer(plan, { keepVolume: true }); console.log(JSON.stringify({ run: name, exit: r.subjectExit, cleanup: r.cleanup }));
+    if (r.subjectExit !== 0 || r.cleanup !== 'complete') failures.push(`${name}: exit ${r.subjectExit}, cleanup ${r.cleanup}`);
+    if (dir) for (const f of fs.readdirSync(plan.out)) fs.copyFileSync(path.join(plan.out, f), path.join(outDir, f));
+  } finally { await server?.close(); releaseVolumes(plan); }
+};
+try {
+  fs.mkdirSync(storageRoot, { recursive: true, mode: 0o700 }); fs.mkdirSync(outDir, { recursive: true });
+  const pkg = lock.packages['playwright-core'];
+  await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] });
+  for (const profile of ['desktop-1280', 'desktop-1440', 'desktop-1920', 'phone-390'])
+    await run(profile, { phase: 'test', command: ['node', '/src/browser/appbar-allowance-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `appbar-allowance-${profile}`] }, site);
+} finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(site, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); stage.cleanup(); }
+if (failures.length) { console.error(`APP BAR ALLOWANCE BROWSER CHECK FAILED (${failures.length}):\n${failures.join('\n')}`); process.exit(1); }
+console.log('APP BAR ALLOWANCE BROWSER CHECK OK');

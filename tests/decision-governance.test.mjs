@@ -62,12 +62,13 @@ function repoWith(t, files) {
 test('the CI script exits 1 for an agent-approved entry, 0 for a proposal, and reads the approvals file', t => {
   const r = repoWith(t, {}); const base = r.commit(BASE);
   const run = (head, file) => spawnSync('node', [path.join(ROOT, 'tools/ci/validate-decision-status.mjs'), base, head, ...(file ? [file] : [])], { cwd: r.dir, encoding: 'utf8', env: { ...process.env, REPO_OWNER: 'Unthred' } });
+  // issue #1229: the register is frozen, so a new proposal there is refused (it is a docs/decisions file now)
   const prop = r.commit(BASE + entry('D-003', 'agent-proposal'));
-  assert.equal(run(prop).status, 0);
+  assert.equal(run(prop).status, 1);
   const link = 'https://github.com/o/r/pull/9#issuecomment-77';
-  const appr = r.commit(BASE + entry('D-003', 'homeowner-approved', link));
-  const res = run(appr); assert.equal(res.status, 1); assert.match(res.stderr, /D-003 is added as homeowner-approved/);
-  const f = path.join(r.dir, 'a.json'); fs.writeFileSync(f, JSON.stringify([owner('homeowner-approval: D-003')]));
+  const appr = r.commit(BASE.replace('D-002 — title D-002\n- Status: agent-proposal\n- Date: 2026-11-02\n- Source: issue #1', `D-002 — title D-002\n- Status: homeowner-approved\n- Date: 2026-11-02\n- Source: ${link}`));
+  const res = run(appr); assert.equal(res.status, 1); assert.match(res.stderr, /D-002 changes status agent-proposal -> homeowner-approved/);
+  const f = path.join(r.dir, 'a.json'); fs.writeFileSync(f, JSON.stringify([owner('homeowner-approval: D-002')]));
   assert.equal(run(appr, f).status, 0);
   assert.equal(run('nonexistent-ref').status, 1);
 });

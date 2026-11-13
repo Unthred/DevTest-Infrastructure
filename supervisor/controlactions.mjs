@@ -2,6 +2,8 @@
 // normal refusal: { outcome: 'done' | 'refused', changed, text }. The caller records who, when, why and the result in the item's status.
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
 import { addLabelAsApp } from './appidentity.mjs';
+import { refusalNote } from './pendingsteps.mjs';
+import { postIssueDraft } from './issue-drafts.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
@@ -25,11 +27,14 @@ async function liveJobsFor(n, { jobs, records }) {
   return live;
 }
 
+// Issue #1155: when the refusal is because a homeowner step is outstanding, it names the step and its PR.
+const stepNote = deps => { const note = refusalNote(deps.pendingSteps, 'github_app'); return note ? `; ${note}` : ''; };
+
 export async function park(n, deps) {
   const found = await findItem(deps.gh, n);
   if (!found) return refused(`no open issue or pull request #${n}`);
   if (found.labels.includes(PARKED)) return done(false, `${found.kind} #${n} is already parked; nothing changed`);
-  try { await deps.labelAsApp(n, PARKED); } catch (error) { return refused(`${found.kind} #${n} was not parked: ${String(error?.message || error).slice(0, 200)}`); }   // the App identity, never the owner account
+  try { await deps.labelAsApp(n, PARKED); } catch (error) { return refused(`${found.kind} #${n} was not parked: ${String(error?.message || error).slice(0, 200)}${stepNote(deps)}`); }   // the App identity, never the owner account
   const live = await liveJobsFor(n, deps);
   const note = live.length ? ` Its running job${live.length > 1 ? 's' : ''} (${live.join(', ')}) ${live.length > 1 ? 'were' : 'was'} not stopped; stop ${live.length > 1 ? 'them' : 'it'} separately with stop_job.` : '';
   return done(true, `${found.kind} #${n} is parked.${note}`);
@@ -71,7 +76,7 @@ export async function applyControl({ action, target }, deps) {
 }
 
 // The parked label is written as the GitHub App; a test may supply its own writer on the GitHub client.
-export const depsOf = team => ({ gh: team.gh, jobs: team.jobs, records: team.s.jobs, labelAsApp: (n, label) => (team.gh.addLabelAsApp ?? ((x, l) => addLabelAsApp(team.c, x, l)))(n, label) });
+export const depsOf = team => ({ gh: team.gh, jobs: team.jobs, records: team.s.jobs, pendingSteps: team.s.pendingSteps, labelAsApp: (n, label) => (team.gh.addLabelAsApp ?? ((x, l) => addLabelAsApp(team.c, x, l)))(n, label) });
 
 // Runs one picked-up control item. 'running' is recorded BEFORE the effect (at most once, as for a named action). The status keeps who, why and
 // the result (the item file is removed once final); a refusal ends 'refused' with its reason, a failure ends 'failed'.
@@ -100,7 +105,7 @@ export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords
 
 // Runs one approved inbox item by its kind; kept out of Team so adding a kind does not grow that class.
 export async function dispatchApproved(team, inboxStore, dir, st, item, report) {
-  if (st.kind === 'issue_draft') await team.postIssueDraft(dir, st, item, report);
+  if (st.kind === 'issue_draft') await postIssueDraft(team, dir, st, item, report);
   if (st.state !== 'approved') return;
   if (st.kind === 'action') await team.runInboxAction(dir, st, item, report);
   if (st.kind === 'host_value') team.runHostValue(dir, st, item, report);

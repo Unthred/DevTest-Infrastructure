@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "audit.schema.json",
+  "title": "Read model: audit (GET /api/v1/audit?actor=&command=&outcome=&target=&limit=&cursor=)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "audit" },
+    "data": {
+      "type": "object",
+      "required": ["direct_control", "summary", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "direct_control": {
+          "type": "object",
+          "required": ["enabled", "changed_at", "changed_by", "actions"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "changed_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+            "changed_by": { "type": ["string", "null"] },
+            "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "required": ["window_seconds", "applied", "refused", "undone"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": { "type": "integer" },
+            "applied": { "type": "integer" }, "refused": { "type": "integer" }, "undone": { "type": "integer" }
+          }
+        },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/audit_entry" } }
+      }
+    }
+  },
+  "$defs": {
+    "audit_entry": {
+      "type": "object",
+      "description": "One command, applied or refused. Written by the core for every command from every client.",
+      "required": ["id", "at", "actor", "client", "command", "target", "input", "reason", "before", "after", "outcome", "refusal_code", "refusal_text", "undo"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/short_id" },
+        "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "actor": { "type": "string", "enum": ["homeowner", "overseer", "foreman"] },
+        "client": { "type": ["string", "null"], "description": "Which client sent it: web, mcp, terminal, and so on." },
+        "command": { "type": "string" },
+        "target": { "anyOf": [{ "$ref": "common.schema.json#/$defs/ref" }, { "type": "null" }] },
+        "input": { "type": "object" },
+        "reason": { "type": ["string", "null"] },
+        "before": { "type": ["object", "null"] },
+        "after": { "type": ["object", "null"] },
+        "outcome": { "type": "string", "enum": ["applied", "refused", "undone", "no_change"] },
+        "refusal_code": { "type": ["string", "null"] },
+        "refusal_text": { "type": ["string", "null"] },
+        "undo": {
+          "type": ["object", "null"],
+          "description": "The command that reverses this one. Null when it is not reversible.",
+          "required": ["command", "input", "available", "until", "undone_by"],
+          "additionalProperties": false,
+          "properties": {
+            "command": { "type": "string" },
+            "input": { "type": "object" },
+            "available": { "type": "boolean" },
+            "until": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+            "undone_by": { "type": ["string", "null"], "description": "The audit id of the entry that undid this one." }
+          }
+        }
+      }
+    }
+  }
+}

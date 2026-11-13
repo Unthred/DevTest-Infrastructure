@@ -8,12 +8,17 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
+import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
+import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
+import { afterFormatRefusal, afterLabels, resolveAfter } from '../foreman-mcp/draft-after.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
 export const INTERNAL_KINDS = ['host_value'];
 // Issue #629: named actions for cases that needed a terminal. Each is a fixed name with one target of a fixed shape (a pull request or issue
 // number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
+// Issue #1179: the release of an agent parked after an infrastructure fault.
+const RELEASE_WILL = 'Release this agent from its infrastructure-fault park, for a cause you judge benign. A real fault parks it again. Refused when it is not parked.';
 export const ACTIONS = {
   new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
   clear_retry_cap: { target: 'pr', noun: 'pull request', will: 'Clear the retry cap Foreman put on this pull request (a rebase, fix or review that failed twice for the same cause), so it is planned again. Refused when no cap is in place. Nothing is merged or approved.' },
@@ -21,16 +26,23 @@ export const ACTIONS = {
   close_job: { target: 'job', noun: 'job', will: 'Close this stopped job of a pull request that a newer head has overtaken. Unpushed work is saved to a branch on the remote first; the job is closed only once nothing local is unsaved.' },
   stop_job: { target: 'job', noun: 'job', will: 'Stop this running or paused job.' },
   resume_job: { target: 'job', noun: 'job', will: 'Resume this paused, blocked or failed job once, with a fresh bounded round.' },
+  clear_latch: { target: 'latch', noun: 'upgrade', will: 'Clear the upgrade latch so the next tick may install merged work under the usual rules (issue #1160). Refused when no latch is set or an install is running. Nothing is merged or approved.' },
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
+  release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
 };
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
 export const CONTROLS = { park: { target: 'pr' }, stop_job: { target: 'job' } };
-const TARGET_RE = { pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/ };
+const TARGET_RE = { latch: /^latch$/, pr: /^[1-9]\d{0,8}$/, issue: /^[1-9]\d{0,8}$/, job: /^[a-f0-9]{8}$/, agent: /^[a-z][a-z0-9_-]{0,11}$/ };
 // title/prompt/body/reasonChars are characters; itemBytes is the item file size; pending is the cap of items waiting; keepDays is how long a final status is kept; resultChars caps a stored result.
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, itemBytes: 32 * 1024, pending: 30, keepDays: 14, resultChars: 4000, reasonChars: 300 };
 export const ID_RE = /^[a-f0-9]{32}$/;
+// Issue #1238: a prompt may declare that it only reads or only reports. Such a prompt never changes queue order or config, so it never holds
+// implement picks. An absent effect means it may change them.
+export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
+FIELDS.prompt.push('effect');
+FIELDS.issue_draft.push('after');   // issue #1259
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -80,8 +92,10 @@ export function validateItem(raw, { internal = false } = {}) {
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: 12, key: 60, value: 300 };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && k === 'why') continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
+    if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
     if (raw.kind === 'host_value' && k === 'value') continue;   // checked against its key's exact shape below; the card must show it as it is
@@ -92,9 +106,15 @@ export function validateItem(raw, { internal = false } = {}) {
     if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
+  if (raw.kind === 'issue_draft') {
+    const parsed = parseDependsOn(raw.body);
+    if (parsed.malformed) return { ok: false, reason: dependencyRefusal(parsed) };
+  }
   if (named) {
     const table = raw.kind === 'control' ? CONTROLS : ACTIONS, spec = Object.hasOwn(table, raw.action) ? table[raw.action] : null;
     if (!spec) return { ok: false, reason: `unknown action (accepted: ${Object.keys(table).join(', ')})` };
+    if (spec.target === 'latch' && raw.target !== 'latch') return { ok: false, reason: 'target must be latch' };   // issue #1160
+    if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
   if (raw.kind === 'host_value') {
@@ -157,12 +177,14 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
     let raw; try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { refuse('not valid JSON'); continue; }
     const v = validateItem(raw), hash = hashOf(raw);
     if (!v.ok) { setStatus(inboxDir, id, { state: 'refused', reason: v.reason, kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: KINDS.includes(raw?.kind) ? raw.kind : null, hash, reason: v.reason }, now); picked++; continue; }
+    const chain = v.item.after ? resolveAfter(inboxDir, id, v.item.after) : { ok: true };   // issue #1259: the named drafts must be known issue drafts
+    if (!chain.ok) { setStatus(inboxDir, id, { state: 'refused', reason: chain.reason, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: chain.reason }, now); picked++; continue; }
     if (v.item.kind === 'control') {   // issue #1115: no card and no pending slot; the tick runs it and records who, why and the result
       setStatus(inboxDir, id, { state: 'approved', kind: 'control', hash, createdAt: now, title: v.item.title, control: { action: v.item.action, target: v.item.target, reason: v.item.reason, by: 'overseer' } }, now);
       audit(inboxDir, { id, event: 'control', kind: 'control', hash }, now); picked++; controls++; continue;
     }
     if (pending >= maxPending) { setStatus(inboxDir, id, { state: 'refused', reason: `${maxPending} items are already waiting for approval; decide some first`, kind: v.item.kind, hash, createdAt: now }, now); audit(inboxDir, { id, event: 'refused', kind: v.item.kind, hash, reason: 'pending cap' }, now); picked++; continue; }
-    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now }, now);
+    setStatus(inboxDir, id, { state: 'pending', kind: v.item.kind, hash, createdAt: now, title: redactLong(v.item.title, LIMITS.title, ' [cut]').trim() }, now);
     audit(inboxDir, { id, event: 'proposed', kind: v.item.kind, hash }, now);
     pending++; picked++;
   }
@@ -199,16 +221,24 @@ export function loadItem(inboxDir, id) {
   return v.ok ? { ok: true, item: v.item, status: s } : { ok: false, reason: v.reason };
 }
 
+// Issue #1238: what the card tells the homeowner about the order guard before they approve.
+const promptWill = it => 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' + effectNote(it);
+const effectNote = it => (PROMPT_EFFECTS.includes(it.effect)
+  ? ` The proposer declares it ${it.effect === 'read_only' ? 'read only' : 'report only'}: it does not hold new implement work back while it waits.`
+  : ' It may change queue order or config, so new implement work waits for it.');
+
+const chainNote = (inboxDir, it) => (it.after ? ` It waits for the earlier drafts: ${afterLabels(inboxDir, it.after).join('; ')}; their issue numbers are written into its prerequisite line.` : '');
 // Cards for the dashboard: pending items with exactly what will happen. Text is redacted again for display (defence in depth).
-export function pendingCards(inboxDir) {
+export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
-    if (!l.ok) return { id: s.id, kind: s.kind, createdAt: s.createdAt ?? null, broken: l.reason };
+    if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
-    return { id: s.id, kind: it.kind, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12),
-      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? 'Start one supervised Foreman job on an implementer model with this prompt. It cannot merge, approve, write a review verdict or widen its own limits.' : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.',
+    return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
+      waitsFor: it.after ? afterLabels(inboxDir, it.after) : undefined,
+      will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.' + chainNote(inboxDir, it),
       text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
-  });
+  }).filter(card => (!kind || card.kind === kind) && (!state || card.state === state) && matchesInboxSearch(card, query));
 }
 
 // Issue #943: items Foreman refused after pickup (a full queue, a failed check) have no GitHub notice either. They are grouped by reason into one
@@ -323,7 +353,7 @@ export function raiseHostValue(inboxDir, { key, value, why }, now = Date.now()) 
   fs.mkdirSync(d.items, { recursive: true, mode: 0o755 }); fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
   const file = path.join(d.items, `${id}.json`);
   try { fs.writeFileSync(file, JSON.stringify(v.item, null, 1) + '\n', { mode: 0o644, flag: 'wx' }); } catch { return { raised: false, id, reason: 'item file exists' }; }
-  setStatus(inboxDir, id, { state: 'pending', kind: 'host_value', hash: hashOf(v.item), createdAt: now }, now);
+  setStatus(inboxDir, id, { state: 'pending', kind: 'host_value', hash: hashOf(v.item), createdAt: now, title: v.item.title }, now);
   audit(inboxDir, { id, event: 'proposed', kind: 'host_value', hash: hashOf(v.item) }, now);
   return { raised: true, id };
 }

@@ -1,0 +1,20 @@
+{
+ "60b46719080fc517fd9d569569d1c6cf": {
+  "kind": "rebase",
+  "agent": "claude",
+  "model": "sonnet",
+  "effort": "low",
+  "pr": 1180,
+  "head": "e3c13111cf6aa0525904043146edbf2763797f29",
+  "branch": "claude/issue-1155-v2-item-25"
+ },
+ "91896f66e3a13601da39343a670fe8ea": {
+  "kind": "review",
+  "agent": "claude",
+  "model": "opus",
+  "effort": "medium",
+  "pr": 1180,
+  "head": "e3c13111cf6aa0525904043146edbf2763797f29",
+  "branch": "claude/issue-1155-v2-item-25"
+ }
+}

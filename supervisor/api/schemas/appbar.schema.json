@@ -1,0 +1,111 @@
+{
+  "$id": "appbar.schema.json",
+  "title": "The app bar model: reply of GET /api/v1/appbar (issue #1253)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "nullableTimestamp": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+    "window": {
+      "type": "object",
+      "required": ["state", "used_fraction", "level", "resets_at", "window_seconds", "reason_code", "reason_text"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["known", "unknown"] },
+        "used_fraction": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "level": { "enum": ["normal", "high", "near", null] },
+        "resets_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "window_seconds": { "type": "integer", "minimum": 1 },
+        "reason_code": { "enum": ["no_reading", "not_reported", "window_expired_no_reading", null] },
+        "reason_text": { "type": ["string", "null"] }
+      }
+    },
+    "reading": {
+      "type": "object",
+      "required": ["read_at", "age_seconds", "stale", "max_age_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "read_at": { "$ref": "#/$defs/nullableTimestamp" },
+        "age_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "stale": { "type": "boolean" },
+        "max_age_seconds": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "required": ["id", "display_name", "provider", "roles", "condition", "weekly", "short", "reading", "running_jobs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "provider": { "type": ["string", "null"] },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "weekly": { "$ref": "#/$defs/window" },
+        "short": { "$ref": "#/$defs/window" },
+        "reading": { "$ref": "#/$defs/reading" },
+        "running_jobs": { "$ref": "#/$defs/count" }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "appbar" },
+        "data": {
+          "type": "object",
+          "required": ["system", "counts", "slots", "tick", "agents", "breaker", "direct_control", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "system": { "$ref": "common.schema.json#/$defs/condition" },
+            "counts": {
+              "type": "object",
+              "required": ["needs_you", "faults", "stalled_agents", "planned_held", "running_jobs", "inbox_waiting"],
+              "additionalProperties": false,
+              "properties": {
+                "needs_you": { "$ref": "#/$defs/count" },
+                "faults": { "$ref": "#/$defs/count" },
+                "stalled_agents": { "$ref": "#/$defs/count" },
+                "planned_held": { "$ref": "#/$defs/count" },
+                "running_jobs": { "$ref": "#/$defs/count" },
+                "inbox_waiting": { "$ref": "#/$defs/count" }
+              }
+            },
+            "slots": {
+              "type": "object",
+              "required": ["max", "in_use"],
+              "additionalProperties": false,
+              "properties": { "max": { "$ref": "#/$defs/count" }, "in_use": { "$ref": "#/$defs/count" } }
+            },
+            "tick": {
+              "type": "object",
+              "required": ["state", "last_at", "next_at", "interval_seconds"],
+              "additionalProperties": false,
+              "properties": {
+                "state": { "enum": ["scheduled", "starting", "running", "overdue", "off", "unknown"] },
+                "last_at": { "$ref": "#/$defs/nullableTimestamp" },
+                "next_at": { "$ref": "#/$defs/nullableTimestamp" },
+                "interval_seconds": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "agents": { "type": "array", "items": { "$ref": "#/$defs/agent" } },
+            "breaker": { "$ref": "common.schema.json#/$defs/condition" },
+            "direct_control": { "type": "null" },
+            "version": {
+              "type": "object",
+              "required": ["installed", "running", "main", "behind_commits", "latched"],
+              "additionalProperties": false,
+              "properties": {
+                "installed": { "type": ["string", "null"] },
+                "running": { "type": ["string", "null"] },
+                "main": { "type": ["string", "null"] },
+                "behind_commits": { "type": ["integer", "null"], "minimum": 0 },
+                "latched": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

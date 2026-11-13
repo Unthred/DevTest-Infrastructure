@@ -1,0 +1,578 @@
+{
+ "contract" : "1.0",
+ "cursor" : "e-000412",
+ "data" : {
+  "items" : [
+   {
+    "actions" : [
+     {
+      "command" : "job.resume",
+      "enabled" : true,
+      "input" : {
+       "id" : "60b46719"
+      },
+      "primary" : true,
+      "reversible" : true,
+      "tier" : "direct"
+     },
+     {
+      "command" : "job.close",
+      "enabled" : true,
+      "input" : {
+       "id" : "60b46719"
+      },
+      "reversible" : false,
+      "tier" : "approval"
+     }
+    ],
+    "agent" : "claude",
+    "attempts" : 2,
+    "cause_code" : "postcondition_not_met",
+    "cause_text" : "Postcondition not met.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "postcondition_not_met",
+     "reason_text" : "The job ended without meeting its postcondition.",
+     "since" : "2026-11-12T18:36:00Z",
+     "state" : "blocked"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 804,
+    "duration_seconds" : 1620,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T18:36:00Z",
+    "full_id" : "60b4671911d94f6312c93fee27c0d397",
+    "has_transcript" : true,
+    "id" : "60b46719",
+    "kind" : "rebase",
+    "model" : "sonnet",
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T18:09:00Z",
+    "target" : {
+     "key" : "change-1180",
+     "kind" : "change",
+     "label" : "PR #1180",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Keep homeowner steps of merged PRs in Needs you until done",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1180"
+    },
+    "tokens" : {
+     "input" : 3391204,
+     "output" : 36780,
+     "total" : 3427984
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : "stopped_by_overseer",
+    "cause_text" : "Stopped by a control command.",
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : "stopped_by_overseer",
+     "reason_text" : "Stopped by the overseer: it repeated the same refusal.",
+     "since" : "2026-11-12T17:48:00Z",
+     "state" : "stopped"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1020,
+    "effort" : null,
+    "ended_at" : "2026-11-12T17:48:00Z",
+    "full_id" : "d81c44f065031e3998e9988a4c66acb5",
+    "has_transcript" : true,
+    "id" : "d81c44f0",
+    "kind" : "rebase",
+    "model" : null,
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T17:31:00Z",
+    "target" : {
+     "key" : "change-1142",
+     "kind" : "change",
+     "label" : "PR #1142",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Address review follow-ups for issue #1133",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1142"
+    },
+    "tokens" : {
+     "input" : 912440,
+     "output" : 8120,
+     "total" : 920560
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T17:05:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 317,
+    "duration_seconds" : 2580,
+    "effort" : "medium",
+    "ended_at" : "2026-11-12T17:05:00Z",
+    "full_id" : "a41f09c24aaca37f133d17f8bb3d2194",
+    "has_transcript" : true,
+    "id" : "a41f09c2",
+    "kind" : "fix",
+    "model" : "sonnet",
+    "role" : "implementer",
+    "started_at" : "2026-11-12T16:22:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1204551,
+     "output" : 41230,
+     "total" : 1245781
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T16:18:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1260,
+    "effort" : null,
+    "ended_at" : "2026-11-12T16:18:00Z",
+    "full_id" : "7be2d310b06cdf5f5f24e92b253084bf",
+    "has_transcript" : true,
+    "id" : "7be2d310",
+    "kind" : "review",
+    "model" : null,
+    "role" : "reviewer",
+    "started_at" : "2026-11-12T15:57:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 688120,
+     "output" : 9844,
+     "total" : 697964
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 2,
+    "cause_code" : "rebase_refused_lost_changes",
+    "cause_text" : "Rebase refused: the result would lose changes.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "rebase_refused_lost_changes",
+     "reason_text" : "Rebase refused: the result would lose changes.",
+     "since" : "2026-11-12T15:40:00Z",
+     "state" : "failed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 347,
+    "duration_seconds" : 1140,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T15:40:00Z",
+    "full_id" : "c3d9e8f16f1005b36280f56ac76d5a22",
+    "has_transcript" : true,
+    "id" : "c3d9e8f1",
+    "kind" : "rebase",
+    "model" : "sonnet",
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T15:21:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1480002,
+     "output" : 12410,
+     "total" : 1492412
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : "rebase_refused_lost_changes",
+    "cause_text" : "Rebase refused: the result would lose changes.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "rebase_refused_lost_changes",
+     "reason_text" : "Rebase refused: the result would lose changes.",
+     "since" : "2026-11-12T14:12:00Z",
+     "state" : "failed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 327,
+    "duration_seconds" : 1020,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T14:12:00Z",
+    "full_id" : "09ab77e44e78c7eeb4311da2962d8ea8",
+    "has_transcript" : true,
+    "id" : "09ab77e4",
+    "kind" : "rebase",
+    "model" : "sonnet",
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T13:55:00Z",
+    "target" : {
+     "key" : "change-1192",
+     "kind" : "change",
+     "label" : "PR #1192",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Overseer controls the queue directly over the MCP (#1164)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1192"
+    },
+    "tokens" : {
+     "input" : 1391877,
+     "output" : 11902,
+     "total" : 1403779
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T13:44:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 97,
+    "duration_seconds" : 480,
+    "effort" : "low",
+    "ended_at" : "2026-11-12T13:44:00Z",
+    "full_id" : "e5f6a7b8bfa3fc9ee2f913555a71ae78",
+    "has_transcript" : true,
+    "id" : "e5f6a7b8",
+    "kind" : "inbox",
+    "model" : "sonnet",
+    "role" : "inbox",
+    "started_at" : "2026-11-12T13:36:00Z",
+    "target" : {
+     "key" : "f28ef9de",
+     "kind" : "inbox_item",
+     "label" : "Inbox f28ef9de",
+     "title" : "Rules drift check read only Driftcheck"
+    },
+    "tokens" : {
+     "input" : 402118,
+     "output" : 6210,
+     "total" : 408328
+    },
+    "trigger" : "approve"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T13:01:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1200,
+    "effort" : null,
+    "ended_at" : "2026-11-12T13:01:00Z",
+    "full_id" : "3c7e91b54eb1932ad689f12a768971ed",
+    "has_transcript" : true,
+    "id" : "3c7e91b5",
+    "kind" : "review",
+    "model" : null,
+    "role" : "reviewer",
+    "started_at" : "2026-11-12T12:41:00Z",
+    "target" : {
+     "key" : "change-1180",
+     "kind" : "change",
+     "label" : "PR #1180",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Keep homeowner steps of merged PRs in Needs you until done",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1180"
+    },
+    "tokens" : {
+     "input" : 590332,
+     "output" : 7718,
+     "total" : 598050
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : "rebase_refused_lost_changes",
+    "cause_text" : "Rebase refused: the result would lose changes.",
+    "condition" : {
+     "attention" : "fault",
+     "reason_code" : "rebase_refused_lost_changes",
+     "reason_text" : "Rebase refused: the result would lose changes.",
+     "since" : "2026-11-12T12:20:00Z",
+     "state" : "failed"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1080,
+    "effort" : null,
+    "ended_at" : "2026-11-12T12:20:00Z",
+    "full_id" : "b90d2e6779720e3b99bc372e2b6bda6b",
+    "has_transcript" : true,
+    "id" : "b90d2e67",
+    "kind" : "rebase",
+    "model" : null,
+    "role" : "rebaser",
+    "started_at" : "2026-11-12T12:02:00Z",
+    "target" : {
+     "key" : "change-1139",
+     "kind" : "change",
+     "label" : "PR #1139",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Address supervisor review follow-ups (#1127)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1139"
+    },
+    "tokens" : {
+     "input" : 1102945,
+     "output" : 9033,
+     "total" : 1111978
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T11:30:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 255,
+    "duration_seconds" : 2280,
+    "effort" : "medium",
+    "ended_at" : "2026-11-12T11:30:00Z",
+    "full_id" : "41aa0c9d2598deaca3378ee324ed9b27",
+    "has_transcript" : true,
+    "id" : "41aa0c9d",
+    "kind" : "fix",
+    "model" : "sonnet",
+    "role" : "implementer",
+    "started_at" : "2026-11-12T10:52:00Z",
+    "target" : {
+     "key" : "change-1180",
+     "kind" : "change",
+     "label" : "PR #1180",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Keep homeowner steps of merged PRs in Needs you until done",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1180"
+    },
+    "tokens" : {
+     "input" : 980114,
+     "output" : 30551,
+     "total" : 1010665
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "codex",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T10:15:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "unknown",
+    "cost_pence" : null,
+    "duration_seconds" : 1260,
+    "effort" : null,
+    "ended_at" : "2026-11-12T10:15:00Z",
+    "full_id" : "f2b7c5d1be0aefec4013e08861108817",
+    "has_transcript" : true,
+    "id" : "f2b7c5d1",
+    "kind" : "review",
+    "model" : null,
+    "role" : "reviewer",
+    "started_at" : "2026-11-12T09:54:00Z",
+    "target" : {
+     "key" : "change-1175",
+     "kind" : "change",
+     "label" : "PR #1175",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "Diagnose and resolve failed Inbox jobs instead of letting them expire (#1154)",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/pull/1175"
+    },
+    "tokens" : {
+     "input" : 611020,
+     "output" : 8402,
+     "total" : 619422
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-12T21:58:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 0,
+    "duration_seconds" : 60,
+    "effort" : null,
+    "ended_at" : "2026-11-12T21:58:00Z",
+    "full_id" : "8e03a6f4abc94ba7856c6a8a77d2666e",
+    "has_transcript" : false,
+    "id" : "8e03a6f4",
+    "kind" : "probe",
+    "model" : null,
+    "role" : "other",
+    "started_at" : "2026-11-12T21:57:00Z",
+    "target" : {
+     "key" : "claude",
+     "kind" : "agent",
+     "label" : "claude"
+    },
+    "tokens" : {
+     "input" : 312,
+     "output" : 18,
+     "total" : 330
+    },
+    "trigger" : "schedule"
+   },
+   {
+    "actions" : [],
+    "agent" : "claude",
+    "attempts" : 1,
+    "cause_code" : null,
+    "cause_text" : null,
+    "condition" : {
+     "attention" : "none",
+     "reason_code" : null,
+     "reason_text" : null,
+     "since" : "2026-11-11T23:12:00Z",
+     "state" : "completed"
+    },
+    "cost_basis" : "usage_equivalent",
+    "cost_pence" : 1221,
+    "duration_seconds" : 5520,
+    "effort" : "high",
+    "ended_at" : "2026-11-11T23:12:00Z",
+    "full_id" : "2d6f1b837458dd10b9d007a3ff4f4392",
+    "has_transcript" : true,
+    "id" : "2d6f1b83",
+    "kind" : "implement",
+    "model" : "sonnet",
+    "role" : "implementer",
+    "started_at" : "2026-11-11T21:40:00Z",
+    "target" : {
+     "key" : "issue-1164",
+     "kind" : "work_item",
+     "label" : "#1164",
+     "project" : "Unthred/devtest-infrastructure",
+     "source" : "github",
+     "title" : "V2 item 2 Overseer controls the queue directly over the MCP Direct",
+     "url" : "https://github.com/Unthred/devtest-infrastructure/issues/1164"
+    },
+    "tokens" : {
+     "input" : 4810337,
+     "output" : 122840,
+     "total" : 4933177
+    },
+    "trigger" : "schedule"
+   }
+  ],
+  "page" : {
+   "matched" : 13,
+   "next_cursor" : null,
+   "returned" : 13,
+   "total" : 13
+  },
+  "summary" : {
+   "cost_pence" : 3368,
+   "ended" : 13,
+   "paused" : 0,
+   "running" : 0,
+   "tokens" : 17870430,
+   "window_seconds" : 86400
+  }
+ },
+ "freshness" : {
+  "age_seconds" : 233,
+  "reason_code" : null,
+  "reason_text" : null,
+  "stale_after_seconds" : 600,
+  "state" : "fresh",
+  "tick_at" : "2026-11-12T22:00:07Z"
+ },
+ "generated_at" : "2026-11-12T22:04:00Z",
+ "model" : "jobs"
+}

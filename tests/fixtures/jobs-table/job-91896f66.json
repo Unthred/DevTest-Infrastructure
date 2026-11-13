@@ -1,0 +1,30 @@
+{
+ "role": "devtest",
+ "provider": "claude",
+ "kind": "review",
+ "issue": 1180,
+ "postcondition": {
+  "kind": "verdict",
+  "ticket": "2feb3b7ac91cf350bcf04f2211eb35a2",
+  "pr": 1180,
+  "head": "e3c13111cf6aa0525904043146edbf2763797f29",
+  "checklist": true
+ },
+ "model": "opus",
+ "effort": "medium",
+ "branch": "claude/review-1180",
+ "id": "91896f66e3a13601da39343a670fe8ea",
+ "schemaVersion": 1,
+ "status": "completed",
+ "createdAt": 1794484993458,
+ "updatedAt": 1794485235504,
+ "attempts": 1,
+ "usage": {
+  "inputTokens": 1840095,
+  "outputTokens": 15749,
+  "costUsdEstimate": 1.2641789999999997
+ },
+ "lastEvent": "completed",
+ "incompleteRetries": 0,
+ "access": "full"
+}

@@ -4,6 +4,13 @@ export const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
 export const MAX_LINE_BYTES = 1024 * 1024;
 export const SERVER_INFO = { name: 'foreman-mcp', version: '0.1.0' };
 
+const INSTRUCTIONS = [
+  'Read access to Foreman state, plus foreman_propose, which only writes a proposal for the homeowner to approve on the dashboard.',
+  'Cost figures are usage-equivalent estimates. No tool changes Foreman state or can approve anything.',
+  // Issue #1177: tells the overseer where the issue template lives.
+  'When writing an issue, follow docs/work-item-template.md and docs/ai/dependency-format.md: checks that need the change installed on Tower go in the After install list.'
+].join(' ');
+
 const err = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 const ok = (id, result) => ({ jsonrpc: '2.0', id, result });
 
@@ -22,7 +29,7 @@ export function createProtocol({ tools, log = () => {} }) {
       if (method === 'initialize') {
         const asked = params?.protocolVersion;
         return ok(id, { protocolVersion: SUPPORTED.includes(asked) ? asked : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO,
-          instructions: 'Read access to Foreman state, plus foreman_propose, which only writes a proposal for the homeowner to approve on the dashboard. Cost figures are usage-equivalent estimates. No tool changes Foreman state or can approve anything.' });
+          instructions: INSTRUCTIONS });
       }
       if (method === 'tools/list') return ok(id, { tools: tools.list() });
       if (method === 'tools/call') {

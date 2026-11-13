@@ -1,3 +1,4 @@
+import { adoptExternalStop } from './stopjob.mjs';
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { billingRisk, limitFromAllowance } from './allowance.mjs';
@@ -151,7 +152,7 @@ export async function runProcess(root, job, config, adapter, clock, options = {}
       if (derived) { observed = null; observeEvent(derived); }
     }
     const current = readJob(root, job.id);
-    if (current.status === 'paused_manual' || current.status === 'stopped') job.status = current.status;
+    if (current.status === 'paused_manual' || current.status === 'stopped') adoptExternalStop(job, current);   // issue #1179
     job.childPid = null; job.childStart = null; job.childEndedAt = clock.now(); saveJob(root, job, clock);
     if (stopping) return { code: 1, event: checkpointFailed ? 'checkpoint_failed' : 'manual_stop' };
     return { code: result.code, event: observed || result.event, resetAt, resetSource, verified };

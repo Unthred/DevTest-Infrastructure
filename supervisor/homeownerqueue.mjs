@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicJson } from './core.mjs';
+import { markDone } from './afterinstall.mjs';
 
-export const QUEUED_COMMANDS = ['reopen', 'accept-split', 'request-review'];
+export const QUEUED_COMMANDS = ['reopen', 'accept-split', 'request-review', 'after-install-done'];
 const queueDir = root => path.join(root, 'homeowner-requests');
 
 export function queueHomeownerRequest(root, command, args, at) {
@@ -27,5 +28,12 @@ export function takeHomeownerRequests(root) {
     try { fs.unlinkSync(file); } catch { /* already taken */ }
   }
   return out;
+}
+// The commands a person runs from a Needs you item, applied under the tick lock. Issue #1177 adds the end of an After install item.
+export async function homeownerCommand(team, cmd, n) {
+  if (cmd === 'accept-split') return { issue: n, filed: await team.acceptSplit(n) };
+  markDone(team.s, n);
+  team.save();
+  return { pr: n, done: true };
 }
 export const discardHomeownerRequest = r => { try { fs.unlinkSync(r.file); } catch { /* already taken */ } };

@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { limitFromAllowance } from './allowance.mjs';
 import { redact } from './redact.mjs';
+import { markIncomplete } from './incomplete.mjs';
+import { noteGateError } from './gateerror.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
@@ -331,6 +333,8 @@ export function prompt(job, resume = false, seed = null) {
   // Issue #756: a fault in Foreman's own validator is not the reviewer's to fix; say so instead of telling the reviewer to correct it.
   if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && String(job.incompleteReason.detail || '').startsWith('validator fault:')) head += " Foreman's own check of your previous verdict failed, which is not a mistake in your work. Do the review again from the start and write the verdict file as instructed.";
   else if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && job.incompleteReason.detail) head += ` Your previous attempt ended incomplete: ${job.incompleteReason.detail} Fix exactly that and finish.`;
+  // Issue #1177: a second attempt changes something; the finished work stays and only the refused part is redone.
+  if (resume && job.incompleteReason?.cause === 'postcondition_not_met' && !String(job.incompleteReason.detail || '').startsWith('validator fault:') && job.kind !== 'review') head += ' Work already committed and pushed stays; do not redo it.';
   if (seed) head += `\n\n${seed}`;
   return head + '\n\n' + job.prompt;
 }
@@ -366,7 +370,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
     // otherwise it keeps waiting, with the reason on the job record. The gate may hold a lock until the job is marked running.
     let gate = null;
     if (job.status === 'paused_limit' && typeof resumeGate === 'function') {
-      try { gate = await resumeGate(job); } catch (error) { gate = { go: false, reason: 'resume check failed: ' + String(error?.name || 'Error').slice(0, 48) }; }
+      try { gate = await resumeGate(job); } catch (error) { gate = noteGateError(root, job, error, clock, event); }   // issue #1223: message and stack are saved
       if (gate?.stale) { job.resumeWait = null; try { transition(root, job, 'stopped', 'head_moved', clock); } finally { gate.release?.(); } return job; }
       if (!gate?.go) {
         const since = job.resumeWait?.since ?? clock.now();
@@ -377,8 +381,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       }
     }
     try { transition(root, job, 'running', 'started', clock); } finally { gate?.release?.(); }
-    if (job.resumeWait) { job.resumeWait = null; }
-    job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
+    job.resumeWait = null; job.resumeCheck = null; job.attempts++; job.currentAttemptId = crypto.randomUUID(); saveJob(root, job, clock);
     let result;
     try { result = await runOnce(config, adapter, job, clock); }
     catch (error) {
@@ -402,8 +405,7 @@ export async function drive(root, job, registry = defaultRegistry, clock = realC
       // Issue #1023: a run that stopped on a prerequisite that is still open is waiting, not incomplete: no retry, no blocked mark.
       if (Array.isArray(job.waitingOn) && job.waitingOn.length) { delete job.postconditionDetail; transition(root, job, 'waiting_on', 'waiting_on', clock); return job; }
       // Issue #460: say why the attempt was incomplete (the checker may name the detail on job.postconditionDetail).
-      job.incompleteReason = { cause: 'postcondition_not_met', detail: String(job.postconditionDetail || 'the post-condition did not hold').slice(0, 400), attempt: job.attempts }; delete job.postconditionDetail;
-      if ((job.incompleteRetries || 0) < 1) { job.incompleteRetries = (job.incompleteRetries || 0) + 1; job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
+      if (markIncomplete(job)) { job.nextAttemptAt = clock.now(); transition(root, job, 'queued', 'incomplete', clock); continue; }
       transition(root, job, 'blocked', 'incomplete', clock); return job;
     }
     // Issue #120: a verdict already in place when a limit is reported means the work is done. Issue #127: only kinds whose
@@ -492,6 +494,7 @@ export function recover(root, id, force = false) {
   }
   if (job.status === 'running' && !force) { transition(root, job, 'blocked', 'orphaned_worker'); throw new SupervisorError('orphaned worker requires explicit recovery'); }
   acquireLeases(root, job); // terminal states released them (issue #80); refuse if another job took the issue meanwhile
+  delete job.stop;   // issue #1179: a restarted job is judged by how it ends now, not by an earlier stop
   job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job, realClock, true);
   event(root, job, 'recovered'); return job;
 }

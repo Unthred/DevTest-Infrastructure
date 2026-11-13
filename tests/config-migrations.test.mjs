@@ -115,8 +115,8 @@ test('the shipped migrations remove limits.per_agent, so the shipped roles apply
   put(root, { enabled: true, limits: { per_agent: 2, max_fix_attempts: 3, provider_roles: { codex: { implementer: 1 } } } });
   assert.equal(validate(local(root)).limits.roles.implementer, 2);   // before: the old key overrides the roles' slot count
   const r = await runMigrations({ root, dir: realDir, validate });
-  assert.deepEqual(r.applied.map(a => a.number), [1, 2, 3]);
-  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 }, alerts: { channel: 'unraid' } });
+  assert.deepEqual(r.applied.map(a => a.number), [1, 2, 3, 4]);
+  assert.deepEqual(local(root), { enabled: true, limits: { max_fix_attempts: 3 }, alerts: { channel: 'unraid' }, budget: { capacity: { claude: 400_000_000 } } });
   const cfg = validate(local(root));
   assert.deepEqual(cfg.limits.roles, shipped().limits.roles); assert.equal('per_agent' in cfg.limits, false);
   assert.equal(cfg.limits.roles.implementer, 1);
@@ -272,4 +272,17 @@ test('issue #315: a live tick held by another process skips: no migration runs, 
   assert.equal(fs.existsSync(path.join(root, 'team', 'migrations.json')), false);
   assert.equal(fs.readFileSync(path.join(root, LOCAL_FILE), 'utf8'), before);
   assert.ok(fs.existsSync(lock), 'the other tick\'s lock is not removed');
+});
+
+test('migration 004 sets the hand-set Claude capacity once and never overwrites a value', async t => {
+  const { migrate, CLAUDE_CAPACITY } = await import('../supervisor/migrations/004-claude-capacity-by-hand.mjs');
+  assert.deepEqual(migrate({ enabled: true }).budget.capacity, { claude: CLAUDE_CAPACITY });
+  assert.deepEqual(migrate({ budget: { capacity: { codex: 1e8 }, high_water: 0.9 } }).budget, { capacity: { codex: 1e8, claude: CLAUDE_CAPACITY }, high_water: 0.9 });
+  const set = { budget: { capacity: { claude: 5e8 } } };
+  assert.equal(migrate(set), set);
+  const root = tmp(t);
+  put(root, { enabled: true });
+  const r = await runMigrations({ root, dir: realDir, validate, now: 1_800_000_000_000 });
+  assert.equal(r.failed, null);
+  assert.equal(local(root).budget.capacity.claude, CLAUDE_CAPACITY);
 });

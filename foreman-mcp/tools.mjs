@@ -3,11 +3,15 @@
 // directory and nothing else (issue #124); it cannot approve, run or change anything. No tool takes a lock, reads a transcript or calls a model.
 import { redact, redactDeep } from './redact.mjs';
 import { createInbox } from './inbox.mjs';
+import { inboxToolDefs } from './inbox-tools.mjs';
+import { inboxCardsTool } from './inbox-cards.mjs';
+import { inboxSearchTool } from './inbox-search-tools.mjs';
 import { mismatches, needsYouGroups, rebaseStats, itemTimeline, gbpOf } from './insights.mjs';
 import { hostActivity } from './source.mjs';
 import { dependencySkips } from './dependencyview.mjs';
+import { withReasons, plannedFor, resumeChecksFor } from './planview.mjs';
 import { issueViews, faultViews } from './assignmentview.mjs';
-import { budgetBrief } from './budgetfigures.mjs';
+import { budgetBrief, readingBrief } from './budgetfigures.mjs';
 
 const PLAN_NOTE = 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.';
 
@@ -82,7 +86,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         slots: (v.slots || []).map(s => s.text), capNotes: v.capNotes, breaker: v.breaker ? { halt: v.breaker.halt, error: v.breaker.error ?? null, byCause: (v.breaker.byCause || []).slice(0, 8).map(({ cost, ...r }) => ({ ...r, costGbpEquivalent: gbpOf(cost, v) })), topFailureCauses: (v.breaker.failCauses?.week || []).slice(0, 5) } : null,
         ...faultViews(v),   // #1107 infra faults apart from work failures; #1121 open issues with no implementer and no reason
         agents: (v.agents || []).map(a => ({ name: a.name, state: a.state, idle: a.idleReason?.text ?? null })),
-        budget: budgetBrief(v.budget),
+        budget: budgetBrief(v.budget), hostPressure: v.hostPressure ?? null,   // issue #1151
         planned: (v.plan || []).map(a => ({ type: a.type, agent: a.agent ?? null, pr: a.pr ?? null, issue: a.issue ?? null, why: a.why ?? null })),
         running: (v.jobs || []).filter(j => ['running', 'queued', 'paused_limit', 'paused_manual'].includes(j.status)).map(j => ({ id: j.fullId, kind: j.kind, ref: j.ref, agent: j.agent, status: j.status, startedAt: iso(j.startedAt) })),
         needsYouCount: v.health?.count ?? v.panels?.needsYou?.length ?? (v.attention || []).filter(a => a.severity === 'action').length })) },
@@ -100,7 +104,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         const n = Number(args.number), kind = args.kind;
         if (!Number.isInteger(n) || n < 1 || !['pr', 'issue'].includes(kind)) throw new Error('give kind "pr" or "issue" and a positive integer number');
         return withView(v => {
-          const out = { kind, number: n };
+          const out = { kind, number: n, lastTick: plannedFor(v.planned, n), resumeChecks: resumeChecksFor(v.resumeChecks, n) };   // issue #1223: the reason the last tick recorded for each planned action
           const queueItems = Object.entries(v.queues || {}).flatMap(([agent, items]) => (items || []).filter(i => i.ref === n && (kind === 'pr' ? ['pr', 'review'].includes(i.type) : i.type === 'issue')).map(i => ({ agent, type: i.type, order: i.order ?? null, next: !!i.next, reason: i.reason })));
           out.queue = queueItems; if (kind === 'issue') Object.assign(out, issueViews(v, n));   // #1103 dependencies, #1121 assignment
           out.needsYou = (v.attention || []).filter(a => a.ref?.n === n && (kind === 'pr' ? a.ref?.kind === 'pull' : a.ref?.kind === 'issue')).map(a => ({ text: a.text, tried: a.tried, action: a.action, severity: a.severity }));
@@ -118,7 +122,9 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
         return { matching: total, shown: rows.length, totalTokens: tokens, totalCostGbpEquivalent: gbpOf(cost, v), note: 'Cost is the provider CLI\'s own usage estimate, not a cash charge. Transcripts are not available through this server.', jobs: rows };
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      run: () => withView(v => ({ plannedActions: v.plan || [], breakerHalt: breakerHaltOf(v.breaker), nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [], note: PLAN_NOTE, skippedForDependencies: dependencySkips(v.excluded) })) },
+      run: () => withView(v => ({ plannedActions: withReasons(v.plan, v.planned), breakerHalt: breakerHaltOf(v.breaker),
+        nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [],
+        note: PLAN_NOTE, skippedForDependencies: dependencySkips(v.excluded) })) },
     { name: 'foreman_host', description: 'Tower load average, memory and swap, plus (sampled over about half a second) swap in and out per second, disk wait (CPU iowait, blocked processes, busy percent per disk) and the top processes by memory with their swap, all from /proc. Short process names only, never command lines.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const base = readHost(); return { ...base, activity: await Promise.resolve().then(() => readActivity()).catch(() => null), readAt: iso(now()) }; } },
     { name: 'foreman_reports', description: 'Reports that hand-run sessions left for the overseer. With no name: the list (name, time, size, and whether it carries the finished marker), newest first. With a name: that one report as text (redacted, truncated if long), headed STATUS: finished or STATUS: UNFINISHED. A report is finished only when its last line is <!-- foreman-report: finished -->; one without it may be half written. Reads one fixed folder only.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'a report name from the list, for example speedup.md' } }, additionalProperties: false },
@@ -168,7 +174,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       run: async () => { if (!getPath) throw new Error('the configuration is not available on this server'); return getPath('/api/config.json'); } },
     { name: 'foreman_budget', description: 'Per agent allowance and scheduling: the mode and why it holds (or what holds it), when it ends, the weekly window (used, reset time, hours left), the rate behind the estimate and where the rate came from, the estimate at reset (for information only, it never sets a mode), typical job costs, and the thresholds in force (when the dashboard serves its configuration). Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const cfg = getPath ? await getPath('/api/config.json').catch(() => null) : null; return withView(v => ({
-        agents: Object.fromEntries(Object.entries(v.budget || {}).map(([name, b]) => [name, {
+        agents: Object.fromEntries(Object.entries(v.budget || {}).map(([name, b]) => [name, { reading: readingBrief(b.reading),
           mode: b.mode, label: b.label ?? null, why: b.reason ?? null, endsAt: iso(b.until), known: b.known, capacity: b.capacity ?? null,
           weekly: { used: b.used, resetsAt: iso(b.resetsAt), hoursLeft: Number.isFinite(b.hoursLeft) ? Math.round(b.hoursLeft * 10) / 10 : null },
           rate: { perHour: b.ratePerHour, source: b.rateSource, estimateAtReset: b.projected, runsOutAt: iso(b.runsOutAt), note: 'The estimate is for information only; it does not set a mode (issue #680).' },
@@ -215,13 +221,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       }) },
     { name: 'foreman_rebase_stats', description: 'Rebases per merged pull request, reviews per merged pull request, and the time from first recorded activity to merge (mean and median), for all merged pull requests the view holds and, with splitAt (ISO date), before and after that time, so a change to the rebase policy can be measured. Read-only.', inputSchema: { type: 'object', properties: { splitAt: { type: 'string', maxLength: 40 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
       run: args => withView(v => rebaseStats(v, { splitAt: args.splitAt === undefined ? null : String(args.splitAt), limit: args.limit })) },
-    ...(inbox.enabled ? [
-      { name: 'foreman_propose', description: 'Propose one item for the homeowner to approve on the Foreman dashboard. kind "prompt": a task to run as a supervised Foreman job (it cannot merge, approve reviews or widen its limits). kind "issue_draft": an issue to post as the homeowner. kind "action": one named job action (new_review_attempt or clear_retry_cap with a PR number, reopen with an issue number, close_job, stop_job or resume_job with an 8-character job id) plus a reason. This only writes a proposal; nothing happens until the homeowner approves it, and you cannot approve it. Secret-shaped text, AI attribution text, oversized items and unknown fields are refused. Read the outcome with foreman_proposal_status.',
-        inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['prompt', 'issue_draft', 'action'] }, title: { type: 'string', maxLength: 200 }, action: { type: 'string', enum: ['new_review_attempt', 'clear_retry_cap', 'reopen', 'close_job', 'stop_job', 'resume_job'], description: 'kind action: the named action' }, target: { type: 'string', maxLength: 12, description: 'kind action: PR or issue number, or 8-character job id' }, reason: { type: 'string', maxLength: 300, description: 'kind action: why' }, prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' }, body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' }, why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' } }, required: ['kind', 'title'], additionalProperties: false },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, run: args => inbox.propose(args) },
-      { name: 'foreman_proposal_status', description: 'The state of a proposal made with foreman_propose: waiting, pending (awaiting the homeowner), refused (with the reason), rejected, approved, running, done or failed, with the result summary once there is one.',
-        inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^([a-f0-9]{8}|[a-f0-9]{32})$' } }, required: ['id'], additionalProperties: false }, run: args => inbox.status(args.id) },
-    ] : []),
+    ...inboxToolDefs(inbox, inboxSearchTool(inbox, source), inboxCardsTool(inbox, source, now)),
   ];
 
   const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

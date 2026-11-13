@@ -243,7 +243,12 @@ function world(t, { prs = [], issues = [] } = {}) {
   execFileSync(realGit, ['init', '-q', '--bare', '-b', 'main', origin]);
   fs.mkdirSync(repo); git(repo, 'init', '-q', '-b', 'main'); git(repo, 'config', 'user.email', 't@example.invalid'); git(repo, 'config', 'user.name', 'T');
   fs.writeFileSync(path.join(repo, 'R'), 'x\n'); git(repo, 'add', 'R'); git(repo, 'commit', '-qm', 'init'); git(repo, 'remote', 'add', 'origin', origin); git(repo, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
-  const code = path.join(dir, 'code'); fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true }); fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
+  const code = path.join(dir, 'code');
+  fs.cpSync(path.join(here, '..', 'supervisor'), path.join(code, 'supervisor'), { recursive: true });
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'dependency-parser.mjs'), path.join(code, 'foreman-mcp', 'dependency-parser.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'inbox-search.mjs'), path.join(code, 'foreman-mcp', 'inbox-search.mjs'));
+  fs.cpSync(path.join(here, '..', 'foreman-mcp', 'draft-after.mjs'), path.join(code, 'foreman-mcp', 'draft-after.mjs'));
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
   team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [901]; team.agents.codex.issues = []; team.limits.chain_seconds = 0;
   fs.writeFileSync(teamFile, JSON.stringify(team));
@@ -362,7 +367,10 @@ test('real process: a replay pass that did something enters the chain window, an
   const blocker = path.join(w.dir, 'not-a-dir'); fs.writeFileSync(blocker, 'x');
   const first = w.pass(); assert.equal(first.r.status, 0, first.r.stderr); assert.equal(first.full, true); assert.ok(fs.existsSync(cacheFile(w.root)), 'baseline stored');
   // only now: a skipped item makes a pass not clean, so it must not be in the baseline pass
-  team.inbox = { ...(team.inbox || {}), dir: path.join(blocker, 'inbox') }; team.limits.chain_seconds = 60; team.limits.chain_poll_seconds = 1; team.limits.chain_passes = 1;
+  team.inbox = { ...(team.inbox || {}), dir: path.join(blocker, 'inbox') };
+  team.limits.chain_seconds = 60;
+  team.limits.chain_poll_seconds = 1;
+  team.limits.chain_passes = 1;
   fs.writeFileSync(teamFile, JSON.stringify(team));
   const wt = path.join(w.dir, 'wt903'); execFileSync('git', ['-C', w.repo, 'worktree', 'add', '-qb', 'issue-903', wt]);
   const job = await createJob(w.root, { role: 'devtest', provider: 'fake', repository: w.repo, worktree: wt, issue: 903, scope: 'fixture', allowed_actions: ['read'], prompt: 'x', handover: 'H.md', autoResume: false }, w.registry);
@@ -373,12 +381,22 @@ test('real process: a replay pass that did something enters the chain window, an
   const done = new Promise(res => child.on('exit', code => res(code)));
   const until = async (cond, ms) => { for (let n = 0; n < ms / 100 && !cond(); n++) await new Promise(r => setTimeout(r, 100)); return cond(); };
   t.after(() => child.kill());
-  assert.ok(await until(() => w.probes() - p0 >= first.probes, 30000), 'the replay check made its probes');
+  assert.ok(
+    await until(() => w.probes() - p0 >= first.probes, 120000),
+    'the replay check made its probes'
+  );
   assert.equal(w.issueReads(), i0, 'the replay pass read no issue list');
   // The replay pass is in the chain window once it has gone quiet: its GitHub calls stop and the process stays alive for longer than two chain polls
   // (1 s each, window 60 s). Observed as a condition (a stable call count), not a fixed sleep, so a slow host only waits longer.
   let seen = w.calls().length, since = Date.now();
-  assert.ok(await until(() => { const n = w.calls().length; if (n !== seen) { seen = n; since = Date.now(); } return child.exitCode !== null || Date.now() - since >= 2500; }, 60000), 'the pass went quiet');
+  assert.ok(
+    await until(() => {
+      const n = w.calls().length;
+      if (n !== seen) { seen = n; since = Date.now(); }
+      return child.exitCode !== null || Date.now() - since >= 10000;   // longer than any pause inside a loaded pass, or the job could end before the window opens
+    }, 120000),
+    'the pass went quiet'
+  );
   assert.equal(child.exitCode, null, 'the pass is still waiting in the chain window');
   const j2 = JSON.parse(fs.readFileSync(file, 'utf8')); j2.status = 'completed'; fs.writeFileSync(file, JSON.stringify(j2));   // the job ends
   await done;   // the pass is not clean (it has a skipped item), so its exit status is not the point

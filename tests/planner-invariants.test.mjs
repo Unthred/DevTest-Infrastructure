@@ -48,6 +48,15 @@ test('planner invariant harness accepts a valid plan and boundary states', async
   assert.deepEqual(slotsFull.plan, []);
   assert.match(slotsFull.team.held.claude.implement, /implementer slot full/);
   assert.match(slotsFull.team.held.codex.implement, /implementer slot full/);
+  const rebaseSlotFull = await planState(t, {
+    name: 'recorded-rebase-slot',
+    pulls: [{ number: 90, title: 'PR 90', headRefName: 'claude/issue-90-fixture', headRefOid: 'a'.repeat(40), baseRefName: 'main', isDraft: false, mergeable: 'CONFLICTING', statusCheckRollup: [] }],
+    issues: [{ number: 90, title: 'Issue 90', state: 'OPEN', body: '', labels: [], agent: 'claude' }],
+    activeJobs: [{ id: 'active-rebase', provider: 'claude', status: 'running' }],
+    jobRecords: { 'active-rebase': { kind: 'rebase', agent: 'claude', pr: 90 } },
+  });
+  assert.deepEqual(rebaseSlotFull.plan, []);
+  assert.match(rebaseSlotFull.team.held.claude.rebase, /rebaser slot full/);
   assert.deepEqual(invariantViolations({ ...empty, plan: validPlan() }), []);
 });
 
@@ -70,6 +79,7 @@ test('planner invariant harness catches each included invalid rule', () => {
       expected: 'breaker-halt',
     }],
     ['parked', { ...base, issues: [{ number: 1, labels: ['parked'] }], plan: [{ type: 'fix', pr: 10 }], expected: 'parked' }],
+    ['parked pull', { ...base, pulls: [{ ...pulls[0], labels: ['parked'] }], plan: [{ type: 'fix', pr: 10 }], expected: 'parked' }],
     ['agent-can-start', { ...base, plan: [{ type: 'fix', pr: 10, agent: 'codex' }], unavailableAgents: ['codex'], expected: 'agent-can-start' }],
     ['one-action-per-pr', { ...base, plan: [{ type: 'fix', pr: 10 }, { type: 'review', pr: 10 }], expected: 'one-action-per-pr' }],
   ];

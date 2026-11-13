@@ -6,6 +6,7 @@
 //   - Order: what blocks the most other work first, then the oldest.
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
 import { redact } from './redact.mjs';
+import { stepItems } from './pendingsteps.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
 export const RANK = [
@@ -36,12 +37,12 @@ const refKey = ref => (ref && ref.kind && Number.isSafeInteger(ref.n) ? `${ref.k
 // A stall item lists PRs; Foreman progresses by itself unless a reason says the homeowner must act.
 export const needsHomeowner = item => item.homeowner !== false;
 
-export function consolidateNeedsYou(attention, { cache = {} } = {}) {
+export function consolidateNeedsYou(attention, { cache = {}, pendingSteps = null, repository = '' } = {}) {   // issue #1155: pendingSteps are the merged PRs' homeowner steps
   const pulls = Array.isArray(cache.pulls) ? cache.pulls : null, issues = Array.isArray(cache.issues) && cache.issues.length ? cache.issues : null;
   const openPr = pulls ? new Set(pulls.map(p => p.number)) : null;
   const issueState = issues ? new Map(issues.map(i => [i.number, i])) : null;
   const dropped = [], notices = [], live = [];
-  for (const a of attention) {
+  for (const a of [...attention, ...stepItems(pendingSteps, repository)]) {
     if (a.severity !== 'action') continue;
     const k = refKey(a.ref);
     if (k && a.ref.kind === 'pull' && openPr && !openPr.has(a.ref.n)) { dropped.push({ id: a.id, why: 'the pull request is no longer open' }); continue; }

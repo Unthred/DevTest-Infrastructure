@@ -7,7 +7,7 @@ import { initChartOptions } from './chartopts.mjs';
 import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
 import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
-import { postDecision, runDecision, lowerCount, OUTCOME_TEMPLATE } from './inbox-ui.mjs';
+import { postDecision, runDecision, lowerCount, showOutcomeInViews, lowerWaitingChip } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -31,7 +31,7 @@ const postInbox = form => postDecision(fetch.bind(window), form.action, new Form
 document.addEventListener('submit', async e => {
   const form = e.target.closest?.('form.inbox-form'); if (!form) return;
   e.preventDefault();
-  const decision = form.elements.decision.value, item = form.closest('.inbox-item'), row = form.closest('li');
+  const decision = form.elements.decision.value, item = form.closest('[data-inbox]'), row = item;   // a card, a table row or a compact row (issue #1262)
   if (decision === 'undo') {
     const btn = form.querySelector('button'); btn.disabled = true;
     const j = await postInbox(form);
@@ -45,9 +45,9 @@ document.addEventListener('submit', async e => {
     settled: text => { for (const b of btns) { b.disabled = true; b.classList.add('greyed'); } pressed.textContent = was; err.textContent = text; err.hidden = false; },
     unlock: () => { for (const b of btns) { b.disabled = false; b.classList.remove('greyed'); } pressed.textContent = was; },
     decided: j => {
-      const title = (row.querySelector('.t')?.textContent || '').replace(/\s+/g, ' ').replace(/^\s*action\s*/i, '').trim();
+      const title = (row.querySelector('.t, .iv-title')?.textContent || '').replace(/\s+/g, ' ').replace(/^\s*action\s*/i, '').trim();
       const out = row.querySelector('.inbox-outcome');
-      out.className = 'inbox-outcome ' + (decision === 'approve' ? 'approved' : 'rejected'); out.setAttribute('data-lms', j.decidedAt); out.setAttribute('data-tonly', ''); out.setAttribute('data-tpl', OUTCOME_TEMPLATE[decision]); out.hidden = false; localizeTimes(row);
+      showOutcomeInViews(document, { id: item.dataset.inbox, decision, decidedAt: j.decidedAt, pressed: row, localize: localizeTimes }); lowerWaitingChip(document);   // all three Inbox views (issue #1262)
       const list = $('.inbox-decided-list'), box = $('.inbox-decided');
       if (!list || !box) return;
       const li = document.createElement('li'); li.dataset.decided = item.dataset.inbox;
@@ -60,7 +60,7 @@ document.addEventListener('submit', async e => {
         const b = document.createElement('button'); b.type = 'submit'; b.className = 'linkbtn'; b.textContent = 'Undo'; f.append(b); li.append(' ', f);
       }
       list.prepend(li); box.hidden = false; $('.inbox-decided-n', box).textContent = String($$('li', list).length);
-      row.remove();
+      if (row.classList.contains('inbox-item')) row.remove();   // a card moves to Decided; a table or compact row stays and shows its outcome
       const h = $('#h-needs'); if (h) h.textContent = lowerCount(h.textContent);
     } } }).then(() => refresher?.refresh(true, { live: true }));   // issue #1101: the "Waiting for approval" list and badge are re-read from the server now
 });

@@ -73,7 +73,7 @@ test('the Work tables filter by number, title, agent and status on the real page
 test('items per page: the selector is wired to apply on change, honours every offered size and ignores others; no Apply button exists on any page', async t => {
   const s = await serve(t);
   for (const p of ['/', '/work', '/agents', '/agents/claude', '/activity', '/usage', '/reviews', '/system', '/supervisor', '/supervisor/ticks', '/supervisor/upgrades']) {
-    const body = (await s.get(p)).body; assert.doesNotMatch(body, />\s*Apply\s*</i, `${p}: no Apply button`); assert.doesNotMatch(body.replace(/<form method="post" action="\/(?:mark-read|watch|resets|probe\/[\w-]+)".*?<\/form>/gs, ''), /<button[^>]*type="submit"/, `${p}: no submit button besides the known write forms (#253, #110, #430, #1162)`);
+    const body = (await s.get(p)).body; assert.doesNotMatch(body, />\s*Apply\s*</i, `${p}: no Apply button`); assert.doesNotMatch(body.replace(/<form method="post" action="\/(?:mark-read|watch|limit-resets|probe\/[\w-]+)".*?<\/form>/gs, ''), /<button[^>]*type="submit"/, `${p}: no submit button besides the known writes`);
   }
   const body = (await s.get('/work?prs.size=10')).body; assert.match(body, /name="prs\.size"[^>]*>[^]*?<option selected>10<\/option>/);
   assert.equal(tableState(Array.from({ length: 60 }, (_, i) => ({ i })), { pageSize: 10 }).rows.length, 10);

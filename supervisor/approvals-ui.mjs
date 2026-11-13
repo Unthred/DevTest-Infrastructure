@@ -10,9 +10,10 @@ const form = (esc, id, decision, label) => `<form method="post" action="/inbox" 
 
 const STRONG_NOTE = '<span class="sub">Needs the typed pull request number; decide it on its pull request.</span>';
 // Issue #1156: a decision row shows the card (reason, clear condition, its routine controls); the link is context only.
+export const rowAnchor = id => `dec-${id}`;   // issue #1185: where a card in this list returns to without script, and what a link to it opens
 const decideNote = (esc, r) => {
   const link = r.link ? ` <a href="${esc(r.link)}" rel="noopener">Open it</a>` : '';
-  return `${decisionHtml({ id: r.id, card: r.card, decision: r.options })}${link}`;
+  return `${decisionHtml({ id: r.id, card: r.card, decision: r.options }, rowAnchor(r.id))}${link}`;
 };
 const buttons = (esc, r) => {
   if (r.tier === 'decision') return decideNote(esc, r);
@@ -27,7 +28,7 @@ const whyBlock = (esc, r) => {
   return `<details><summary>Why</summary>${why}${options}</details>`;
 };
 
-const row = (esc, r, age) => `<li class="inbox-item approval-row" data-inbox="${esc(r.id)}" data-tier="${r.tier}"><div class="t">${esc(r.title)}</div>`
+const row = (esc, r, age) => `<li id="${esc(rowAnchor(r.id))}" class="inbox-item approval-row" data-inbox="${esc(r.id)}" data-tier="${r.tier}"><h3 class="inbox-title t">${esc(r.title)}</h3>`
   + `<div class="sub">${esc(r.kindLabel)}${age ? ` · ${esc(age)}` : ''}</div>`
   + whyBlock(esc, r)
   + `<div class="acts">${buttons(esc, r)}</div>`
@@ -40,7 +41,7 @@ export function approvalsDropdown({ rows, esc, ago }) {
   const body = n ? `<ul class="panel-list">${rows.map(r => row(esc, r, ago(r.since))).join('')}</ul>` : '<p class="sub">Nothing waiting for you</p>';
   const approveAll = all ? `<button type="button" class="btn inbox-approve" data-approve-all>Approve all (${all})</button>` : '';
   const badge = `<span class="badge" data-approvals-count>${n}</span>`;
-  return `<details class="approvals" data-approvals><summary class="btn">Waiting for approval ${badge}</summary><div class="approvals-panel">${approveAll}${body}</div></details>`;
+  return `<details class="approvals" id="approvals" data-approvals><summary class="btn">Waiting for approval ${badge}</summary><div class="approvals-panel">${approveAll}${body}</div></details>`;
 }
 
 // The Now card body: the dropdown above the existing Now panel. esc and ago are the dashboard's own (ago takes a time and "now").
@@ -49,3 +50,10 @@ export const approvals = (view, nowHtml, esc, ago) => approvalsDropdown({
   esc,
   ago: ms => (Number.isFinite(ms) ? ago(ms, view.generatedAt) : ''),
 }) + nowHtml;
+
+// Issue #1155: Mark done on a Needs you item for a homeowner step of a merged PR (posts to /step-done with the page's access proof). '' for any other item.
+const ent = v => String(v).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+export const stepDoneForm = a => (a?.stepDone
+  ? `<form method="post" action="/step-done" class="step-done"><input type="hidden" name="pr" value="${ent(a.stepDone.pr)}"><input type="hidden" name="index" value="${ent(a.stepDone.index)}">`
+    + '<div class="acts"><button class="btn" type="submit">Mark done</button></div></form>'
+  : '');
