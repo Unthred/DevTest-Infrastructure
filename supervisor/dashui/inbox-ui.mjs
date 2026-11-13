@@ -57,3 +57,9 @@ export function showOutcomeInViews(doc, { id, decision, decidedAt, pressed, loca
     if (view !== pressed || !view.classList.contains('inbox-item')) view.querySelector('.acts')?.remove();
   }
 }
+
+// Issue #1262: the waiting chip on the Inbox page drops at once when a waiting item is decided; the refresh that follows re-reads the true count.
+export function lowerWaitingChip(doc) {
+  const n = doc.querySelector('[data-chip="state:waiting"] .qf-n');
+  if (n && Number(n.textContent) > 0) n.textContent = String(Number(n.textContent) - 1);
+}

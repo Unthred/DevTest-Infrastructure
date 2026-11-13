@@ -7,7 +7,7 @@ import { initChartOptions } from './chartopts.mjs';
 import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
 import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
-import { postDecision, runDecision, lowerCount, showOutcomeInViews } from './inbox-ui.mjs';
+import { postDecision, runDecision, lowerCount, showOutcomeInViews, lowerWaitingChip } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -47,7 +47,7 @@ document.addEventListener('submit', async e => {
     decided: j => {
       const title = (row.querySelector('.t, .iv-title')?.textContent || '').replace(/\s+/g, ' ').replace(/^\s*action\s*/i, '').trim();
       const out = row.querySelector('.inbox-outcome');
-      showOutcomeInViews(document, { id: item.dataset.inbox, decision, decidedAt: j.decidedAt, pressed: row, localize: localizeTimes });   // all three Inbox views (issue #1262)
+      showOutcomeInViews(document, { id: item.dataset.inbox, decision, decidedAt: j.decidedAt, pressed: row, localize: localizeTimes }); lowerWaitingChip(document);   // all three Inbox views (issue #1262)
       const list = $('.inbox-decided-list'), box = $('.inbox-decided');
       if (!list || !box) return;
       const li = document.createElement('li'); li.dataset.decided = item.dataset.inbox;

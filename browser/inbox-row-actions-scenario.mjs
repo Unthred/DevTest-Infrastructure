@@ -39,7 +39,10 @@ try {
   const tRow = title => page.locator('.iv-table tbody tr', { hasText: title });
   const cRow = title => page.locator('.iv-crow', { hasText: title });
   const cardOf = title => page.locator('[data-pane="cards"] .inbox-item', { hasText: title });
-  const waitingCount = async () => Number((await page.locator('[data-approvals-count]').first().textContent().catch(() => '')).replace(/\D/g, '')) || 0;
+  const CHIP = '[data-chip="state:waiting"] .qf-n';   // the waiting count on the /inbox page
+  const waitingCount = async () => Number((await page.locator(CHIP).first().textContent()).replace(/\D/g, ''));
+  const tableOrder = () => page.locator('.iv-table tbody tr').evaluateAll(trs => trs.map(tr => tr.querySelector('[data-col="title"]').textContent.trim().slice(0, 12)).join('|'));
+  const sortState = () => page.locator('.iv-table th[aria-sort]').evaluateAll(ths => ths.map(t => `${t.textContent.trim()}:${t.getAttribute('aria-sort')}`).join());
   const DRAFT = 'Draftchain', DONE = 'Driftcheck', TIDY = 'Tidy the docs index', RACE = 'Raceitem';
 
   await view('Table');
@@ -71,8 +74,12 @@ try {
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight / 2));
   await tRow(DRAFT).locator('button').first().scrollIntoViewIfNeeded();   // so Playwright's own scroll before the click is not read as the page moving
+  await page.locator('.iv-sort[data-sort="title"]').click();
+  const orderBefore = await tableOrder(), sortBefore = await sortState(), searchBefore = await page.evaluate(() => location.search);
+  check('the Title sort is on before the press', /Title:ascending/.test(sortBefore), sortBefore);
   const scrollBefore = await page.evaluate(() => Math.round(window.scrollY));
   const waitingBefore = await waitingCount();
+  check('three items are waiting before the first press', waitingBefore === 3, waitingBefore);
   await press(tRow(DRAFT), 'Approve');
   await outcomeOf('table', DRAFT).waitFor({ timeout: 8000 });
   check('the press was recorded, not refused', await tRow(DRAFT).locator('.inbox-err').isHidden());
@@ -82,12 +89,14 @@ try {
   check('the table row shows its outcome and no buttons', /Approved/.test(await outcomeOf('table', DRAFT).textContent()) && (await tRow(DRAFT).locator('button').count()) === 0);
   check('the Compact list row shows the same outcome and no buttons', /Approved/.test(await outcomeOf('compact', DRAFT).textContent()) && (await cRow(DRAFT).locator('button').count()) === 0);
   check('the Cards view shows the outcome too', /Approved/.test(await outcomeOf('cards', DRAFT).textContent()));
-  await page.waitForFunction(n => { const el = document.querySelector('[data-approvals-count]'); return !el || (Number(el.textContent.replace(/\D/g, '')) || 0) < n; }, waitingBefore, { timeout: 12000 }).catch(() => {});
-  check('the waiting count is one lower', waitingBefore === 0 || (await waitingCount()) === waitingBefore - 1, `${waitingBefore} -> ${await waitingCount()}`);
+  check('the waiting count is one lower at once', (await waitingCount()) === waitingBefore - 1, `${waitingBefore} -> ${await waitingCount()}`);
   slow = false;
   await tRow(DRAFT).locator('td[data-col="state"]', { hasText: 'approved' }).waitFor({ timeout: 12000 });
   check('after the page re-reads the server the row says approved and has no buttons', (await tRow(DRAFT).locator('button').count()) === 0);
   { const now = await page.evaluate(() => [Math.round(window.scrollY), document.documentElement.scrollHeight]); check('the refresh kept the scroll position', Math.abs(now[0] - scrollBefore) <= 2, `${scrollBefore} -> ${now}`); }
+  { const order = await tableOrder(), sortNow = await sortState(); check('the sort order stayed after the page re-read', order === orderBefore && sortNow === sortBefore, `${orderBefore} -> ${order}; ${sortBefore} -> ${sortNow}`); }
+  check('the filters and search in the address stayed', (await page.evaluate(() => location.search)) === searchBefore);
+  check('the waiting count is two after the re-read', (await waitingCount()) === 2, await waitingCount());
 
   await view('Compact list');
   check('the Compact list row says approved and has no buttons', (await cRow(DRAFT).getAttribute('data-state')) === 'approved' && (await cRow(DRAFT).locator('button').count()) === 0);
@@ -124,6 +133,10 @@ try {
   check('after the refusal both buttons are not left pressed', await tRow(RACE).locator('button.inbox-reject').textContent().then(x => x.includes('Reject') && !x.includes('Rejected')));
   check('the refused row shows no outcome of its own', await tRow(RACE).locator('.inbox-outcome').isHidden());
   check('no sideways page scroll after a refusal', await noSideways());
+  // Boundary: every waiting item is decided now (Draftchain, Tidy here, Raceitem in the other tab), so the re-read leaves none waiting.
+  slow = false;
+  await page.waitForFunction(sel => document.querySelector(sel)?.textContent.trim() === '0', CHIP, { timeout: 12000 }).catch(() => {});
+  check('the waiting count reaches zero when the last waiting item is decided', (await waitingCount()) === 0, await waitingCount());
   check('no script errors', errors.length === 0, errors.join('; '));
   await page.screenshot({ path: path.join(out, `${name}.png`) });
   failed = checks.some(c => !c.ok);

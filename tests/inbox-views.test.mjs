@@ -207,3 +207,14 @@ test('showOutcomeInViews writes the outcome into every view of the item and drop
   assert.deepEqual([other.outcome.hidden, other.acts.gone], [true, false], 'another item is untouched');
   assert.equal(localized.length, 3);
 });
+
+test('lowerWaitingChip lowers the waiting chip by one and stops at zero', async () => {
+  const { lowerWaitingChip } = await import('../supervisor/dashui/inbox-ui.mjs');
+  const n = { textContent: '1' };
+  const doc = { querySelector: sel => (sel === '[data-chip="state:waiting"] .qf-n' ? n : null) };
+  lowerWaitingChip(doc);
+  assert.equal(n.textContent, '0');
+  lowerWaitingChip(doc);
+  assert.equal(n.textContent, '0');
+  assert.doesNotThrow(() => lowerWaitingChip({ querySelector: () => null }));
+});
