@@ -150,10 +150,12 @@ test('reason: the one sent is stored; none or blank gives the fixed sentence', a
   assert.match(reasons.close_job, FIXED);
 });
 
-test('invalid: 7 characters, an upper case letter, a number and a 9 character id are refused, nothing recorded, no wake', async t => {
+test('invalid: 7 characters, an upper case letter and 9 or 33 characters are bad_job_id; a number is malformed_request from the endpoint; nothing recorded, no wake', async t => {
   const s = await serve(t);
   for (const job of ['867710c', '867710C6', '867710c67', `${FULL}0`]) refusedWith(await s.post('job.close', { job }), 'bad_job_id');
-  assert.equal((await s.post('job.resume', { job: 86771006 })).status, 400);
+  const number = await s.post('job.resume', { job: 86771006 });
+  assert.equal(number.status, 400);
+  assert.equal(number.body.refusal_code, 'malformed_request');
   assert.deepEqual(items(s.inbox), []);
   assert.deepEqual(s.wakes, []);
 });
