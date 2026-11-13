@@ -19,6 +19,7 @@ import { FaultFlow, withParking, causeOfEnd } from './faultflow.mjs';
 import { applyRetryCap } from './retrycap.mjs';
 import { PlanLedger, heldReasonOf, closeLedger, planItems, breakerHoldText } from './planledger.mjs';
 import { overlapText } from './overlaptext.mjs';
+import { expectedFiles, openPullOverlap, filesDriftItems } from './fileslist.mjs';
 import { launchPlanned } from './launchplanned.mjs';
 import { checkResumeChecks } from './resumefailures.mjs';
 import { validateBreakerConfig } from './breaker.mjs';
@@ -206,15 +207,11 @@ export const roleCount = (L, r) => (Number.isSafeInteger(L?.roles?.[r]) ? L.role
 export const roleOfType = type => (type === 'review' ? 'reviewer' : type === 'rebase' ? 'rebaser' : type === 'inbox' ? 'inbox' : 'implementer');   // implement, continue, fix, cifix -> implementer; review -> reviewer; rebase -> rebaser
 // The overall cap on simultaneous jobs: limits.overall when the homeowner sets it, otherwise the sum of the role counts, so raising a
 // role count is the only change needed. One implementer and one reviewer give 2, as before.
-// Issue #344: the one replaceable function that predicts which files an implement job will edit. No model call: it reads the paths the
-// issue title and body name. A wrong prediction is safe: two jobs on different branches never share a worktree, and an overlap the
-// prediction missed surfaces as a merge conflict, which the existing rebase job resolves in queue order.
-export function expectedFiles(issue) {
-  const text = `${issue?.title || ''}\n${issue?.body || ''}`;
-  const found = text.match(/(?<![\w./-])(?:[\w.-]+\/)+[\w.-]*\w(?![\w/])|(?<![\w./-])[\w-]+\.(?:mjs|js|json|md|yml|yaml|cs|sh|html|css)\b/g) || [];
-  return new Set(found.filter(f => /\.\w+$/.test(f)).map(f => f.replace(/^\.\//, '')));
-}
+export { expectedFiles };   // issue #344: predicting the files an implement job edits lives in fileslist.mjs (issue #1227)
 export const issueOfBranch = b => { const m = /\/issue-(\d+)(\D|$)/.exec(b || ''); return m ? Number(m[1]) : null; };
+// Issue #1227: the open pull requests, their file lists and their items, as the pure functions in fileslist.mjs read them.
+const pullViewOf = t => ({ prs: t.view?.prs || [], issues: t.view?.issues || [], filesOf: p => t.files?.get(p.number), itemOf: p => issueOfBranch(p.headRefName) });
+export const driftItemsOf = t => filesDriftItems(pullViewOf(t));   // PRs beyond their item's Files line, as action Needs you items
 // Issue #344: what holds the running count below the sum of the chosen role counts, for the dashboard: an explicit overall limit, or
 // the open-PR cap pausing new implement work. Empty when nothing does.
 export function capNotes(L, pauseText = null) {
@@ -975,11 +972,10 @@ export class Team {
   // Second opinion (issue #152). Files per open PR are read once per plan; null = unreadable, which counts as touching (fail closed).
   async loadFiles(prs) {
     this.files = new Map();
-    const so = this.c.second_opinion;
-    if (!so || !this.gh.listPullFiles) return;
+    if (!this.gh.listPullFiles) return;   // issue #1227: the lists also feed the open-PR overlap hold and the Files-line check
     for (const pr of prs) { try { this.files.set(pr.number, await this.gh.listPullFiles(pr.number)); } catch { this.files.set(pr.number, null); } }
   }
-  touchesSecondOpinion(pr) { const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
+  touchesSecondOpinion(pr) { if (!this.c.second_opinion) return false; const f = this.files?.get(pr.number); return f === undefined ? false : f === null || touchesPaths(f, this.c.second_opinion.paths); }
   // The extra review that is owed for this open PR head, as { key } for the configured reviewer, or null. Allowance is not looked at
   // here: an owed review stays owed while its reviewer is out (D-024); secondOpinionDue() asks whether it can run now.
   secondOpinionOwed(agent, pr) {
@@ -1186,13 +1182,14 @@ export class Team {
     }
   }
   predictFiles(issue) { return (this.expectFiles || expectedFiles)(issue); }
-  // True (and a dashboard reason) when the issue's expected files overlap a running or already planned implement job.
+  // True (and a dashboard reason) when the expected files overlap a running or planned implement job or (issue #1227, new jobs only) an open PR.
   overlapHold(agent, n, issue, type = 'implement', pr = null) {
     for (const f of this.predictFiles(issue)) {
       const other = this.claimed?.get(f);
       if (other !== undefined && other !== n) { this.hold(agent, type, overlapText({ type, issue: n, pr, file: f, other, prs: this.view?.prs }), pr); return true; }
     }
-    return false;
+    const text = pr == null && openPullOverlap({ mine: this.predictFiles(issue), item: n, type, ...pullViewOf(this) });
+    return !!text && (this.hold(agent, type, text), true);
   }
   // The same refusal for a repair job (rebase, CI fix, fix, continue) on a PR: its issue's expected files must not overlap another writer's.
   repairOverlap(agent, type, pr, issueByNo) {

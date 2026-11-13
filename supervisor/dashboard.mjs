@@ -10,6 +10,7 @@ import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.mjs';
+import { driftItemsOf } from './team.mjs';
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
@@ -725,7 +726,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     for (const e of Object.values(team.stale || {})) attention.push({ id: `stale-mark-${e.issue}`, text: redact(`Issue #${e.issue}: ${team.staleText(e.issue).replace(/^stuck: /, '')}.`, 300), ref: { kind: 'issue', n: e.issue }, since: e.markedAt, severity: 'action', action: `If it should be implemented again, run: team reopen ${e.issue}. Otherwise close the issue or leave it.` });
     // Issue #630: mismatches between Foreman's records and GitHub or the running jobs that it cannot fix safely; one item each while it lasts.
     for (const it of team.selfCheckItems?.() || []) attention.push({ id: it.id, text: redact(it.text, 400), ref: Number.isSafeInteger(it.ref) ? { kind: 'pull', n: it.ref } : it.ref, since: it.since, severity: 'action', action: it.action });
-    attention.push(...stoppedAttention(team), ...(team.holdItems?.() || []));   // issue #995 retry caps and issue #1107 parked agents; issue #1238 holds
+    attention.push(...stoppedAttention(team), ...(team.holdItems?.() || []), ...driftItemsOf(team));   // issue #995 retry caps and issue #1107 parked agents; issue #1238 holds
     // Issue #547: a finished review whose verdict was refused at ingestion (writer unknown, or the reviewer's model wrote the head).
     for (const r of team.refusedVerdicts(c.pulls || [])) attention.push({ id: `noreviewer-refused-${r.pr}`, text: redact(`The review of PR #${r.pr} at ${String(r.head).slice(0, 7)} (job ${String(r.job).slice(0, 8)}, ${r.agent} on ${r.model || 'its default model'}) finished but its verdict was not recorded: ${r.text}. Verdict file: ${r.file}${r.kept ? keptText(r.kept) : ''}`, 1400), ref: { kind: 'pull', n: r.pr }, severity: 'action', action: r.reason === 'writer unknown' ? `Have a reviewer on another provider review PR #${r.pr} at this head, or push a new head through a Foreman job and have that new head reviewed; this refused verdict is not recorded.` : `Have a different model review PR #${r.pr} at this head (the refused verdict in the file above is not recorded and is not trusted).` });
     // Issue #326: queued or conflicting work, but nothing planned or started for idle_minutes; clears when a job starts.

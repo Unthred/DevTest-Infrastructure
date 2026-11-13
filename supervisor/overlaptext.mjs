@@ -11,3 +11,8 @@ export function overlapText({ type = 'implement', issue, pr = null, file, other,
   const theirs = `issue #${other}${otherPr ? ` (PR #${otherPr.number})` : ''}`;
   return `${mine} waits: it is expected to edit ${file}, which the running or planned job for ${theirs} also edits`;
 }
+
+// Issue #1227: the hold text when an open pull request already edits a file the item expects to edit. Names both by number.
+export function pullOverlapText({ type = 'implement', issue, file, pr }) {
+  return `issue #${issue} waits: it is expected to edit ${file}, which open PR #${pr} also edits (${type} starts after that PR is merged or closed)`;
+}

@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
+import { filesLineRefusal } from './fileslist.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
@@ -106,6 +107,8 @@ export function validateItem(raw, { internal = false } = {}) {
   if (raw.kind === 'issue_draft') {
     const parsed = parseDependsOn(raw.body);
     if (parsed.malformed) return { ok: false, reason: dependencyRefusal(parsed) };
+    const filesRefusal = filesLineRefusal(raw.body);   // issue #1227
+    if (filesRefusal) return { ok: false, reason: filesRefusal };
   }
   if (named) {
     const table = raw.kind === 'control' ? CONTROLS : ACTIONS, spec = Object.hasOwn(table, raw.action) ? table[raw.action] : null;
