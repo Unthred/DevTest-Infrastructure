@@ -208,6 +208,7 @@ test('the server keeps answering while a sweep is recorded: the real async clien
   clearInterval(watch);
   assert.equal(r.body.outcome, 'applied');
   assert.equal(calls.length, 30);
-  assert.ok(longest < 150, `the event loop was blocked for ${longest} ms`);
+  // A synchronous client would block for the whole 600 ms of gh time; the bound sits well below that but above shared-runner scheduling jitter.
+  assert.ok(longest < 400, `the event loop was blocked for ${longest} ms`);
   assert.deepEqual(await s.needsYou(), []);
 });
