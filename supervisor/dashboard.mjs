@@ -14,8 +14,9 @@ import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CA
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
-import { planningInputs, readHeadRegister } from './planning.mjs';
-import { proposalsAdded } from './decisions.mjs';
+import { planningInputs } from './planning.mjs';
+import { pendingProposals, proposalWords } from './decisionproposals.mjs';
+export { pendingProposals };
 import { readMigrationState, readIncidents } from './migrations.mjs';
 import { STALL_DEFAULT_HOURS } from './stall.mjs';
 import { severityOf, tmark } from './dashui/logic.mjs';
@@ -272,16 +273,6 @@ const cleanLinks = links => (links || []).filter(l => l && typeof l.url === 'str
 // Issue #804: the second opinions recorded for a PR (one per pr:head); a carried one (D-025) is an avoided review, not a review.
 const secondOpinionsOf = (state, n) => Object.entries(state.secondOpinions || {}).filter(([k]) => k.startsWith(`${n}:`)).map(([, v]) => v);
 export const carryText = c => `carried from ${sha7(c.oldHead)} to ${sha7(c.newHead)} over a clean rebase: ${c.evidence?.resolvedConflicts === false ? 'no conflict resolved' : 'conflict check not met'}, ${c.evidence?.patchUnchanged === true ? 'patch unchanged' : 'patch not shown unchanged'}, CI ${c.evidence?.ci || 'unknown'}`;
-// Issue #303: proposals that open pull requests add to the register and that main does not have yet. Never throws: an unreadable head adds none.
-export function pendingProposals(config, pulls, mainRegister, read = readHeadRegister) {
-  const out = [];
-  for (const p of pulls || []) {
-    if (p.isDraft) continue;
-    let text = ''; try { text = read(config, p) || ''; } catch { text = ''; }
-    for (const e of proposalsAdded(mainRegister, text)) out.push({ ...e, pr: p.number });
-  }
-  return out;
-}
 // Issue #414: where a held issue is listed. 'needs': a question the homeowner can answer today. 'later': parked or staged work, with what it waits
 // for and who or what ends the wait. Foreman applied the label only when state or the issue's own marker says so (stock text only then).
 const foremanApplied = (i, state) => Object.keys(state.unblock?.flags?.[i.number] || {}).length > 0 || !!state.splits?.[i.number] || i.foremanFiled === true;
@@ -393,8 +384,8 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
       { tried: `${info.summary} Each has an independent PASS, green checks and no conflict, but merges only once the register says homeowner-approved.`, action: `To approve, edit docs/DECISIONS.md on main so the ${info.id} entry reads "Status: homeowner-approved".`, links: prs.slice(0, 6).map(p => ({ text: names.pr(p.number).text, url: web('pull', p.number) })) });
   }
   // Issue #303: one item per decision proposal awaiting the homeowner's sign-off, naming the entry and the pull request that adds it.
-  for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, `Decision ${p.id} (${redact(p.title, 120)}) is an agent proposal awaiting your sign-off, added by ${names.pr(p.pr).text}`, { kind: 'pull', n: p.pr },
-    { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: `To approve, comment "homeowner-approval: ${p.id}" on the pull request and set the entry to "Status: homeowner-approved" with its Source linking that comment, or reject the PR.`, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
+  for (const p of proposals) add(`decision-proposal-${p.id}-${p.pr}`, proposalWords(p, names.pr(p.pr).text).text, { kind: 'pull', n: p.pr },
+    { tried: 'Agents may only propose decisions; the entry does not bind until you approve it. CI fails any agent PR that marks an entry homeowner-approved without a recorded approval from you.', action: proposalWords(p, '').action, links: [{ text: names.pr(p.pr).text, url: web('pull', p.pr) }] });
   // Issue #855: a step that truly cannot be automated is listed by the PR under "Homeowner steps"; it shows here, not in a job report.
   for (const [n, h] of Object.entries(state.homeownerSteps || {})) {
     const pr = Number(n), open = (cache?.pulls || []).some(p => p.number === pr && p.headRefOid === h?.head);

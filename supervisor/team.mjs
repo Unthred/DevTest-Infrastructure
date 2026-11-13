@@ -66,6 +66,8 @@ import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePromp
 import { isCiteRepair } from './incomplete.mjs';
 import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
 import { recordCreatedInboxJob } from './inboxlaunch.mjs';
+import { approveDecisions } from './decisionapprove.mjs';
+
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -640,7 +642,7 @@ const COMMON = SAFETY + ' ' + HANDOVER_UPDATE + ' ' + TEMP_RULE;
 export const TEST_COMMAND = '/root/bin/ai-supervisor test-slot run -- node --test --test-reporter=dot "tests/**/*.test.mjs"';
 // D-024: the reviewer runs the tests itself, so a review never reuses an earlier pass of the same tree.
 export const REVIEW_TEST_COMMAND = TEST_COMMAND.replace('test-slot run --', 'test-slot run --no-reuse --');
-const issueReading = n => `Read docs/DECISIONS.md in full. Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
+const issueReading = n => `Read docs/DECISIONS.md in full, and every file in docs/decisions/ (docs/ai/decision-proposals.md says how to propose a decision). Read docs/ai/CURRENT_HANDOVER.md only as far as the summary sections (everything above the first per-issue section, whose heading starts with an issue or pull request number) plus every section for issue #${n}; never the whole handover. It is read-only for you.`;
 // Issue #855: done is installed and working, so a step outside the repository is part of the change.
 export const DONE_RULE = 'Missing step (blocking, verdict CHANGES): if the change needs a setting, a migration or any post-install action that the pull request does not deliver, that is blocking. A local setting ships as a migration (supervisor/migrations/NNN-name.mjs) that applies it at install; a value specific to this host that must not go into this public repository is raised by Foreman as one inbox item at install; a check that needs the running system is listed under a "Live checks" heading in the issue. "The homeowner can do X after deploy" is never an accepted resolution. Only a step that cannot be automated (it needs the homeowner\'s credentials or a physical action) may be left to the homeowner, and only under a "Homeowner steps" heading in the pull request description.';
 export function reviewPrompt(job) {
@@ -1746,7 +1748,7 @@ export class Team {
     if (!dryRun) {
       { const since = Date.now(); await this.loadNames(); lap('github reads', since); }
       await guard('inbox', () => this.processInbox(report)); await guard('time caps', () => enforceStops(this, report)); await guard('host values', () => this.raiseHostValues(report)); await guard('live checks', () => this.verifyInstalled(report)); await this.ingest(report, guard); await this.retryCarries(report, guard); await this.applyHomeownerRequests(report); await this.scanOwnerComments(report, guard); await guard('requirements recheck', () => this.recheckRequirements(report)); if (!hold?.installRunning) await this.resumeTransient(report, guard); await this.notifyBlocked(report, guard); await this.notifyFixLimit(report, guard); await this.notifyChurn(report, guard); await this.watchCancelled(report, guard); await this.clearStale(report, guard); await this.releaseFinished(report, guard);
-      await guard('board catch-up', () => this.flushBoard(report));
+      await guard('board catch-up', () => this.flushBoard(report)); await guard('decision approvals', () => approveDecisions({ gh: this.gh, repoPath: this.c.repo_path, owner: this.ownerLogin(), isOwnerComment: c => this.isOwnerComment(c) }, report));
       this.modes = this.budgets(); await guard('allowance modes', () => this.updateBudget(report));
     }
     if (!dryRun && this.independenceApproved()) await guard('legacy post-merge entries', () => this.pruneLegacyPostMerge(report));

@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decisionFileFindings } from './decision-files-check.mjs';
 
 export const REQUIRED_FILES = [
   'README.md', 'AGENTS.md', 'CLAUDE.md',
@@ -88,7 +89,7 @@ export function validate(root) {
   for (const f of REQUIRED_FILES) if (!fs.existsSync(path.join(root, f))) add('required-files', `missing ${f}`);
   const has = (f) => fs.existsSync(path.join(root, f));
 
-  // Decision register
+  findings.push(...decisionFileFindings(root));   // issue #1229: docs/decisions/*.md and the generated index; then the frozen register
   if (has('docs/DECISIONS.md')) {
     const entries = parseDecisions(read(root, 'docs/DECISIONS.md'));
     if (entries.length === 0) add('decisions', 'no decision entries found');
