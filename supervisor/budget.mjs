@@ -23,6 +23,7 @@ DEFAULT_BUDGET.reading_max_age_minutes = DEFAULT_READING_MAX_AGE_MINUTES;   // i
 export const MIN_ELAPSED_FRACTION = 0.05;
 export const REVIEWS_ONLY_TYPES = new Set(['review', 'fix', 'cifix', 'rebase']);
 const WEEK_MINUTES = 10080;
+const RESERVE_LATCH = /remaining capacity at or below the reserve/;   // the reason text highWaterHold writes when the reserve rule set the hold
 const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
@@ -181,7 +182,9 @@ export function assessAgent({ allowance, jobs = [], history = [], settings = DEF
   // A latch recorded without a rule is an older one: a forecast latch is ignored (it clears on the first tick), but a genuine high-water latch
   // (the old code's reason ends ': at or above N% with more than Nh to go', N fractional if high_water_min_hours is; a forecast latch ends ': runs out before the reset ...') keeps holding to the reset, also in the last day of the window where the live rule no longer applies.
   const legacyHighWater = latched?.rule == null && /^weekly \d+%, projected \d+% at reset \(.*: at or above \d+% with more than \d+(?:\.\d+)?h to go$/.test(String(latched?.reason ?? ''));
-  const held = latched?.mode === 'reviews_only' && (latched.rule === 'high-water' || legacyHighWater) && sameReset(latched.until, weekly.resetsAt);
+  // Issue #1331: a latch the reserve rule set (known capacity) is released on the first tick where remaining capacity is above the reserve; the percentage rule's latch holds to the reset.
+  const reserveReleased = capacity?.basis === 'absolute' && capacity.belowReserve === false && RESERVE_LATCH.test(String(latched?.reason ?? ''));
+  const held = latched?.mode === 'reviews_only' && (latched.rule === 'high-water' || legacyHighWater) && sameReset(latched.until, weekly.resetsAt) && !reserveReleased;
   const probed = allowance.source === 'probe' && Number.isFinite(allowance.observedAt) && Number.isFinite(latched?.since) && allowance.observedAt > latched.since;
   if (held && probed) return { ...out, reason: `${est}; the reviews-only latch was released by a fresh allowance probe` };
   if (held) return { ...out, rule: 'high-water', mode: 'reviews_only', until: weekly.resetsAt, reason: `${redact(latched.reason, 300)}; held until the weekly reset` };

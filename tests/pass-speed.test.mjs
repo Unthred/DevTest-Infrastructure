@@ -124,14 +124,14 @@ function laneWorld(t, { active = [], limits = {}, pulls = [], register = REGISTE
 test('the fast lane judges the allowance reserve with the open pull requests counted (#1116)', async t => {
   const NOW = 5000, RESET = NOW + 10 * 3600000;   // inside the last day, where only the planner and this lane enforce the reserve
   const done = (kind, i) => ({ id: String(i).repeat(32), provider: 'claude', kind, status: 'completed', createdAt: NOW - i * 1000, usage: { inputTokens: 100000, outputTokens: 0 } });
-  const window = { type: 'seven_day', windowMinutes: 10080, utilization: 0.6, resetsAt: RESET, status: 'allowed' };
+  const window = { type: 'seven_day', windowMinutes: 10080, utilization: 0.8, resetsAt: RESET, status: 'allowed' };
   const allowance = { claude: { provider: 'claude', status: 'allowed', observedAt: NOW, billing: {}, windows: [window] } };
   const pr = n => ({ number: n, title: 't', headRefName: `claude/issue-${n}-x`, headRefOid: String(n).repeat(40), baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] });
   const w = laneWorld(t, { pulls: [pr(1), pr(2)] });
   const team = new Team({ config: { ...w.cfg, budget: { starting_capacity: { claude: 1e6 } } }, root: w.root, gh: w.gh, jobs: w.jobs, git: { ensureWorktree: async o => o.path, worktreeFor: async () => null },
     register: REGISTER, clock: { now: () => NOW }, sleep: async () => {}, limitedOf: () => ({ out: false }), usage: { allowance, jobs: [done('review', 1), done('fix', 2)], snapshots: [] } });
   const out = await team.startApprovedNow({});
-  assert.equal(out.started, false, 'two open PRs reserve 450k of 1M; 400k is left, so no implement starts');
+  assert.equal(out.started, false, 'two open PRs reserve 250k of 1M (a fix round each plus the margin); 200k is left, so no implement starts');
   assert.equal(w.created.length, 0);
 });
 

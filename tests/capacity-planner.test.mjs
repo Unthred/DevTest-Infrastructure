@@ -20,7 +20,7 @@ const config = (budget = {}, roles = { implementer: 1, reviewer: 1 }) => ({
   limits: { roles, overall: 4, max_review_attempts: 2, max_fix_attempts: 2 }, budget,
   agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [23, 5] }, codex: { provider: 'codex', branch_prefix: 'codex/', issues: [2, 3] } },
   board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } } });
-const pr = (n, branch, head) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: green });
+const pr = (n, branch, head, labels = []) => ({ number: n, title: `t${n}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, labels, mergeable: 'MERGEABLE', statusCheckRollup: green });
 const issue = (n, state = 'OPEN') => ({ number: n, title: `Issue ${n} title here`, state, body: '', labels: [] });
 const finished = (provider, kind, tokens, i) => ({ id: String(i).repeat(32), provider, kind, status: 'completed', createdAt: NOW - (i + 1) * HOUR, usage: { inputTokens: tokens, outputTokens: 0 } });
 
@@ -40,9 +40,9 @@ test('the tick records, alerts and latches a reserve that counts the open pull r
   const records = [finished('claude', 'review', 100000, 1), finished('claude', 'fix', 100000, 2)];
   const w = world(t, { budget: { starting_capacity: { claude: 1e6, codex: 1e7 } }, jobRecords: records,
     pulls: [pr(40, 'claude/issue-7-x', H(1)), pr(41, 'claude/issue-8-x', H(2))], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')],
-    allowance: { claude: weekly('claude', 0.6, RESET), codex: weekly('codex', 0.1, RESET) } });
+    allowance: { claude: weekly('claude', 0.8, RESET), codex: weekly('codex', 0.1, RESET) } });
   await w.team.tick();
-  assert.equal(w.team.s.budget.claude.mode, 'reviews_only', 'two open PRs reserve 400k + 50k margin; 400k is left');
+  assert.equal(w.team.s.budget.claude.mode, 'reviews_only', 'two open PRs reserve 200k + 50k margin; 200k is left');
   assert.equal(w.team.s.budget.claude.rule, 'high-water');
   assert.ok(w.calls.alerts.some(a => /claude: reviews only/.test(a)), JSON.stringify(w.calls.alerts));
 });
@@ -82,4 +82,22 @@ test('model choice follows remaining capacity: the same percentage keeps the che
   const pick = capacityLow => resolveModel({ modelsConfig: models, agent: 'codex', kind: 'review', manifestModels: undefined, escalation: null, utilization: 0.9, reReview: false, low: false, capacityLow });
   assert.match(pick(false).fields.modelReason, /configured|keeps/, 'capacity says not low: the 90% percentage no longer decides');
   assert.match(pick(true).fields.modelReason, /remaining capacity within twice the reserve/);
+});
+
+test('an agent reserve counts only its own open pull requests', async t => {
+  // 13 Nov 2026: 15 open pull requests on claude branches, one on a codex branch (#1139, parked); codex at 46% of 110.6M a week.
+  const records = [finished('codex', 'review', 2e6, 1), finished('codex', 'fix', 2e6, 2), finished('claude', 'fix', 1e5, 3)];
+  const claudePrs = Array.from({ length: 15 }, (_, i) => pr(100 + i, `claude/issue-${100 + i}-x`, H(i % 9 + 1)));
+  const own = pr(1139, 'codex/issue-3-x', H(9), ['needs-homeowner', 'parked']);
+  const w = world(t, { budget: { starting_capacity: { claude: 1e9, codex: 110.6e6 } }, jobRecords: records, pulls: [...claudePrs, own], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED'), issue(2, 'CLOSED'), issue(3, 'CLOSED')],
+    allowance: { claude: weekly('claude', 0.1, RESET), codex: weekly('codex', 0.46, RESET) } });
+  await w.team.tick();   // the tick reads the pull requests; budgets() then uses them as the next tick does
+  const budgets = w.team.budgets();
+  const cap = budgets.codex.capacity;
+  assert.equal(cap.need, 0, 'the one codex pull request is parked, the claude ones are not codex\'s');
+  assert.equal(cap.reserve, 110.6e6 * 0.05, 'only the margin is reserved');
+  assert.equal(cap.belowReserve, false);
+  assert.equal(budgets.codex.mode, 'normal');
+  assert.match(cap.text, /for 0 open pull requests of this agent/);
+  assert.equal(budgets.claude.capacity.need, 15 * 1e5, 'claude is charged one fix round for each of its own fifteen');
 });
