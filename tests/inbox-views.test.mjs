@@ -107,7 +107,7 @@ async function serve(t) {
 }
 test('GET /inbox serves the switch and the three views with the same ids, and the filters apply to all three', async t => {
   const s = await serve(t);
-  const all = await s.get('/inbox');
+  const all = await s.get('/inbox?state=all');
   assert.equal(all.status, 200);
   assert.match(all.body, /Inbox/);
   for (const label of ['Cards', 'Table', 'Compact list']) assert.ok(all.body.includes(`>${label}</button>`), label);
@@ -116,7 +116,7 @@ test('GET /inbox serves the switch and the three views with the same ids, and th
   assert.ok(a.cards.length >= 5);
   assert.deepEqual(a.table, a.cards);
   assert.deepEqual(a.compact, a.cards);
-  for (const q of ['?state=done', '?search=drift', '?kind=issue_draft&state=done']) {
+  for (const q of ['?state=done', '?state=all&search=drift', '?kind=issue_draft&state=done']) {
     const f = ids((await s.get(`/inbox${q}`)).body);
     assert.deepEqual(f.table, f.cards, q);
     assert.deepEqual(f.compact, f.cards, q);
