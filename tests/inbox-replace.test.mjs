@@ -211,7 +211,9 @@ test('invalid: approving a withdrawn or replaced item is refused with the text, 
   await w.withdraw(plain, 'not needed');
   assert.match(inbox.decide(w.dir, plain, 'approve', 5).reason, /withdrawn: not needed/);
   assert.equal(inbox.pendingCards(w.dir).filter(c => [styles, plain].includes(c.id)).length, 0);
-  assert.equal(inbox.undo(w.dir, styles, 6).ok, false);
+  const undone = inbox.undo(w.dir, styles, 6);
+  assert.equal(undone.ok, false);
+  assert.match(undone.reason, /withdrawn: it was replaced by "Live board drawing styles .* Boardstyles"/);
   assert.equal(w.state(fresh).state, 'pending');
 });
 

@@ -44,7 +44,7 @@
         "id": { "$ref": "common.schema.json#/$defs/short_id" },
         "full_id": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
         "kind": { "type": "string", "enum": ["prompt", "issue_draft", "action", "control", "decision", "host_value"] },
-        "state": { "type": "string", "enum": ["waiting_for_approval", "approved", "running", "done", "failed", "refused", "rejected"] },
+        "state": { "type": "string", "enum": ["waiting_for_approval", "approved", "running", "done", "failed", "refused", "rejected", "withdrawn"] },
         "attention": { "$ref": "common.schema.json#/$defs/attention" },
         "title": { "type": "string" },
         "why": { "type": ["string", "null"] },

@@ -316,6 +316,7 @@ export function undo(inboxDir, id, now = Date.now()) {
   const r = withLock(inboxDir, id, () => {
     const file = path.join(dirs(inboxDir).status, `${id}.json`), s = readJson(file);
     if (!s) return { ok: false, reason: 'unknown item' };
+    if (s.state === 'withdrawn') return { ok: false, reason: withdrawnText(s) };   // issue #1316
     if (!['approved', 'rejected'].includes(s.state) || !s.decision) return { ok: false, reason: s.state === 'pending' ? 'the item is already pending' : `the item is already ${s.state}; it was acted on and cannot be undone` };
     if (!Number.isFinite(s.decidedAt) || now < s.decidedAt || now - s.decidedAt > UNDO_MS) return { ok: false, reason: 'the undo window has passed' };
     const { decision, decidedAt, title, result, ...rest } = s;
