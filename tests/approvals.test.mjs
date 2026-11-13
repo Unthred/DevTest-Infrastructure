@@ -106,7 +106,7 @@ test('shared path: the dropdown forms post exactly what the Inbox card forms pos
   const dir = makeInbox(t); drop(dir, PROMPT); inbox.scan(dir, 1000);
   const s = await serve(t, dir);
   const forms = page => [...page.matchAll(/<form method="post" action="([^"]*)" class="inbox-form">(.*?)<\/form>/g)].map(m => `${m[1]}|${m[2].replace(/value="[0-9a-f]{32}"/, 'value="ID"').replace(/<input type="hidden" name="proof"[^>]*>/, '')}`).filter(f => f.includes('value="approve"'));
-  const card = forms((await s.get('/inbox')).body), dropdown = forms((await s.get('/')).body);
+  const cardsPane = html => html.match(/<div data-pane="cards">[^]*?<div class="iv-tablewrap"/)[0], card = forms(cardsPane((await s.get('/inbox')).body)), dropdown = forms((await s.get('/')).body);
   assert.equal(card.length, 1, 'the Inbox page owns the proposal card');
   assert.equal(dropdown.length, 1, 'the Waiting for approval dropdown keeps the same decision');
   assert.equal(card[0], dropdown[0], 'identical action and fields');

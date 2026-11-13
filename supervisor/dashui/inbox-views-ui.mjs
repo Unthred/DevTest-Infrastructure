@@ -24,9 +24,12 @@ function readPrefs(store, phone) {
   return sanitizePrefs(saved, { phone });
 }
 
+// The sort outlives the views: the refresh in place swaps in new views and initInboxViews runs again, so the choice is kept here (issue #1262).
+const keptSort = { key: '', dir: 'asc' };
+
 // The one sort applies to the table, the compact list and the cards, so the three views list the same items in the same order.
 function sorter(el, parents, tbody) {
-  const sort = { key: '', dir: 'asc' };
+  const sort = keptSort;
   const apply = () => {
     const order = sortRows(tableRows(tbody), sort.key, sort.dir).map(r => r.id);
     for (const parent of parents) if (parent) reorder(parent, order);
@@ -41,6 +44,7 @@ function sorter(el, parents, tbody) {
     sort.key = key;
     apply();
   };
+  if (sort.key) apply();
   return by;
 }
 

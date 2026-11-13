@@ -583,3 +583,10 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .iv-table{display:table}.iv-table thead{display:table-header-group;position:static}.iv-table tbody{display:table-row-group}
 .iv-table tr{display:table-row;border:0;border-radius:0;margin:0;padding:0;background:none}.iv-table th,.iv-table td{display:table-cell;text-align:left;gap:0}.iv-table td::before{content:none}
 .iv[data-view=cards] .iv-cols,.iv[data-view=compact] .iv-cols{display:none}
+/* Issue #1262: Approve and Reject on a table row (last column) and on a compact row (on its line, outside the part that expands). */
+.iv-table col[data-col=actions]{width:15rem}.iv-table td[data-col=actions] .acts{margin:0}.iv-acts .inbox-form{flex:0 0 auto}.iv-acts .btn{min-height:44px}
+.iv-crow{display:flex;flex-wrap:wrap;align-items:flex-start;gap:0 var(--sp2)}.iv-crow>details{flex:1 1 0;min-width:0}.iv-crow>.iv-acts{flex:none;margin:0}
+.iv-crow>.inbox-err,.iv-crow>.inbox-outcome{flex:1 1 100%;min-width:0}
+@media(max-width:640px){.iv-crow>.iv-acts{flex:1 1 100%;margin:0 0 var(--sp2);padding-left:1.8em}.iv-crow .iv-acts .inbox-form{flex:1 1 0}}
+/* A proposal's text keeps its line breaks but wraps long lines, so a long proposal never widens the page on a phone (issue #1262, requirement 6). */
+.inbox-text{white-space:pre-wrap;overflow-wrap:anywhere}

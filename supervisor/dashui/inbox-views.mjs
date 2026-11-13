@@ -37,11 +37,21 @@ export function ageText(createdAt, now) {
   return `${Math.floor(s / 86400)} d`;
 }
 
+// The one rule for which decision buttons an item has (the card and both list views call it): Approve when it has no decision, is pending and
+// is not broken; Reject when it has no decision and is pending. `form(id, decision, label, cls)` returns the form HTML.
+export function decisionForms(item, form) {
+  const open = !item.decision && item.state === 'pending';
+  return {
+    approve: open && !item.broken ? form(item.id, 'approve', 'Approve', 'inbox-approve') : '',
+    reject: open ? form(item.id, 'reject', 'Reject', 'inbox-reject') : '',
+  };
+}
+
 // One row as both renderers and the sorter see it.
 export function rowOf(rec, now) {
   const created = Number.isFinite(rec.createdAt) ? rec.createdAt : null;
   return {
-    id: rec.id, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'),
+    id: rec.id, decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'),
     created, age: ageText(created, now), source: sourceOf(rec), result: firstLine(resultOf(rec)), full: resultOf(rec), prompt: promptOf(rec),
   };
 }

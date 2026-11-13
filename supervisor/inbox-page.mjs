@@ -1,5 +1,6 @@
 import { highlightInboxText } from '../foreman-mcp/inbox-search.mjs';
 import { inboxViews } from './inbox-views.mjs';
+import { decisionForms } from './dashui/inbox-views.mjs';
 import { inboxAllRecords } from '../foreman-mcp/inbox-search-records.mjs';
 import { applyFilters, countButtons, describeFilters, parseFilters } from './inbox-filter.mjs';
 import { chipRows, emptyResult, filterForm } from './inbox-chips.mjs';
@@ -12,8 +13,7 @@ export function inboxCard(card, query, { esc, tag, form }) {
   const title = highlighted(card.title || 'An inbox item that cannot be shown', query, esc);
   const why = card.why ? `<div class="sub">Why: ${highlighted(card.why, query, esc)}</div>` : '';
   const body = highlighted(card.text || '', query, esc);
-  const approve = !card.decision && card.state === 'pending' && !card.broken ? form(card.id, 'approve', 'Approve', 'inbox-approve') : '';
-  const reject = !card.decision && card.state === 'pending' ? form(card.id, 'reject', 'Reject', 'inbox-reject') : '';
+  const { approve, reject } = decisionForms(card, form);
   const tagHtml = card.decision ? '' : tag(card.id, card.kind);
   const will = card.will ? `<div class="sub">${esc(card.will)}</div>` : '';
   const options = card.decision && card.body ? `<div class="sub">Decision: ${highlighted(card.body, query, esc)}</div>` : '';
@@ -38,7 +38,7 @@ export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) 
   const highlight = text => highlighted(text, current.search, esc);
   const cardsHtml = `<ul class="panel-list">${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join('')}</ul>`;
   const result = visible.length
-    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml })}`
+    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml, form })}`
     : emptyResult(describeFilters(current), esc);
   const body = chipRows(current, counts, esc) + filterForm(current, esc) + result + decided(view) + '<script type="module" src="/static/inbox-filter.mjs"></script>';
   return {

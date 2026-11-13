@@ -41,3 +41,25 @@ export const lowerCount = (heading, by = 1) => String(heading).replace(/\((\d+)\
 if (typeof document !== 'undefined') bindApproveAll(postDecision);
 // Issue #1185: a decision card's controls post in the background (dashui/decision-ui.mjs), bound once here like Approve all.
 if (typeof document !== 'undefined') bindDecisionCards(postDecision);
+
+// Issue #1262: a decided item shows the same outcome in every Inbox view that holds it (card, table row, compact row) and the two list views
+// lose its buttons. The pressed card keeps its buttons until the caller moves it to Decided; `pressed` is the element the click came from.
+export function showOutcomeInViews(doc, { id, decision, decidedAt, pressed, localize }) {
+  for (const view of doc.querySelectorAll('[data-inbox]')) {
+    const outcome = view.querySelector('.inbox-outcome');
+    if (view.dataset.inbox !== id || !outcome) continue;
+    outcome.className = `inbox-outcome ${decision === 'approve' ? 'approved' : 'rejected'}`;
+    outcome.setAttribute('data-lms', decidedAt);
+    outcome.setAttribute('data-tonly', '');
+    outcome.setAttribute('data-tpl', OUTCOME_TEMPLATE[decision]);
+    outcome.hidden = false;
+    localize(view);
+    if (view !== pressed || !view.classList.contains('inbox-item')) view.querySelector('.acts')?.remove();
+  }
+}
+
+// Issue #1262: the waiting chip on the Inbox page drops at once when a waiting item is decided; the refresh that follows re-reads the true count.
+export function lowerWaitingChip(doc) {
+  const n = doc.querySelector('[data-chip="state:waiting"] .qf-n');
+  if (n && Number(n.textContent) > 0) n.textContent = String(Number(n.textContent) - 1);
+}
