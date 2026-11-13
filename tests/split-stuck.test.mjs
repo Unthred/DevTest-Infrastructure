@@ -59,9 +59,16 @@ test('a second fix limit event on the same PR creates no second record, job or c
 
 test('the rebase cap with the same cause also parks the PR', async t => {
   const w = stuckWorld(t, { pr: PR, fixRounds: 0, verdict: { verdict: 'PASS', reviewer: 'claude', at: 1, findings: [] } });
-  w.team.s.sameCause['rebase:11'] = { count: 2 };
+  w.team.s.sameCause['rebase:11'] = { count: 2, head: w.gh.pulls[0].headRefOid };
   assert.match(stuckCause(w.team, w.gh.pulls[0])?.text || '', /rebases of this PR stopped 2 times/);
   await w.team.tick(); assert.equal(w.team.s.stuckSplits[11].cause, 'rebase-cap');
+});
+
+test('a rebase cap recorded for an earlier head does not park the PR at a new head', async t => {
+  const w = stuckWorld(t, { pr: PR, fixRounds: 0, verdict: { verdict: 'PASS', reviewer: 'claude', at: 1, findings: [] } });
+  w.team.s.sameCause['rebase:11'] = { count: 5, head: 'f'.repeat(40) };
+  assert.equal(stuckCause(w.team, w.gh.pulls[0]), null);
+  await w.team.tick(); assert.equal(w.team.s.stuckSplits[11], undefined);
 });
 
 test('a good draft becomes ONE proposal: a notice, a card with both buttons, and nothing filed', async t => {

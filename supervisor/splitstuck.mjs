@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { park, depsOf } from './controlactions.mjs';
 import { descriptionRoundFor } from './descround.mjs';
-import { sameCauseCap } from './robust.mjs';
+import { sameCauseCap, capped } from './robust.mjs';
 import { readStuckDraft, itemBody, bodyFault, STANDING_OPTIONS } from './splitstuck-draft.mjs';
 
 const HEAD = /^[0-9a-f]{40}$/;
@@ -25,8 +25,8 @@ export function stuckCause(team, pr) {
   const finalRoundPending = team.escalationPending(n, pr) && !team.carriedHold(pr);   // one final fix round is still to run
   if (rejected && team.fixCount(n) >= max && !finalRoundPending) return { kind: 'fix-limit', text: `${team.fixCount(n)} fix rounds (limit ${max}) have not cleared ${team.rejectionCause(pr)}` };
   const cap = sameCauseCap(team.c.limits);
-  const capped = Object.entries(team.s.sameCause || {}).find(([k, v]) => k.startsWith('rebase:') && k.slice(7) === String(n) && v.count >= cap);
-  return capped ? { kind: 'rebase-cap', text: `rebases of this PR stopped ${capped[1].count} times for the same cause (cap ${cap})` } : null;
+  const stopped = capped(team.s, { type: 'rebase', subject: n, head: pr.headRefOid }, cap) ? team.s.sameCause[`rebase:${n}`] : null;   // a new head starts the count again
+  return stopped ? { kind: 'rebase-cap', text: `rebases of this PR stopped ${stopped.count} times for the same cause (cap ${cap})` } : null;
 }
 
 // What the planning job reads besides the issue and the diff: the blocking findings, this PR's files and the files of every other open PR.
