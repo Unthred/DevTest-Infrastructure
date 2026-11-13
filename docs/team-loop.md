@@ -43,7 +43,7 @@ Interactive launcher (`/root/bin/ai-agent`): Codex `--dangerously-bypass-approva
 - Not live-verified: the dispatcher against real jobs, merge, restart after a real allowance limit, and the cron integration.
 
 ## Local configuration and upgrades (issue #30)
-`supervisor/team.json` is the reviewed, versioned file (shipped `enabled: false`). **Never edit the installed copy** under `/mnt/cache/ai-supervisor/versions/<sha>/`: the next upgrade replaces it, and the payload would no longer match the reviewed commit. Local settings go in **`/mnt/cache/ai-supervisor/team.local.json`** (state root, outside `versions/`, mode 0600). Upgrades never read, write or replace it. Example:
+`supervisor/team.json` is the reviewed, versioned file (shipped `enabled: false`). **Never edit the installed copy** under `/mnt/cache/ai-supervisor/versions/<sha>/`: the next upgrade replaces it, and the payload would no longer match the reviewed commit. Local settings go in **`/mnt/cache/ai-supervisor/team.local.json`** (state root, outside `versions/`, mode 0600). Upgrades never read, write or replace it. The code that validates both files and loads them (`validateTeamConfig`, `applyLocalOverride`, `loadTeamConfig`) is `supervisor/teamconfig.mjs` (issue #1239); `supervisor/team.mjs` re-exports it. Example:
 ```json
 { "enabled": true, "limits": { "overall": 2 }, "agents": { "claude": { "issues": [5, 6] } } }
 ```
