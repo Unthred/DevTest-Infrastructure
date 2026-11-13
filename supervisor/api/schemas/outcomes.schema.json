@@ -1,0 +1,73 @@
+{
+  "$id": "outcomes.schema.json",
+  "title": "The outcomes model: reply of GET /api/v1/outcomes (issue #1307)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "number": { "type": ["integer", "null"], "minimum": 1 },
+    "step": {
+      "type": "object",
+      "required": ["at", "peg", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "peg": { "enum": ["implement", "ci", "review", "rebase", "merge"] },
+        "result": { "enum": ["passed", "bounced"] }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": ["key", "kind", "pr", "issue", "title", "steps", "laps", "bin", "last_at"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^(pr|issue)-[0-9]+$" },
+        "kind": { "enum": ["pull", "issue"] },
+        "pr": { "$ref": "#/$defs/number" },
+        "issue": { "$ref": "#/$defs/number" },
+        "title": { "type": ["string", "null"] },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "laps": { "$ref": "#/$defs/count" },
+        "bin": { "enum": ["merged", "needs_you", "failed", "moving"] },
+        "last_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "outcomes" },
+        "data": {
+          "type": "object",
+          "required": ["window", "counts", "truncated", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "window": {
+              "type": "object",
+              "required": ["hours", "start", "end"],
+              "additionalProperties": false,
+              "properties": {
+                "hours": { "type": "integer", "minimum": 1, "maximum": 168 },
+                "start": { "$ref": "common.schema.json#/$defs/timestamp" },
+                "end": { "$ref": "common.schema.json#/$defs/timestamp" }
+              }
+            },
+            "counts": {
+              "type": "object",
+              "required": ["merged", "needs_you", "failed", "moving"],
+              "additionalProperties": false,
+              "properties": {
+                "merged": { "$ref": "#/$defs/count" },
+                "needs_you": { "$ref": "#/$defs/count" },
+                "failed": { "$ref": "#/$defs/count" },
+                "moving": { "$ref": "#/$defs/count" }
+              }
+            },
+            "truncated": { "type": "boolean" },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+          }
+        }
+      }
+    }
+  ]
+}

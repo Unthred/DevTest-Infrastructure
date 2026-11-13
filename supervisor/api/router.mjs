@@ -21,6 +21,10 @@ const hasRouteShape = m => typeof m.name === 'string' && ['GET', 'POST'].include
 class NotFound { constructor(text) { this.text = text; } }
 export const notFound = text => new NotFound(String(text ?? 'Not found.'));
 
+// Issue #1307: a build function returns this to refuse a query value; the router answers 400 as JSON with the given code.
+class BadRequest { constructor(code, text) { this.code = code; this.text = text; } }
+export const badRequest = (code, text) => new BadRequest(String(code), String(text));
+
 // A pattern segment in braces takes one request segment of safe characters; every other segment must be equal. Returns the params or null.
 export function matchPath(pattern, path) {
   const want = pattern.split('/');
@@ -114,6 +118,7 @@ export function createApiRouter({
     const view = model.usesView === false ? null : await getView();
     const data = await model.build(view, context);
     if (data instanceof NotFound) return fail(req, res, 404, 'not_found', data.text);
+    if (data instanceof BadRequest) return fail(req, res, 400, data.code, data.text);
     const body = envelope({ model: model.name, data, now: context.now, tickAt: tickAt(), staleAfterMs, cursor: cursorOf(routes, root) });
     return reply(req, res, 200, JSON_TYPE, JSON.stringify(body));
   };

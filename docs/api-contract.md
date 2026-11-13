@@ -57,6 +57,33 @@ Optional exports: `events` and `commands` (arrays of objects) fill the same list
 
 The context holds everything a model gets (`now`, `coreVersion`, `models`, `routes`, `query`, `params`, `root`, `config`) plus `headers` (the security headers), `reply(req, res, code, type, body, extra)`, `fail(req, res, code, errorCode, text, extra)` and `guard`. `guard` hands over the dashboard's write checks, so a route copies none of them: `originAllowed(req)`, `proofValid(value)`, `reserveCooldown(name, ms)` (returns `{ ok }` or `{ ok: false, retryAt }`), `releaseCooldown(name)`, `invalidateView()` (drop the prepared view so the next read is fresh) and `wake(reason)` (ask for a pass). A write route must call `originAllowed` and `proofValid` itself before it changes anything.
 
+## The outcomes model
+
+Issue #1307. `GET /api/v1/outcomes?hours=N` answers, for a time window, which issues and pull requests had activity, which pegs each passed or bounced off in order, how many laps it took and where it stands. A screen can draw and replay it with no logic of its own. It is built when asked from the retained timeline, the dashboard view and the current Needs you list: no timer, nothing stored. The logic is the pure builder `supervisor/outcomes.mjs`.
+
+- `hours` is a whole number from 1 to 168, default 24. Any other value answers 400 with the error code `invalid_hours`.
+- One item per issue or pull request with at least one step in the window. An issue and its pull request are one item, keyed `pr-N` once the pull request exists (the issue number stays in `issue`), else `issue-N`. The link comes from a merge entry or a pull request row of the view.
+- A step has `at`, `peg` (`implement`, `ci`, `review`, `rebase`, `merge`) and `result` (`passed` or `bounced`). The mapping is fixed:
+
+| Timeline entry | Step |
+| --- | --- |
+| implement or continue job, event `completed` | implement passed |
+| implement or continue job, event `blocked`, `crash`, `incomplete`, `retry_exhausted` or `auth_error` | implement bounced |
+| review verdict PASS | review passed |
+| review verdict CHANGES | review bounced |
+| cifix job, event `created` (one per job) | ci bounced |
+| rebase entry (a completed rebase) | rebase passed |
+| rebase job, event `blocked` | rebase bounced |
+| merge entry | merge passed |
+
+Every other entry (a fix or review job, a started or created event, an unknown job kind) is not a step and is ignored. A completed rebase job is not counted again: its rebase entry is the step.
+
+- `laps` is the number of bounced steps followed by a later step in the window.
+- `bin` is decided in this order: `merged` (has a merge step), `needs_you` (the current Needs you list names the issue or pull request), `failed` (the last step is bounced and nothing followed), else `moving`.
+- `title` is the dashboard view's title, or null when it does not know the item.
+- The reply carries `window` (`hours`, `start`, `end`), `counts` per bin over every qualifying item, `truncated` (true when more than 200 items qualify) and `items`: the 200 most recently active, newest first.
+- **Install is not a peg.** Foreman records no install event per pull request, so the model cannot place one without inventing it. A later item may add it when such an event exists.
+
 ## Schema subset
 
 `validate.mjs` has no imports and supports only `$ref` (same file, and other files by `$id`), `allOf`, `anyOf`, `type` (one or a list), `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minimum`, `maximum`, `pattern` and `format: date-time` (UTC, ending in `Z`). It returns a list of strings, each starting with the path of the fault. Schemas must stay inside this subset.

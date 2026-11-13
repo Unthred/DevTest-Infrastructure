@@ -61,6 +61,7 @@ test('GET /api/v1/meta answers 200 with the header, security headers, and a repl
     { name: 'audit', path: '/api/v1/audit', schema: 'audit.schema.json' },   // issue #1257
     { name: 'inbox', path: '/api/v1/inbox', schema: 'inbox.schema.json' },   // issue #1255
     { name: 'meta', path: '/api/v1/meta', schema: 'meta.schema.json' },
+    { name: 'outcomes', path: '/api/v1/outcomes', schema: 'outcomes.schema.json' },   // issue #1307
     { name: 'overview', path: '/api/v1/overview', schema: 'overview.schema.json' },   // issue #1256
   ]);
   assert.deepEqual([body.data.commands.map(c => c.name), body.data.events], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'upgrade.clear_latch', 'work_item.accept_split', 'work_item.clear_retry_cap', 'work_item.requeue'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name }))]);   // issue #1254: the events route exports its six types
