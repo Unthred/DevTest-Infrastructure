@@ -73,3 +73,15 @@ test('validate-project fails when AGENTS.md does not link the document', () => {
   });
   assert.ok(findings.some(f => f.check === 'work-items'), JSON.stringify(findings));
 });
+
+test('the Live checks line forms in the document are the forms livechecks.mjs reads (issue #1204)', async () => {
+  const { parseLiveChecks } = await import('../supervisor/livechecks.mjs');
+  assert.match(doc, /`GET`, `HEAD` or `POST`/);
+  assert.match(doc, /`->` or `→`/);
+  const body = '## Live checks\n- GET /a -> 200\n- HEAD /b → 204\n- POST /c -> 403 contains "no"\n- PUT /d -> 200\n';
+  assert.deepEqual(parseLiveChecks(body).map(c => c.method), ['GET', 'HEAD', 'POST']);
+});
+
+test('the dependency format document says examples go in backticks (issue #1204)', () => {
+  assert.match(fs.readFileSync(path.join(repo, 'docs/ai/dependency-format.md'), 'utf8'), /example of the syntax written in prose must go in backticks/);
+});
