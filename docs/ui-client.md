@@ -41,3 +41,8 @@ On a `model_changed` or `command_applied` event naming `appbar`, or on `resync_r
 - `tests/ui-static.test.mjs`: the files, content types, security headers, HEAD, the redirect and the 404 cases through the real dashboard handler.
 - `tests/ui-modules.test.mjs`: the status function, the formats, the stream client and the colour contrast.
 - `node tests/ui-appbar-browser.mjs <dir>` (Tower, pinned Chromium, after `node browser/prepare-cache.mjs`): the real page and router at 1280 and 390 wide, on a temporary contract folder with a fixture app bar model; scenario in `browser/ui-appbar-scenario.mjs`.
+
+## Notes on the chips and the lines under the bar
+
+- An agent chip shows its status as a shape; the word for it is the chip's title (with the reason text) and its accessible name, and the panel header shows shape and word together.
+- The stale line is shown when the envelope freshness state is anything other than fresh, so also when it is unknown (then it says no tick has been recorded). This is a deliberate choice: an unknown freshness must not look current.

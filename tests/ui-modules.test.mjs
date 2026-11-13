@@ -121,3 +121,36 @@ test('colours: every text token has at least 4.5 to 1 on the surfaces in the lig
     }
   }
 });
+
+// A minimal element stand-in, enough for renderBanners, which builds elements and sets the container's children.
+function fakeDocument() {
+  const make = tag => ({
+    tag, attrs: {}, kids: [],
+    setAttribute(k, v) { this.attrs[k] = v; },
+    append(...c) { this.kids.push(...c); },
+    replaceChildren(...c) { this.kids = c; },
+  });
+  const text = n => (typeof n === 'string' ? n : n.kids.map(text).join(''));
+  return { make, text };
+}
+
+test('banners: a stale freshness shows the last tick time and age, unknown says no tick, behind adds its line', async () => {
+  const { make, text } = fakeDocument();
+  globalThis.document = { createElement: make };
+  const { renderBanners } = await import('../supervisor/ui/appbar.mjs');
+  const now = Date.parse('2026-11-12T09:14:00Z');
+  const box = make('div');
+  renderBanners(box, { now, connection: 'live', freshness: { state: 'stale', tick_at: '2026-11-12T06:14:00Z', age_seconds: 10800 } });
+  assert.equal(box.kids.length, 1);
+  assert.match(text(box.kids[0]), /Data is stale.*Last tick .*\(3h .*ago\)/);
+  renderBanners(box, { now, connection: 'live', freshness: { state: 'unknown', tick_at: null } });
+  assert.match(text(box.kids[0]), /No tick has been recorded/);
+  renderBanners(box, { now, connection: 'behind', freshness: { state: 'fresh' } });
+  assert.equal(box.kids.length, 1);
+  assert.match(text(box.kids[0]), /Behind/);
+  renderBanners(box, { now, connection: 'behind', freshness: { state: 'stale', tick_at: '2026-11-12T06:14:00Z' } });
+  assert.equal(box.kids.length, 2);
+  renderBanners(box, { now, connection: 'live', freshness: { state: 'fresh' } });
+  assert.equal(box.kids.length, 0);
+  delete globalThis.document;
+});

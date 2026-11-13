@@ -46,7 +46,7 @@ function agentChip(agent, view) {
   const age = ageNow(agent.reading, view.receivedAt, view.now);
   const chip = el('button', {
     type: 'button', class: 'chip agent', 'data-agent': agent.id, 'aria-expanded': String(view.open === agent.id), 'aria-controls': 'panel',
-    'aria-label': agentLabel(agent, tone, stale, age), title: agent.condition.reason_text,
+    'aria-label': agentLabel(agent, tone, stale, age), title: [words(agent.condition.state), agent.condition.reason_text].filter(Boolean).join(': '),
   },
   mark(tone),
   el('span', { class: 'name' }, agent.display_name),
