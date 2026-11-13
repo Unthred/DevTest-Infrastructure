@@ -49,6 +49,12 @@ test('each listed unsafe kind is refused with its own reason', () => {
     ['an animate that writes an xlink href', withBody('<use href="#a"><animate attributeName="xlink:href" values="http://e/x.svg#a"/></use>'), /animation/],
     ['a css escape spelling url in a style element', withBody('<style>path{fill:\\75rl(http://e/x)}</style>'), /style element/],
     ['an import in a style attribute', withBody('<path style="@import \'http://e\'" d="M0 0"/>'), /style attribute/],
+    ['a character reference spelling href', withBody('<a><set attributeName="&#104;ref" to="javascript:alert(1)"/></a>'), /character reference/],
+    ['a hex character reference spelling href', withBody('<use href="#a"><animate attributeName="&#x68;ref" values="http://e/x.svg#a"/></use>'), /character reference/],
+    ['a character reference spelling a parenthesis after url', withBody('<style>path{fill:url&#40;http://e/x)}</style>'), /character reference/],
+    ['a character reference spelling import', withBody('<style>@im&#112;ort "http://e/x.css";</style>'), /character reference/],
+    ['a character reference in a style attribute', withBody('<path style="fill:url&#40;http://e/x)" d="M0 0"/>'), /character reference/],
+    ['a prefixed style element with a url', '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:style>path{fill:url(http://e/x)}</s:style></svg>', /style element/],
     ['an entity declaration', '<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg"/>', /entity/],
   ];
   for (const [label, text, reason] of cases) {

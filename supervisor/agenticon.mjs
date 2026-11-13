@@ -7,7 +7,9 @@ const PROLOGUE = /^(?:\s|<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>[]*>)*/i;
 const ON_ATTRIBUTE = /(?:^|[\s"'/])on[\w:-]*\s*=/i;
 const HREF = /(?:^|[\s"'/])(?:[\w-]+:)?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 const URL_CALL = /url\(\s*(["']?)\s*([^)]*)\)/gi;
-const STYLE_BLOCK = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+const STYLE_BLOCK = /<(?:[\w.-]+:)?style\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?style\s*>/gi;
+// The XML parser decodes a character reference before SVG or CSS reads the text, so one could spell href, url( or @import past every text test.
+const CHARACTER_REFERENCE = /&#/;
 
 const ANIMATION = new Set(['set', 'animate']);
 const ANIMATED_REFERENCE = /(?:^|[\s"'/])attributeName\s*=\s*["']?\s*(?:[\w-]+:)?(?:href|on[\w-]*)\b/i;
@@ -24,6 +26,7 @@ export function checkIcon(text) {
   if (typeof text !== 'string' || text.trim() === '') return { ok: false, reason: 'the file is empty' };
   if (Buffer.byteLength(text, 'utf8') > MAX_ICON_BYTES) return { ok: false, reason: `the file is larger than ${MAX_ICON_BYTES} bytes` };
   if (/<!ENTITY/i.test(text)) return { ok: false, reason: 'the file declares an entity' };
+  if (CHARACTER_REFERENCE.test(text)) return { ok: false, reason: 'the file has a character reference' };
   const rest = text.slice(text.match(PROLOGUE)[0].length);
   if (!/^<svg(?=[\s>/])/i.test(rest)) return { ok: false, reason: 'the root element is not svg' };
   const styles = [...text.matchAll(STYLE_BLOCK)];
