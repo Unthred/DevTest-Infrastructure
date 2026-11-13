@@ -34,6 +34,7 @@ import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
+import { chooseForSlot, holdUnchosen, chosenFields } from './slotchoice.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
@@ -910,9 +911,9 @@ export class Team {
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
-        const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
-        const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
-        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; if (role !== 'inbox') total++;
+        const { best, why, choice } = chooseForSlot(this, cands, { prs, usedBy, role, planned: actions });
+        if (!best) { holdUnchosen(this, cands, why); continue; }
+        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}), ...(choice ? { choice } : {}) }); used[role]++; if (role !== 'inbox') total++;
         { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
@@ -1018,7 +1019,7 @@ export class Team {
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
-    return workRank(act, this.ownerOut(agent), this.spareScore(agent));
+    return workRank(act, this.ownerOut(agent));
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
@@ -3424,7 +3425,7 @@ export class Team {
       catch (error) { if (unclaim) unclaim(); throw error; }
       await recordCreatedInboxJob({ inboxDir: this.inboxDir(), act, job, now: () => this.clock.now(), announce });
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
-      Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
+      Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]), chosenFields(act));   // issue #204: titles; #1166: why this agent
       this.save();
       await bump(); this.save();
       return `started the ${spec.kind} job ${job.id.slice(0, 8)} on ${spec.model || 'the default model'}`;
