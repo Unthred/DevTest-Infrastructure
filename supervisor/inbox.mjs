@@ -29,7 +29,7 @@ export const ACTIONS = {
   clear_latch: { target: 'latch', noun: 'upgrade', will: 'Clear the upgrade latch so the next tick may install merged work under the usual rules (issue #1160). Refused when no latch is set or an install is running. Nothing is merged or approved.' },
   extra_fix_round: { target: 'pr', noun: 'pull request', will:
     'Allow exactly one more fix job on the current head of this pull request, past the fix limit and the churn stop; the limits apply again after it (issue #1157). '
-    + 'Optional model: the configured worker to write it. Refused without a CHANGES verdict or red CI on the head, or while a fix job runs.' },
+    + 'Optional model: a model the branch author may write with (default: one different from the last fix round). Refused without a CHANGES verdict or red CI on the head, or while a fix job runs.' },
   close_superseded: { target: 'pr', noun: 'pull request or issue', will:
     'Close it with a comment naming the superseding items (superseded_by), after saving a pull request branch under saved/ (issue #1157). '
     + 'Refused when a superseding item does not exist.' },

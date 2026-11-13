@@ -52,7 +52,7 @@ import { scanInboxNow } from './wake.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
 import { dispatchApproved, depsOf, unparkedPulls } from './controlactions.mjs';
-import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, spendExtraFix } from './routineactions.mjs';
+import { ROUTINE_ACTIONS, applyRoutine, openExtraFix, spendExtraFix, withExtraModel } from './routineactions.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -495,7 +495,7 @@ export class Team {
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
     Object.assign(base, modelCapacity(mode, this.modes?.[act.agent]?.capacity));   // issue #1116
-    const first = resolveModel(base);
+    const first = withExtraModel(this, act, kind, resolveModel(base));   // issue #1157: a granted extra fix round may name a model
     let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
     // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.

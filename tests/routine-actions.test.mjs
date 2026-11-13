@@ -84,7 +84,7 @@ test('extra_fix_round refusals: no rejection, a fix job running, stale target, u
   await assert.rejects(apply(noVerdict, { action: 'extra_fix_round', target: '41', reason: 'x' }), /no CHANGES verdict or red CI/);
   assert.equal(noVerdict.team.s.extraFix?.[41], undefined, 'nothing recorded');
   await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '99', reason: 'x' }), /not open; nothing changed/);
-  await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', model: 'nobody', reason: 'x' }), /cannot write this fix.*D-011/);
+  await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', model: 'nobody', reason: 'x' }), /nobody is not a model claude may write with/);
   ok.team.s.jobs.aaaaaaaa = { kind: 'fix', pr: 38, agent: 'claude', at: 5 }; ok.jobs.states.aaaaaaaa = { id: 'aaaaaaaa', status: 'running' };
   await assert.rejects(apply(ok, { action: 'extra_fix_round', target: '38', reason: 'x' }), /fix job running/);
   assert.equal(ok.team.s.extraFix?.[38], undefined);
@@ -104,6 +104,43 @@ test('extra_fix_round: the branch author writes the round (D-011); another agent
   const named = churned(t);
   await apply(named, { action: 'extra_fix_round', target: '38', model: 'claude', reason: 'x' });
   assert.equal(named.team.s.extraFix[38].agent, 'claude');
+});
+// The writer's models: sonnet (the configured fix model), fable, haiku (a review model, never a writer) and opus (never a writer).
+const withModels = w => {
+  w.team.c.models = { agents: { claude: { fix: { model: 'sonnet' }, review: { model: 'haiku' } } } };
+  w.team.providerModels = { claude: { aliases: ['opus', 'sonnet', 'haiku', 'fable'], efforts: ['low'] } };
+  return w;
+};
+test('extra_fix_round: a model of the author agent; default differs from the last fix round; the job runs on it', async t => {
+  const w = withModels(churned(t));
+  w.team.s.jobs.cccccccc = { kind: 'fix', pr: 38, agent: 'claude', model: 'sonnet', at: 5 }; w.jobs.states.cccccccc = { id: 'cccccccc', status: 'completed' };
+  const text = await apply(w, { action: 'extra_fix_round', target: '38', reason: 'x' });
+  assert.equal(w.team.s.extraFix[38].model, 'fable', 'the last round ran on sonnet, so the default is another allowed model (not haiku or opus)');
+  assert.match(text, /on fable/);
+  const [act] = await fixActs(w);
+  await w.team.runAction(act, {});
+  assert.equal(w.calls.created.at(-1).model, 'fable');
+  const free = withModels(churned(t));
+  await apply(free, { action: 'extra_fix_round', target: '38', reason: 'x' });
+  assert.equal(free.team.s.extraFix[38].model, undefined, 'no earlier round on a model: the agent keeps its ordinary model');
+});
+test('extra_fix_round: a requested model must be an allowed writer model of the author', async t => {
+  const w = withModels(churned(t));
+  await assert.rejects(apply(w, { action: 'extra_fix_round', target: '38', model: 'haiku', reason: 'x' }), /may not write this fix on haiku/);
+  await assert.rejects(apply(w, { action: 'extra_fix_round', target: '38', model: 'opus', reason: 'x' }), /not a model claude may write with/);
+  assert.equal(w.team.s.extraFix?.[38], undefined);
+  await apply(w, { action: 'extra_fix_round', target: '38', model: 'fable', reason: 'x' });
+  assert.equal(w.team.s.extraFix[38].model, 'fable');
+});
+test('extra_fix_round: a fix job waiting_on counts as running, and a rebase leaves the grant unspent', async t => {
+  const w = churned(t);
+  w.team.s.jobs.dddddddd = { kind: 'fix', pr: 38, agent: 'claude', at: 5 }; w.jobs.states.dddddddd = { id: 'dddddddd', status: 'waiting_on' };
+  await assert.rejects(apply(w, { action: 'extra_fix_round', target: '38', reason: 'x' }), /fix job running/);
+  w.jobs.states.dddddddd.status = 'completed';
+  await apply(w, { action: 'extra_fix_round', target: '38', reason: 'x' });
+  await w.team.runAction({ type: 'rebase', pr: 38, head: H(3), base: 'main', branch: 'claude/issue-23-x', key: '38:r', agent: 'claude' }, {});
+  assert.equal(w.calls.created.at(-1).kind, 'rebase', 'the rebase job really started');
+  assert.equal(w.team.s.extraFix[38].spent, false, 'a rebase job never uses the grant');
 });
 test('extra_fix_round: a new head ends an unused grant', async t => {
   const w = churned(t);

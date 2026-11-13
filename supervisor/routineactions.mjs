@@ -3,6 +3,7 @@
 // who, when and why are in the item's status and in the unblock log. A refusal throws a SupervisorError and the item ends 'failed' with the
 // reason and nothing changed. The team module only calls the five entry points below.
 import { SupervisorError } from './core.mjs';
+import { isOpusModel } from './models.mjs';
 import { agentOfBranch } from './team.mjs';
 import * as breaker from './breaker.mjs';
 import { closeWrites } from './ghclose.mjs';
@@ -41,17 +42,49 @@ async function fixJobRunning(team, n) {
   }
   return live;
 }
-// D-011: each agent works only on its own branch in its own worktree, so the worker of a fix round is the branch's author. A requested worker is
-// accepted only when it is that author; another agent would have to write inside the author's worktree. The author may still be refused by the
-// writer rules (an Opus writer, or a model that would leave no independent reviewer).
+// D-011: each agent works only on its own branch in its own worktree, so the worker of a fix round is the branch's author, and the choice
+// the issue asks for is a model of that agent. Allowed models are the author's configured model names and its provider's aliases, never Opus,
+// and each is judged by the ordinary writer rules (review models, independence). A requested name that is another agent is refused (D-011).
+const modelsOfAgent = (team, agent) => {
+  const named = Object.values(team.c.models?.agents?.[agent] || {}).flatMap(e => (Array.isArray(e) ? e : [e]).map(x => x?.model));
+  const aliases = team.providerModels?.[team.c.agents[agent].provider]?.aliases || [];
+  return [...new Set([...aliases, ...named])].filter(m => typeof m === 'string' && m && !isOpusModel(m));
+};
+const actFor = (pr, agent, extraModel) => ({ agent, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key: `wb:${pr.number}`, ...(extraModel ? { extraModel } : {}) });
+const writerFields = (team, pr, agent, model) => team.modelFor(actFor(pr, agent, model), 'fix', {}, true);
+// The model of the PR's most recent fix or CI-fix job, or null when none is recorded.
+const lastFixModel = (team, n) => Object.values(team.s.jobs).filter(j => WRITING.has(j.kind) && j.pr === n).sort((x, y) => (y.at ?? 0) - (x.at ?? 0))[0]?.model ?? null;
 function chooseFixer(team, pr, requested) {
   const author = agentOfBranch(team.c, pr.headRefName);
-  if (requested && requested !== author) refuse(`${requested} cannot write this fix: PR #${pr.number} is ${author}'s branch and each agent works only in its own worktree (D-011)`);
+  if (requested && requested !== author && team.c.agents[requested]) refuse(`${requested} cannot write this fix: PR #${pr.number} is ${author}'s branch and each agent works only in its own worktree (D-011)`);
   if (!team.c.agents[author]) refuse(`${author} is not a configured worker`);
   if (team.limitedOf(author)?.out) refuse(`${author} is out of allowance`);
-  const refusal = team.modelFor({ agent: author, pr: pr.number, branch: pr.headRefName, head: pr.headRefOid, key: `wb:${pr.number}` }, 'fix', {}, true).writeRefusal;
-  if (refusal) refuse(`${author} may not write this fix: ${refusal}`);
-  return author;
+  const allowed = modelsOfAgent(team, author);
+  const usable = allowed.filter(m => !writerFields(team, pr, author, m).writeRefusal);
+  if (requested && requested !== author) {
+    if (!allowed.includes(requested)) refuse(`${requested} is not a model ${author} may write with${allowed.length ? ` (allowed: ${allowed.join(', ')})` : ''}`);
+    const why = writerFields(team, pr, author, requested).writeRefusal;
+    if (why) refuse(`${author} may not write this fix on ${requested}: ${why}`);
+    return { agent: author, model: requested };
+  }
+  const normal = writerFields(team, pr, author, null);
+  if (normal.writeRefusal && !usable.length) refuse(`${author} may not write this fix: ${normal.writeRefusal}`);
+  const last = lastFixModel(team, pr.number);
+  // Default: a different model from the last fix round, where the writer rules leave one; else the agent's ordinary model.
+  if (!normal.writeRefusal && normal.model !== last) return { agent: author, model: null };
+  const other = usable.find(m => m !== last);
+  if (other) return { agent: author, model: other };
+  if (normal.writeRefusal) refuse(`${author} may not write this fix: ${normal.writeRefusal}`);
+  return { agent: author, model: null };
+}
+// Called by modelFor: while a grant for this head names a model, the fix or CI-fix job runs on it (the writer rules still judge it).
+export function withExtraModel(team, act, kind, resolved) {
+  if (!WRITING.has(kind)) return resolved;
+  const model = act.extraModel ?? (act.pr != null ? grantOf(team, { number: act.pr, headRefOid: act.head })?.model : null);
+  if (!model) return resolved;
+  const fields = { ...resolved.fields, model, modelSource: 'extra_fix_round', modelReason: `extra fix round on ${model}` };
+  delete fields.modelWarning;
+  return { ...resolved, fields, entry: { ...resolved.entry, model } };
 }
 
 export async function extraFixRound(team, { target, model, reason }) {
@@ -64,11 +97,11 @@ export async function extraFixRound(team, { target, model, reason }) {
   if (running.length) refuse(`PR #${n} has a fix job running (${running.join(', ')})`);
   const prior = (team.s.extraFix ||= {})[n];
   if (prior?.head === pr.headRefOid) refuse(`PR #${n} already had its extra fix round at this head${prior.spent ? '' : ' and it has not started yet'}`);
-  const agent = chooseFixer(team, pr, model);
-  team.s.extraFix[n] = { head: pr.headRefOid, agent, spent: false, why: reason, at: team.clock.now() };
+  const { agent, model: chosen } = chooseFixer(team, pr, model);
+  team.s.extraFix[n] = { head: pr.headRefOid, agent, ...(chosen ? { model: chosen } : {}), spent: false, why: reason, at: team.clock.now() };
   team.save();
-  logOf(team, { target: n, what: `allowed one more fix round on ${agent}`, why: approvedWhy(reason), result: `granted at ${pr.headRefOid.slice(0, 7)}` });
-  return `PR #${n} may have one more fix job at ${pr.headRefOid.slice(0, 7)}, written by ${agent}; the fix limit and churn stop apply again after it`;
+  logOf(team, { target: n, what: `allowed one more fix round on ${agent}${chosen ? ` (${chosen})` : ''}`, why: approvedWhy(reason), result: `granted at ${pr.headRefOid.slice(0, 7)}` });
+  return `PR #${n} may have one more fix job at ${pr.headRefOid.slice(0, 7)}, written by ${agent}${chosen ? ` on ${chosen}` : ''}; the fix limit and churn stop apply again after it`;
 }
 
 // ---- close_superseded ------------------------------------------------------------------------------------------------------------------
