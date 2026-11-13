@@ -393,7 +393,7 @@ test('real process: a replay pass that did something enters the chain window, an
     await until(() => {
       const n = w.calls().length;
       if (n !== seen) { seen = n; since = Date.now(); }
-      return child.exitCode !== null || Date.now() - since >= 5000;
+      return child.exitCode !== null || Date.now() - since >= 10000;   // longer than any pause inside a loaded pass, or the job could end before the window opens
     }, 120000),
     'the pass went quiet'
   );
