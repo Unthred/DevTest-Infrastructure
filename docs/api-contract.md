@@ -24,10 +24,11 @@ Not wrapped: a schema file (`/api/v1/schemas/NAME`) is served as the plain schem
 | Request | Answer |
 | --- | --- |
 | `GET /api/v1/<model path>` | 200, the enveloped model |
-| `GET /api/v1/meta` | 200, the meta model: loaded models, the state vocabulary, commands and events (both empty for now) |
+| `GET /api/v1/meta` | 200, the meta model: loaded models, the state vocabulary, commands and events (taken from the optional `commands` and `events` exports of the route modules; empty when none export them) |
 | `GET /api/v1/schemas/NAME` | 200, a schema file, only if `NAME` is exactly a file name in `supervisor/api/schemas/` as listed at start; otherwise 404 |
 | any other path under `/api/v1/` | 404, error code `not_found` |
-| a method other than GET or HEAD | 405, error code `method_not_allowed` |
+| `GET`/`POST` of a route module path | the module's own reply (see Adding a route module) |
+| a method other than GET or HEAD, with no route module for it | 405, error code `method_not_allowed` |
 | a Host the dashboard does not serve | 421, error code `unexpected_host` |
 
 HEAD answers with the same headers and no body.
@@ -38,11 +39,23 @@ HEAD answers with the same headers and no body.
 
 ## Adding a model
 
-1. Add `supervisor/api/models/<name>.mjs` exporting `name`, `path` (the part after `/api/v1/`), `schema` (the file name of its schema) and a pure `build(view, context)` that returns the `data` object. The context holds `now` (ms), `coreVersion` and `models` (the loaded modules). Optionally export `usesView = false` when the model needs no dashboard view, so the router does not prepare one.
+1. Add `supervisor/api/models/<name>.mjs` exporting `name`, `path` (the part after `/api/v1/`), `schema` (the file name of its schema) and a pure `build(view, context)` that returns the `data` object. The context holds `now` (ms), `coreVersion`, `models` (the loaded modules), `routes` (the loaded route modules), `query`, `params` and `root` (the state root) and `config` (the current validated configuration). `build` may return a promise, and may return `notFound(text)` (exported by `supervisor/api/router.mjs`) to answer 404 with the code `not_found`. Optionally export `usesView = false` when the model needs no dashboard view, so the router does not prepare one.
 2. Add `supervisor/api/schemas/<name>.schema.json`, using `allOf` with `common.schema.json#/$defs/envelope` as `meta.schema.json` does.
 3. Add a test that fetches it through the dashboard handler and checks the reply with `supervisor/api/validate.mjs`.
 
-The router lists `models/` and `schemas/` when the dashboard handler is created, so no router file changes. A module without the four exports is skipped and logged.
+The router lists `models/`, `routes/` and `schemas/` when the dashboard handler is created, so no router file changes. A module without the four exports is skipped and logged.
+
+### Paths with a key and the query
+
+A model `path` may hold a segment in braces, for example `work-items/{key}`. A request matches when every fixed segment is equal; each braced segment is given in `context.params` under its name. A value may hold only letters, digits, dot, underscore and hyphen, at most 64 characters; any other value (a percent sign, a slash, 65 characters) answers 404 as JSON. `context.query` is a plain object of the request query parameters: at most 20 names (the first 20), each value a string cut at 200 characters.
+
+## Adding a route module
+
+A route module is for a reply the envelope does not fit (a stream, a command). Add `supervisor/api/routes/<name>.mjs` exporting `name`, `method` (`GET` or `POST`), `path` (as for models, braces allowed) and `handle(req, res, context)`. The router lists the folder at start; a module without that shape is skipped with one logged line. For a matching request the router calls `handle` and the module writes the whole reply (it does not get the envelope). A GET route also answers HEAD with the same status and headers and no body. POST under `/api/v1/` is accepted only for a route module that declares it; every other POST answers 405.
+
+Optional exports: `events` and `commands` (arrays of objects) fill the same lists of the meta model; `cursor(root)` returns the envelope cursor (the first loaded module that exports it wins; without one the cursor stays `e-0`).
+
+The context holds everything a model gets (`now`, `coreVersion`, `models`, `routes`, `query`, `params`, `root`, `config`) plus `headers` (the security headers), `reply(req, res, code, type, body, extra)`, `fail(req, res, code, errorCode, text, extra)` and `guard`. `guard` hands over the dashboard's write checks, so a route copies none of them: `originAllowed(req)`, `proofValid(value)`, `reserveCooldown(name, ms)` (returns `{ ok }` or `{ ok: false, retryAt }`), `releaseCooldown(name)`, `invalidateView()` (drop the prepared view so the next read is fresh) and `wake(reason)` (ask for a pass). A write route must call `originAllowed` and `proofValid` itself before it changes anything.
 
 ## Schema subset
 
@@ -50,4 +63,4 @@ The router lists `models/` and `schemas/` when the dashboard handler is created,
 
 ## Wiring
 
-`supervisor/dashserver.mjs` wraps its request handler with `withApi` (`supervisor/api/dashwire.mjs`). The router checks the Host and the method itself so that a POST to `/api/v1/` gets a JSON 405 and not the dashboard's plain-text one; every other path reaches the unchanged handler. For tests, `DEVTEST_API_DIR` names a folder holding `models/` and `schemas/` in place of the package's own.
+`supervisor/dashserver.mjs` wraps its request handler with `withApi` (`supervisor/api/dashwire.mjs`). The router checks the Host and the method itself so that a POST to `/api/v1/` that no route module declares gets a JSON 405 and not the dashboard's plain-text one; every other path reaches the unchanged handler. For tests, `DEVTEST_API_DIR` names a folder holding `models/`, `routes/` and `schemas/` in place of the package's own.

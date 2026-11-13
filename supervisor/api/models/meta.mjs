@@ -1,5 +1,5 @@
 // Issue #1248: the meta model, GET /api/v1/meta. It describes the contract itself: the loaded models, the shared state vocabulary,
-// and (empty until later items) the commands and events. It reads no job data, so the router does not prepare the view for it.
+// and the commands and events that loaded route modules export (empty when none do). It reads no job data, so no view is prepared.
 export const name = 'meta';
 export const path = 'meta';
 export const schema = 'meta.schema.json';
@@ -28,13 +28,15 @@ const STATES = [
   ['unknown', 'unknown', ['job', 'agent', 'issue', 'inbox_item', 'view']],
 ];
 
+const fromRoutes = (routes, key) => routes.flatMap(r => (Array.isArray(r[key]) ? r[key] : []));
+
 export function build(view, context) {
   return {
     contract: '1.0',
     core_version: context.coreVersion ?? null,
     models: context.models.map(({ name, path, schema }) => ({ name, path: `/api/v1/${path}`, schema })),
     states: STATES.map(([state, group, appliesTo]) => ({ state, group, applies_to: appliesTo })),
-    commands: [],
-    events: [],
+    commands: fromRoutes(context.routes ?? [], 'commands'),
+    events: fromRoutes(context.routes ?? [], 'events'),
   };
 }
