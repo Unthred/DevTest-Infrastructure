@@ -1,0 +1,152 @@
+{
+  "$id": "overview.schema.json",
+  "title": "The overview model: reply of GET /api/v1/overview (issue #1256)",
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "nullableRef": { "anyOf": [{ "$ref": "common.schema.json#/$defs/ref" }, { "type": "null" }] },
+    "plannedAction": {
+      "type": "object",
+      "required": ["type", "agent", "target", "condition", "held_by"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string" },
+        "agent": { "type": ["string", "null"] },
+        "target": { "$ref": "#/$defs/nullableRef" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "held_by": { "$ref": "#/$defs/nullableRef" }
+      }
+    },
+    "stall": {
+      "type": "object",
+      "required": ["agent", "idle_seconds", "condition", "planned", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "agent": { "type": "string" },
+        "idle_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "planned": { "$ref": "#/$defs/count" },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/plannedAction" } }
+      }
+    },
+    "list": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["model", "filter"],
+          "additionalProperties": false,
+          "properties": { "model": { "type": "string" }, "filter": { "type": "object" } }
+        }
+      ]
+    },
+    "attentionItem": {
+      "type": "object",
+      "required": ["id", "kind", "title", "condition", "target", "actions", "step_text", "count", "list"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "title": { "type": "string" },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "target": { "$ref": "#/$defs/nullableRef" },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } },
+        "step_text": { "type": ["string", "null"] },
+        "count": { "type": "integer", "minimum": 1 },
+        "list": { "$ref": "#/$defs/list" }
+      }
+    },
+    "fraction": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "overview" },
+        "data": {
+          "type": "object",
+          "required": ["verdict", "stalls", "needs_you", "faults", "slots", "planned", "pipeline", "headline", "waste", "host"],
+          "additionalProperties": false,
+          "properties": {
+            "verdict": { "$ref": "common.schema.json#/$defs/condition" },
+            "stalls": { "type": "array", "items": { "$ref": "#/$defs/stall" } },
+            "needs_you": { "type": "array", "items": { "$ref": "#/$defs/attentionItem" } },
+            "faults": { "type": "array", "items": { "$ref": "#/$defs/attentionItem" } },
+            "slots": {
+              "type": "object",
+              "required": ["max", "in_use", "by_role"],
+              "additionalProperties": false,
+              "properties": {
+                "max": { "$ref": "#/$defs/count" },
+                "in_use": { "$ref": "#/$defs/count" },
+                "by_role": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["role", "max", "in_use"],
+                    "additionalProperties": false,
+                    "properties": { "role": { "type": "string" }, "max": { "$ref": "#/$defs/count" }, "in_use": { "$ref": "#/$defs/count" } }
+                  }
+                }
+              }
+            },
+            "planned": { "type": "array", "items": { "$ref": "#/$defs/plannedAction" } },
+            "pipeline": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["stage", "count"],
+                "additionalProperties": false,
+                "properties": { "stage": { "type": "string" }, "count": { "$ref": "#/$defs/count" } }
+              }
+            },
+            "headline": {
+              "type": "object",
+              "required": ["window_seconds", "first_pass", "merges", "jobs_run"],
+              "additionalProperties": false,
+              "properties": {
+                "window_seconds": { "type": "integer", "minimum": 1 },
+                "first_pass": {
+                  "type": "object",
+                  "required": ["approved", "reviewed", "fraction"],
+                  "additionalProperties": false,
+                  "properties": { "approved": { "$ref": "#/$defs/count" }, "reviewed": { "$ref": "#/$defs/count" }, "fraction": { "$ref": "#/$defs/fraction" } }
+                },
+                "merges": { "$ref": "#/$defs/count" },
+                "jobs_run": { "$ref": "#/$defs/count" }
+              }
+            },
+            "waste": {
+              "type": "object",
+              "required": ["window_seconds", "jobs", "tokens", "top_cause"],
+              "additionalProperties": false,
+              "properties": {
+                "window_seconds": { "type": "integer", "minimum": 1 },
+                "jobs": { "$ref": "#/$defs/count" },
+                "tokens": { "$ref": "#/$defs/count" },
+                "top_cause": {
+                  "anyOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "required": ["code", "text", "fraction", "tokens", "changes"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "text": { "type": "string" },
+                        "fraction": { "$ref": "#/$defs/fraction" },
+                        "tokens": { "$ref": "#/$defs/count" },
+                        "changes": { "$ref": "#/$defs/count" }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "host": { "$ref": "common.schema.json#/$defs/condition" }
+          }
+        }
+      }
+    }
+  ]
+}

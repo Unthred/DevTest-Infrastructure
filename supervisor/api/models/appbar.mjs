@@ -40,10 +40,10 @@ function readingOf(reading, now) {
   return { read_at: iso(readAt), age_seconds: age, stale: age === null || (max !== null && age > max), max_age_seconds: max };
 }
 
-const heldOf = view => (Array.isArray(view.planned) ? view.planned : []).filter(p => p?.outcome === 'held');
+export const heldOf = view => (Array.isArray(view.planned) ? view.planned : []).filter(p => p?.outcome === 'held');
 const holdCode = held => (held.some(h => h.kind === 'unexplained') ? 'unrecorded' : String(held[0]?.kind ?? 'unrecorded'));
 
-function agentCondition(a, held) {
+export function agentCondition(a, held) {
   const state = AGENT_STATES.includes(a.state) ? a.state : 'unknown';
   const text = a.idleReason?.text ?? null;
   if (state === 'idle' && held.length) return condition('idle', 'fault', holdCode(held), text);
