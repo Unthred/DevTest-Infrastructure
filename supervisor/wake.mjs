@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
+import { append as appendChange } from './api/eventlog.mjs';
 
 export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve'];
 export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve'];
@@ -202,10 +203,24 @@ export function wakeView(root, now = Date.now(), cap = WAKE_MAX_PER_HOUR) {
 // Issue #985: a new proposal is validated (waiting -> pending) at once, by whoever sees it first, even while a pass runs: the scan only
 // writes inbox status files, never Foreman's team state. A small lock keeps two scanners (the dashboard's watcher and the pass) from
 // writing the same status; a scanner that finds it held does nothing, because the holder is already scanning the same folder.
-export function scanInboxNow({ root, inboxDir, scan, maxPending, now = Date.now() }) {
+export function scanInboxNow({ root, inboxDir, scan, maxPending, now = Date.now(), log = line => console.error(line) }) {
   let release; try { release = dirLock(root, 'inbox-scan.lock', now); } catch { release = null; }
   if (!release) return { scanned: false };
-  try { return { scanned: true, ...scan(inboxDir, now, { maxPending }) }; } finally { release(); }
+  try {
+    const result = scan(inboxDir, now, { maxPending });
+    announcePickup(root, result.picked, log);
+    return { scanned: true, ...result };
+  } finally { release(); }
+}
+
+// Issue #1286: the models that show Inbox items. A pickup (a refused item too, it is in the Inbox model) is announced on the change stream
+// at once, one event per scan pass, so a screen does not wait for the next tick. A failure to append is logged once; the tick's own event is the fallback.
+export const INBOX_MODELS = ['inbox', 'overview', 'appbar'];
+function announcePickup(root, picked, log) {
+  if (!(picked > 0)) return;
+  try { appendChange(root, { type: 'model_changed', models: INBOX_MODELS }); } catch (error) {
+    try { log(`ai-supervisor: inbox pickup not announced on the change stream: ${error?.message || error}`); } catch { /* logging is best effort */ }
+  }
 }
 
 // Issue #1115: true when the scan ran and nothing in it needs a pass. A control item has no click to wake one, so it asks for the pass itself.
