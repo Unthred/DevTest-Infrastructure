@@ -3,6 +3,7 @@
 // The rule (stallRows) is pure; withStall decorates the finished view with `view.stall` and the stalled marks the page reads.
 // No agent names are in here: agents come from the configuration.
 import { redact } from './redact.mjs';
+import { STALE_TICK_MS } from './dashdata.mjs';
 
 export const STALL_MINUTES_DEFAULT = 15;
 export const NO_REASON = 'No reason recorded';
@@ -46,7 +47,8 @@ export function stallRows({ view, jobs = [], providerOf = {}, snapshots = [], li
   const agents = [], waiting = [];
   const busy = new Set((view.agents || []).filter(a => a.state === 'running').map(a => a.name));
   for (const a of view.agents || []) {
-    if (a.state !== 'idle') continue;
+    // 'blocked' means the last job ended failed or blocked: nothing runs and the tick keeps planning for the agent, so it counts as idle here.
+    if (a.state !== 'idle' && a.state !== 'blocked') continue;
     const mine = planned.filter(p => p.agent === a.name);
     const theirs = mine.filter(p => HOMEOWNER_KINDS.has(p.kind) || homeownerLabelled(view, p.type, p.ref));
     for (const p of theirs) waiting.push({ agent: a.name, ...actionRow(view, p) });
@@ -71,12 +73,19 @@ export function stallRows({ view, jobs = [], providerOf = {}, snapshots = [], li
 // The pill: a stall with nothing else open makes the pill itself say so; with other items it keeps its count and carries the marker.
 export function healthWithStall(health, stall) {
   if (!stall.stalled) return health;
-  if (health.state === 'needs_you') return { ...health, stalled: true };
+  // Stuck and Unknown name a more specific cause than the stall, so they stay and only gain the marker.
+  if (['needs_you', 'stuck', 'unknown'].includes(health.state)) return { ...health, stalled: true };
   return { state: 'needs_you', label: 'Stalled', count: 0, severity: 'action', stalled: true };
 }
 
+// A team loop switched off by the homeowner, or a tick that stopped, leaves the last ledger in the cache: that is not a stall (requirement 4),
+// and the Stuck pill already names the stopped tick.
+const loopRunning = (view, config, now) => config.enabled !== false && Number.isFinite(view.tick?.at) && now - view.tick.at <= STALE_TICK_MS;
 // Decorates the finished view. `jobs` are the raw job records, `snapshots` the hot tick history.
 export function withStall(view, { config, jobs, snapshots, now }) {
+  if (!loopRunning(view, config, now)) {
+    return { ...view, stall: { limitMinutes: stallLimitMs(config.limits) / MIN, agents: [], jobs: [], waiting: [], stalled: false } };
+  }
   const providerOf = Object.fromEntries(Object.entries(config.agents || {}).map(([n, a]) => [n, a.provider]));
   const stall = stallRows({ view, jobs, providerOf, snapshots, limitMs: stallLimitMs(config.limits), now });
   const stalledNames = new Set(stall.agents.map(a => a.agent));

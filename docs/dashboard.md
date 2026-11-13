@@ -79,6 +79,7 @@ Each queued issue and open PR shows `est. HH:MM–HH:MM` (p50–p90) on the Next
   - **Paused jobs:** a `paused_limit` job whose resume time (`nextAttemptAt`, else `resetAt`) is more than the same limit in the past is listed with the message its resume check last recorded ("No error recorded" when none). A manual pause has no resume time and is not listed.
   - **Waiting for you:** held actions that wait on the homeowner (a retry cap, or an item labelled `needs-homeowner`) are listed apart in the card and are not a stall. They stay in Needs you.
   - **Marks:** each stalled agent (idle with stalled work, or holding a stuck paused job) gets a Stalled mark in the app bar beside its item, and the pill marker links to the card (`/#c-stalled`). With nothing else open the pill itself reads Stalled.
+  - **Not a stall:** an agent whose last job failed or blocked (state blocked, nothing running) counts as idle for the rule. While the team loop is switched off or the tick is stale nothing is raised as a stall; the pill keeps its Stuck or Unknown label and only gains the marker.
   - **Gone when:** every planned action started, or the agent has work running. Times follow the dashboard time zone. Tests: `tests/stall-view.test.mjs` (rule, real view and page render); on Tower `node tests/stall-browser.mjs <dir>` runs the real Overview page in Chromium at 1280 and 390 wide.
 
 ## Needs you panel (issue #141)

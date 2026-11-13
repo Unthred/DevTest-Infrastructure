@@ -140,10 +140,42 @@ test('every planned action started: nothing is stalled', async () => {
 });
 
 test('withStall adds no agent names of its own and escapes what it shows', () => {
-  const v = withStall({ ...mkView(60, [held('fix', 7, { reason: '<img src=x onerror=alert(1)>' })]), health: { state: 'idle', label: 'Idle', severity: 'ok' }, panels: { needsYou: [] } },
+  const base = mkView(60, [held('fix', 7, { reason: '<img src=x onerror=alert(1)>' })]);
+  const v = withStall({ ...base, tick: { at: NOW - MIN }, health: { state: 'idle', label: 'Idle', severity: 'ok' }, panels: { needsYou: [] } },
     { config: { agents: { a1: { provider: 'p1' } }, limits: {} }, jobs: [], snapshots: [], now: NOW });
   assert.equal(v.agents[0].stalled, true);
   const html = stallBody({ esc, lt, dur }, v.stall);
   assert.equal(html.includes('<img src=x'), false);
   assert.ok(html.includes('&lt;img'));
+});
+
+test('an agent whose last job failed (state blocked) with planned work still counts as idle and is listed', async () => {
+  const failed = jobRecord('d'.repeat(32), 'claude', { status: 'failed', createdAt: NOW - 2 * 3600000, updatedAt: NOW - 3600000 });
+  await withRoot([failed], async root => {
+    const v = await currentView({ root, config: config(root), now: NOW, tz: 'UTC' });
+    assert.equal(v.agents.find(a => a.name === 'claude').state, 'blocked');
+    assert.deepEqual(v.stall.agents.map(a => a.agent), ['claude']);
+    assert.ok(page(v).includes('data-stall-mark="claude"'));
+  });
+  assert.equal(rows(mkView(60, [held('fix', 7)], { agents: [{ name: 'a1', state: 'blocked', lastActivityAt: NOW - 60 * MIN }] })).stalled, true);
+});
+
+test('a stopped tick keeps the Stuck pill and a switched-off team loop shows no stall', async () => {
+  await withRoot([], async root => {
+    const cacheFile = path.join(root, 'dashboard', 'cache.json');
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    cache.tick = { at: NOW - 3 * 3600000, status: 'ok', lastOkAt: NOW - 3 * 3600000 };
+    fs.writeFileSync(cacheFile, JSON.stringify(cache));
+    const stale = await currentView({ root, config: config(root), now: NOW, tz: 'UTC' });
+    assert.equal(stale.stall.stalled, false);
+    assert.equal(stale.health.label, 'Stuck');
+    assert.equal(page(stale).includes('id="c-stalled"'), false);
+    cache.tick = { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 };
+    fs.writeFileSync(cacheFile, JSON.stringify(cache));
+    const off = await currentView({ root, config: { ...config(root), enabled: false }, now: NOW, tz: 'UTC' });
+    assert.equal(off.stall.stalled, false);
+    assert.notEqual(off.health.label, 'Stalled');
+    assert.equal(page(off).includes('data-stall-mark'), false);
+  });
+  assert.deepEqual(healthWithStall({ state: 'stuck', label: 'Stuck' }, { stalled: true }), { state: 'stuck', label: 'Stuck', stalled: true });
 });
