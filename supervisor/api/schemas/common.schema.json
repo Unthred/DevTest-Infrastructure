@@ -1,0 +1,73 @@
+{
+  "$id": "common.schema.json",
+  "title": "Shared definitions of the Foreman read contract (issue #1248)",
+  "$defs": {
+    "timestamp": { "type": "string", "format": "date-time" },
+    "condition": {
+      "type": "object",
+      "required": ["state", "attention", "reason_code", "reason_text", "since"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string" },
+        "attention": { "enum": ["none", "homeowner", "fault", "unknown"] },
+        "reason_code": { "type": ["string", "null"] },
+        "reason_text": { "type": ["string", "null"] },
+        "since": { "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "required": ["kind", "key", "label", "title", "source", "project", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "title": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"] },
+        "project": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["command", "input", "enabled", "tier", "reversible", "refusal_code", "refusal_text"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "input": { "type": ["object", "null"] },
+        "enabled": { "type": "boolean" },
+        "tier": { "enum": ["direct", "approval", "person_only"] },
+        "reversible": { "type": ["boolean", "null"] },
+        "refusal_code": { "type": ["string", "null"] },
+        "refusal_text": { "type": ["string", "null"] }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "required": ["state", "tick_at", "age_seconds", "stale_after_seconds", "reason_code", "reason_text"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["fresh", "stale", "unknown"] },
+        "tick_at": { "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
+        "age_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "stale_after_seconds": { "type": "integer", "minimum": 0 },
+        "reason_code": { "type": "string" },
+        "reason_text": { "type": "string" }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": ["contract", "model", "generated_at", "freshness", "cursor", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "const": "1.0" },
+        "model": { "type": "string" },
+        "generated_at": { "$ref": "#/$defs/timestamp" },
+        "freshness": { "$ref": "#/$defs/freshness" },
+        "cursor": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}
