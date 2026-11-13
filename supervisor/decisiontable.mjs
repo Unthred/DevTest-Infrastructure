@@ -79,6 +79,7 @@ const T = {
   'assignment-fault': { clears: 'clears when each open issue has an implementer or a stated reason', actions: [] },
   agentfault: { clears: 'clears when Foreman\'s own check of the agent passes', actions: [] },
   dependency: { clears: 'clears when the Depends on line is fixed', actions: [] },
+  resets: { clears: 'clears when you mark the reset used on the Limit resets card, or the advice no longer says to use it', actions: [], later: NO_BUTTON },
   'board-paused': { clears: 'clears when the GitHub rate limit ends', actions: [] },
 };
 

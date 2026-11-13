@@ -32,6 +32,7 @@ import { attentionOverseer, cardOverseer, jobOverseer, supervisorHealth, verdict
 import { stageOf, readVerification } from './livechecks.mjs';
 import { MODE_LABEL, budgetSettings, DEFAULT_BUDGET } from './budget.mjs';
 import { assignmentFaults, budgetThresholds, budgetView, usageReading } from './budgetview.mjs';
+import { resetAdviceFor } from './resetsbuild.mjs';
 import { hasProbe } from './probe.mjs';
 import { annotateQueues, nextWhyFields } from './holdreason.mjs';
 import { hostPressureView } from './hostpressure.mjs';
@@ -750,11 +751,13 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     const breakerView = breakerHaltView(breakerState, breakerRunning);
     if (breakerState.error) attention.unshift({ id: 'breaker-error', text: redact(`The circuit breaker failed: ${breakerState.error.message}. Existing halts stay in force and no new halt is being evaluated.`, 300), ref: null, severity: 'action', action: 'Read the tick report and fix the cause; the breaker retries every tick.' });
     if (breakerView) attention.unshift({ id: 'breaker-halt', text: redact(`${breakerView.text} ${breakerView.running_text}`, 700), ref: breakerView.prs[0] ?? null, severity: 'action', action: breakerView.action });
+    const budget = budgetView(team);
+    const resetAdvice = resetAdviceFor({ root, config, budget, jobs, allowance, now });   // issue #1162
+    attention.push(...resetAdvice.attention);
     const extra = dashExtras({ root, config, cache: c, jobs, state, states, plan, queues, attention, now, ver, sup, names, excluded, pauseText, inbox, inboxSearch });
     // Issue #156: estimated finish per queued issue / open PR, from the job history; the upgrade rate limit is a known wait.
     let upgrade = null; try { upgrade = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')); } catch { /* none */ }
     if (attention.some(a => a.id === 'upgrade-latched')) upgrade = { ...(upgrade || {}), latch: true };
-    const budget = budgetView(team);
     const estimates = estimateQueue({ queues, pulls: c.pulls || [], jobs, state, budget, config, now, tz, upgrade });
     return {
       ...assignmentFields(extra, team.assignments, names),   // issue #1121: extra plus assignments, faults and the issue rows' explanation
@@ -768,7 +771,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
       agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
-      budget, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
+      budget, resetAdvice: resetAdvice.byId, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
       breaker: { halt: breakerView, byCause: breakerByCause(breakerState), error: breakerState.error?.message ?? null, costLabel: BREAKER_COST_LABEL, failCauses: failCausesOf(state.failCauses, { now }) },

@@ -14,6 +14,7 @@ import { hasReading } from './allowance.mjs';
 import { MIN_UPGRADE_INTERVAL_MS } from './upgrade.mjs';
 import { readMcpInstall } from './mcpinstall.mjs';
 import { HOT_WINDOW_MS, archiveSnapshots, recordTimeline } from './history.mjs';
+import { limitResetStep } from './resetstep.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
 
@@ -258,6 +259,8 @@ export function recordTick(root, { now, status, error = null, team = null, jobs,
     ...passTiming, ...(noop === true ? { noop: true } : {}), ...(Number.isSafeInteger(ghCalls) ? { ghCalls } : {}), ...(Number.isFinite(ghMs) ? { ghMs: Math.round(ghMs) } : {}),
     ...(check && typeof check.result === 'string' ? { check: { result: check.result.slice(0, 20), reason: redact(String(check.reason || ''), 160), probes: Number.isSafeInteger(check.probes) ? check.probes : 0, served: Number.isSafeInteger(check.served) ? check.served : 0 } } : {}),
     redCi: team.view.prs.filter(p => rollup(p, team, now) === 'red').map(p => p.number) };
+  // Issue #1162: open and close the Needs you items for limit resets, from the same modes the plan just used.
+  try { limitResetStep(team); } catch (error) { console.error(`ai-supervisor: limit reset step failed: ${error?.name || 'Error'}`); }
   // Issue #362: keep a compact, allowlisted timeline of everything the live records hold now, before any of it can expire.
   try { recordTimeline(root, { config: team.c, jobs, events: readEvents(root, jobs.map(j => j.id)), state: readTeamState(root), incidents: readIncidents(root) }); } catch (error) { console.error(`ai-supervisor: timeline record failed: ${error?.name || 'Error'}`); }
   appendSnapshot(root, snap, now);

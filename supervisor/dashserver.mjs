@@ -314,7 +314,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
   return withApi({ root, headers: HEADERS, allowedHost, now, cachedView, source, store, originAllowed, wake }, async (req, res) => {
     const send = (code, type, body, extra = {}) => { res.writeHead(code, { ...HEADERS, 'content-type': type, ...extra }); res.end(req.method === 'HEAD' ? undefined : body); };
     const [reqPath] = (req.url || '/').split('?');
-    const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store });
+    const limitResets = limitResetsRoute({ root, source, allowedHost, originAllowed, now, store, probe, registry, wake });
     const writes = { '/mark-read': markRead, '/watch': watch, '/inbox': inbox, '/decision': decision, '/breaker-resume': breakerResume, '/limit-resets': limitResets, '/step-done': stepDone };
     if (req.method === 'POST' && Object.hasOwn(writes, reqPath)) return writes[reqPath](req, res, send);
     // Issue #110: "Refresh allowance" runs one minimal probe for a configured agent and stores its record. Same-origin post only; it changes no mode or job.

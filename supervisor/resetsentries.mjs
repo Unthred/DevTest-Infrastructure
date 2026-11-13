@@ -48,5 +48,6 @@ export function withLimitResets(view, { root, config, snapshots, now }) {
   if (!view || !view.budget) return view;
   const agents = Object.keys(config?.agents || {});
   view.limitResets = resetsView({ resets: readResets(root), config, budget: view.budget, applied: appliedByAgent(snapshots, agents), agents, now });
+  for (const a of Object.values(view.limitResets.byAgent)) for (const row of a.resets) row.advice = view.resetAdvice?.[row.id] ?? null;   // issue #1162
   return view;
 }

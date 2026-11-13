@@ -13,6 +13,7 @@ import { redact } from './redact.mjs';
 import { highWaterHold, reserveRefusal } from './capacityrule.mjs';
 import { isWeekly } from './capacity.mjs';
 import { restoredIn, sinceLastReset } from './resetdetect.mjs';
+import { validateResetsConfig } from './resetsettings.mjs';
 import { DEFAULT_READING_MAX_AGE_MINUTES, readingInfo } from './readingfresh.mjs';
 
 export const HOUR = 3600000;
@@ -26,7 +27,7 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
-const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin'];   // issue #1116
+const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin', 'resets'];   // issue #1116; resets: issue #1162
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 KEYS.push('reading_max_age_minutes');   // issue #1163
 
@@ -41,6 +42,7 @@ export function validateBudgetConfig(b, agentNames) {
   num('probe_age_hours', 0.25, 48); num('probe_interval_minutes', 5, 1440);
   num('reading_max_age_minutes', 5, 1440);
   validateCapacityKeys(b, agentNames);
+  validateResetsConfig(b.resets);
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
     throw new SupervisorError('invalid budget config: can_take_over must list configured agents');

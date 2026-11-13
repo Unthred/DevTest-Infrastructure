@@ -20,7 +20,7 @@ export const ALLOWANCE_DEFAULTS = { reserve_margin: 0.05, capacity_windows: 4, m
 const RESET_TOLERANCE_MS = 10 * 60000;
 const RECENT_JOBS_PER_KIND = 10;
 
-const tokensOf = job => (job?.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : 0);
+export const tokensOf = job => (job?.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : 0);
 const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= RESET_TOLERANCE_MS;
 const median = values => {
   if (!values.length) return null;

@@ -590,3 +590,11 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 @media(max-width:640px){.iv-crow>.iv-acts{flex:1 1 100%;margin:0 0 var(--sp2);padding-left:1.8em}.iv-crow .iv-acts .inbox-form{flex:1 1 0}}
 /* A proposal's text keeps its line breaks but wraps long lines, so a long proposal never widens the page on a phone (issue #1262, requirement 6). */
 .inbox-text{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Limit resets card (issues #1159, #1162): the figures sit in one wrapping row. */
+.reset-advice { margin: 6px 0; overflow-wrap: anywhere; max-width: 100%; }
+dl.reset-figures { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0; }
+dl.reset-figures dt { font-size: 12px; opacity: .75; }
+dl.reset-figures dd { margin: 0 8px 0 4px; }
+dl.reset-figures > * { display: inline; }
+li[data-reset] details form { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
