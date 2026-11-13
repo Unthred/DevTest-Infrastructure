@@ -4,6 +4,7 @@ import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
 import { headlineStats } from './headline.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
+import { jobTableFields } from './jobs-fields.mjs';
 import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as breakerByCause, COST_LABEL as BREAKER_COST_LABEL } from './breaker.mjs';
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
@@ -54,7 +55,6 @@ export const windowLabel = (w, provider) => {
   if (w.windowMinutes === 10080) return 'weekly';
   return String(w.type || provider).replace(/_/g, ' ');
 };
-
 const DEAD = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 const fullWindow = (w, exhaustedAt = EXHAUSTED) => (Number.isFinite(w.utilization) && w.utilization >= exhaustedAt) || DEAD.includes(w.status);
 const utcTime = ms => new Date(ms).toISOString().slice(11, 16) + ' UTC';
@@ -890,8 +890,8 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
     id: shortJob(j.id), fullId: j.id, hasTranscript: transcriptExists(root, j.id), desc: describeFor(j, { names, state }), name: redact(names.job(j).text, 300), full: redact(names.job(j).full, 400), agent: agentOf(j), kind: j.kind || 'job', ref: j.issue ?? null, head: state.jobs?.[j.id]?.head ?? j.head ?? null, status: j.status, attempts: j.attempts || 0,
     startedAt: j.createdAt, elapsedMs: (j.status === 'running' ? now : (j.updatedAt || j.createdAt)) - j.createdAt, tokens: tokensOf(j), inTokens: j.usage ? j.usage.inputTokens : null, outTokens: j.usage ? j.usage.outputTokens : null,
     cost: Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : null, model: j.model || null, effort: j.effort || null, modelReason: redact(j.modelReason || '', 200), reassignedFrom: state.jobs?.[j.id]?.reassignedFrom || null, reassignReason: redact(state.jobs?.[j.id]?.reassignReason || '', 300), branch: redact(j.branch || '', 100), overseer: jobOverseer(j, { ticks: sup.ticks, state, cache, now }) });
-  const jobRows = sortedJobs.slice(0, 300).map(rowOf); // Issue #182.
-  const olderJobs = sortedJobs.slice(300, 2300).map(rowOf);
+  const jobRows = sortedJobs.slice(0, 300).map(j => ({ ...rowOf(j), ...jobTableFields(j, state) })); // Issue #182.
+  const olderJobs = sortedJobs.slice(300, 2300).map(j => ({ ...rowOf(j), ...jobTableFields(j, state) }));
   const jobById = new Map(jobs.map(j => [j.id, j]));
   const verdictRows = Object.entries(state.verdicts || {}).map(([key, v]) => { const [pr, head] = key.split(':'); return { carry: v.carry && v.carriedFrom ? v.carry : null, pr: Number(pr), head: sha7(head), fullHead: /^[0-9a-f]{40}$/.test(head || '') ? head : null, reviewer: v.reviewer || null, model: modelOf(jobById.get(v.job)), verdict: v.verdict || null, at: v.at ?? null,
     findings: (Array.isArray(v.findings) ? v.findings : []).slice(0, 20).map(findingText), followUpIssue: v.followUpIssue ?? null }; }).filter(v => Number.isSafeInteger(v.pr)).sort((a, b) => (b.at || 0) - (a.at || 0));
