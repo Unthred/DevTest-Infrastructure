@@ -68,6 +68,12 @@ const waitsForOf = (dir, s, item) => {
   const labels = s.waitsFor ?? (item?.after && ['pending', 'approved'].includes(s.state) ? afterLabels(dir, item.after) : null);
   return labels ? { waitsFor: labels } : {};
 };
+// Issue #1314: `stored` lists which optional fields were kept, so a dropped one is visible in the reply.
+function submittedReply(dir, id, item, link) {
+  const stored = OPTIONAL.filter(k => item[k] !== undefined);
+  const waitsFor = item.after ? { waitsFor: afterLabels(dir, item.after) } : {};
+  return { id, shortId: id.slice(0, 8), link, state: 'submitted', stored, ...waitsFor, note: SUBMITTED_NOTE };
+}
 export function createInbox({ dir, baseUrl = null }) {
   // Issue #977: the dashboard link for an item, so the overseer can pass it on. Absent when no dashboard address is configured.
   const linkFor = id => { try { return baseUrl ? new URL(`/inbox/${id}`, baseUrl).href : null; } catch { return null; } };
@@ -96,10 +102,7 @@ export function createInbox({ dir, baseUrl = null }) {
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
       fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
-      // Issue #1314: which optional fields were stored, so a dropped one is visible in this reply.
-      const stored = OPTIONAL.filter(k => c.item[k] !== undefined);
-      const waitsFor = c.item.after ? { waitsFor: afterLabels(dir, c.item.after) } : {};
-      return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'submitted', stored, ...waitsFor, note: SUBMITTED_NOTE };
+      return submittedReply(dir, id, c.item, linkFor(id));
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
