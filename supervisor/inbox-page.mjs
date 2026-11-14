@@ -15,9 +15,9 @@ export function inboxCard(card, query, { esc, tag, form }) {
   const why = card.why ? `<div class="sub">Why: ${highlighted(card.why, query, esc)}</div>` : '';
   const body = highlighted(card.text || '', query, esc);
   const { approve, reject } = decisionForms(card, form);
-  const tagHtml = card.decision ? '' : tag(card.id, card.kind);
+  const tagHtml = card.decision === true ? '' : tag(card.id, card.kind);
   const will = card.will ? `<div class="sub">${esc(card.will)}</div>` : '';
-  const options = card.decision && card.body ? `<div class="sub">Decision: ${highlighted(card.body, query, esc)}</div>` : '';
+  const options = card.decision === true && card.body ? `<div class="sub">Decision: ${highlighted(card.body, query, esc)}</div>` : '';
   return `<li class="inbox-item" id="att-inbox-${esc(card.id)}" data-inbox="${esc(card.id)}">
 <h3 class="inbox-title t">${title}</h3><div class="sub">${esc(card.kind || 'unknown')} · ${esc(card.state || 'unknown')} ${tagHtml}</div>${why}${will}
 <pre class="inbox-text">${body}</pre>${options}<div class="sub">${card.hash ? `Content hash ${esc(card.hash)}` : ''}</div>

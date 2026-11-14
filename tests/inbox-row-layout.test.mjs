@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { handler } from '../supervisor/dashserver.mjs';
+import { inboxCard } from '../supervisor/inbox-page.mjs';
 import { inboxViews, tableRow, compactRow } from '../supervisor/inbox-views.mjs';
 import { decidedOf, rowOf } from '../supervisor/dashui/inbox-views.mjs';
 import { withDecisionCards } from '../supervisor/decisioncards.mjs';
@@ -97,4 +98,11 @@ test('the real /inbox page: the Ciwatch draft keeps its whole title, the decided
   assert.equal((decided.match(/<form /g) || []).length, 0);
   assert.equal((ciwatch.match(/<form /g) || []).length, 2, 'an undecided row still has its controls');
   assert.doesNotMatch(body, /data-col="result" data-empty/);
+});
+test('a decided inbox item keeps its tag in the Cards view; only a decision card goes without one', () => {
+  const tag = id => `<span class="inbox-tag">${id}</span>`;
+  const form = () => '';
+  const decidedItem = inboxCard({ id: 'a'.repeat(32), kind: 'prompt', state: 'approved', title: 't', decision: 'approve', decidedAt: NOW }, '', { esc, tag, form });
+  assert.match(decidedItem, /class="inbox-tag"/);
+  assert.doesNotMatch(inboxCard({ id: 'split-1175', kind: 'decision', state: 'pending', title: 't', decision: true }, '', { esc, tag, form }), /inbox-tag/);
 });
