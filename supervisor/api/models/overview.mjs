@@ -61,7 +61,9 @@ function stallsOf(view, now) {
   return stalls;
 }
 
-function targetOf(view, item) {
+// `fromTable` is the target the attention table names for an item whose own record has no reference (a homeowner step of a merged PR).
+function targetOf(view, item, fromTable) {
+  if (!item.ref && Number.isSafeInteger(fromTable?.n) && fromTable.kind === 'pull') return refOf(view, 'change', fromTable.n);
   const n = item.ref?.n;
   if (Number.isSafeInteger(n) && item.ref.kind === 'pull') return refOf(view, 'change', n);
   if (Number.isSafeInteger(n) && item.ref.kind === 'issue') return refOf(view, 'issue', n);
@@ -78,7 +80,7 @@ export function attentionItem(view, item, c) {
     condition: dead
       ? condition('fault', 'fault', 'dead_end', 'The item waits for the homeowner but offers no control, no step and no list.', iso(item.since))
       : condition(state, c.attention, c.reason_code, String(item.text ?? ''), iso(item.since)),
-    target: targetOf(view, item),
+    target: targetOf(view, item, c.target),
     actions: c.actions,
     step_text: c.step_text,
     count: LISTS[item.id] ? Math.max(1, list(view.panels?.inbox).length) : 1,

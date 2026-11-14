@@ -234,3 +234,31 @@ test('the card of upgrade-blocked has a Retry install now form that sends upgrad
   assert.match(html, />Retry install now<\/button>/);
   assert.doesNotMatch(decisionHtml({ id: 'upgrade-refused', card: decisionCard({ id: 'upgrade-refused', text: 'x' }) }), /retry-install-form/);
 });
+
+// Issue #1377: the pending steps module writes homeowner-step-<pr>-<step>; the table must class it as a step that waits for the homeowner.
+const STEP_TEXT = 'homeowner step 1 of 2 of PR #1124 is waiting for you (unlocks: x): On a host that is latched now, run clear-latch once';
+test('real data: homeowner-step-1124-1 is a homeowner_step that waits for the homeowner, with its step text, pull request 1124 and Mark done not built', () => {
+  const c = classify({ id: 'homeowner-step-1124-1', text: STEP_TEXT }, ALL);
+  assert.deepEqual([c.kind, c.attention, c.reason_code, c.step_text], ['homeowner_step', 'homeowner', 'homeowner_step_waiting', STEP_TEXT]);
+  assert.deepEqual(c.target, { kind: 'pull', n: 1124 });
+  const mark = c.actions.map(a => [a.command, a.input, a.enabled, a.refusal_code]);
+  assert.deepEqual(mark, [['homeowner_step.mark_done', { pull: 1124, step: 1 }, false, 'not_built']]);
+  assert.deepEqual(findDeadEnds([c]), []);
+});
+
+test('boundary: a two digit step number and a five digit pull request number are classed the same way', () => {
+  const c = classify({ id: 'homeowner-step-12345-10', text: 'Do it' }, ALL);
+  assert.deepEqual([c.kind, c.attention, c.step_text, c.target], ['homeowner_step', 'homeowner', 'Do it', { kind: 'pull', n: 12345 }]);
+});
+
+test('invalid: homeowner-step- with no numbers (or one number) stays kind other, and the older homeowner ids keep their results', () => {
+  for (const id of ['homeowner-step-', 'homeowner-step-1124', 'homeowner-step-1124-', 'homeowner-step-a-1']) {
+    const c = classify({ id, text: 'x' }, ALL);
+    assert.deepEqual([c.kind, c.attention, c.reason_code, c.target], ['other', 'fault', 'unclassified', null], id);
+  }
+  const older = [['homeowner-steps-5', 'homeowner_steps_listed'], ['homeowner-pr-5', 'needs_homeowner_label'], ['homeowner-5', 'needs_homeowner_label']];
+  for (const [id, code] of older) {
+    const c = classify({ id, text: 'x' }, ALL);
+    assert.deepEqual([c.kind, c.attention, c.reason_code, c.step_text, c.target], ['homeowner_step', 'homeowner', code, 'x', null], id);
+  }
+});
