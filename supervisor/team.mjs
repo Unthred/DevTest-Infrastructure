@@ -68,6 +68,7 @@ import { isCiteRepair } from './incomplete.mjs';
 import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, finishDescriptionRound, roundSpec } from './descround.mjs';
 import { recordCreatedInboxJob } from './inboxlaunch.mjs';
 import { approveDecisions } from './decisionapprove.mjs';
+import { alertThenRecord } from './alertflow.mjs';
 import { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE } from './teamconfig.mjs';
 // Issue #1239: configuration validation and loading live in teamconfig.mjs; every moved name stays importable from here.
 export { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE };
@@ -819,8 +820,7 @@ export class Team {
       else if (a.mode === 'reviews_only' && (prev.rule ?? null) !== (a.rule ?? null)) { prev.rule = a.rule ?? null; this.save(); }   // issue #680: an older latch gets its rule on the next tick
       const e = this.s.budget[agent];
       if (e.alerted || !this.alert) continue;
-      try { await this.alert(`Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`); e.alerted = true; this.save(); }
-      catch { (report.skipped ||= []).push({ what: `alert allowance ${agent}`, reason: 'alert delivery failed; will retry' }); }
+      await alertThenRecord(this, { report, what: `alert allowance ${agent}`, text: `Allowance: ${modeLine(agent, { ...a, mode: e.mode, reason: e.reason, until: e.until }, this.timeZone)}`, sent: () => { e.alerted = true; } });
     }
   }
   // Fix attempts (CHANGES fixes and CI fixes) are counted per PR, across heads: a fix that pushes a new head and is then rejected
@@ -2188,7 +2188,7 @@ export class Team {
   breakerFailed(error, report) {
     this.s.breaker.error = { at: this.clock.now(), message: redact(String(error?.message || error), 200) };
     (report.breaker ||= {}).error = this.s.breaker.error.message;
-    try { this.save(); } catch { /* the report above still carries it */ }
+    try { this.save(); } catch (saveError) { report.breaker.saveError = redact(String(saveError?.message || saveError), 200); }
   }
   async ingestOneInner(id, j, report) {
       const job = await this.jobs.get(id);
@@ -2559,7 +2559,7 @@ export class Team {
     await this.postNotice(target, `lease holder=${id || 'unknown'}`, text);
     await this.gh.addLabel(target, 'needs-homeowner');
     this.s.notified[key] = this.clock.now(); this.save();
-    if (this.alert) { try { await this.alert(`Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600)); } catch { (report.skipped ||= []).push({ what: 'alert lease holder', reason: 'alert delivery failed' }); } }
+    await alertThenRecord(this, { report, what: 'alert lease holder', text: `Needs the homeowner: ${text.replace(/\*\*/g, '')}`.slice(0, 600) });
   }
   // A notice carries a stable marker and is never retried blindly: if GitHub accepted an earlier attempt but the response
   // was lost, the marker is already there and nothing is posted twice (same approach as verdict ingestion).
@@ -2918,10 +2918,8 @@ export class Team {
       });
       const akey = `churn-alert:${pr.number}:${pr.headRefOid}`;   // like the fix-limit alert: recorded as sent only when the channel accepted it
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
-        try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
-          this.s.notified[akey] = this.clock.now(); this.save();
-        } catch { (report.skipped ||= []).push({ what: `alert churn ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+        await alertThenRecord(this, { report, what: `alert churn ${pr.number}`, sent: () => { this.s.notified[akey] = this.clock.now(); },
+          text: `Needs the homeowner: ${this.names().pr(pr.number).text} drew a new, different set of blocking findings on each of the last ${rounds.length - 1} fix rounds, so the fixes are not converging. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.` });
       }
     }
   }
@@ -2956,10 +2954,8 @@ export class Team {
       // Immediate alert to the AI channel (#50, #39): recorded as sent only when the channel accepted it, so an undelivered
       // alert is retried on the next tick; a failing channel never undoes the notice.
       if (this.s.notified[nkey] && !this.s.notified[akey] && this.alert) {
-        try {
-          await this.alert(`Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.`);
-          this.s.notified[akey] = this.clock.now(); this.save();
-        } catch { (report.skipped ||= []).push({ what: `alert fix-limit ${pr.number}`, reason: 'alert delivery failed; will retry' }); }
+        await alertThenRecord(this, { report, what: `alert fix-limit ${pr.number}`, sent: () => { this.s.notified[akey] = this.clock.now(); },
+          text: `Needs the homeowner: ${this.names().pr(pr.number).text} is still rejected (${this.rejectionCause(pr)}) after ${this.fixCount(pr.number)} fix rounds by ${author}. https://github.com/${this.c.repository}/pull/${pr.number} . Decision needed, one of: ${this.carriedHold(pr) ? CARRIED_HOLD_OPTIONS : FIX_LIMIT_OPTIONS}.` });
       }
     }
   }
@@ -3007,7 +3003,7 @@ export class Team {
     try {
       await this.flag(target, { key: `limit:${room.key}`, kind: 'limit', tk });
       await this.postNotice(target, `unblock-limit ${room.key}`, `**Needs the homeowner.** Foreman stopped unblocking by itself: it reached ${room.text}. Nothing further is retried, resumed or escalated automatically for this scope until the limit resets (day) or you raise it in team.local.json. Required: look at what is stuck (#${target}) and decide.`);
-      if (this.alert) { try { await this.alert(`Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}`); } catch { (report.skipped ||= []).push({ what: 'alert unblock limit', reason: 'alert delivery failed' }); } }
+      await alertThenRecord(this, { report, what: 'alert unblock limit', text: `Needs the homeowner: Foreman reached ${room.text}; automatic unblocking has stopped. #${target}` });
     } catch (error) { delete u.limit[room.key]; this.save(); throw error; }
     (report.notified ||= []).push({ target, unblockLimit: room.key });
   }
