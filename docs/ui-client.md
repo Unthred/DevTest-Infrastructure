@@ -46,3 +46,22 @@ On a `model_changed` or `command_applied` event naming `appbar`, or on `resync_r
 
 - An agent chip shows its status as a shape; the word for it is the chip's title (with the reason text) and its accessible name, and the panel header shows shape and word together.
 - The stale line is shown when the envelope freshness state is anything other than fresh, so also when it is unknown (then it says no tick has been recorded). This is a deliberate choice: an unknown freshness must not look current.
+
+## The live board screen (issue #1312)
+
+Shown when the page address ends in `#/board`; with no such ending the main area holds one link to it, and the app bar is the same on both. It draws the `liveboard` read model (`docs/api-contract.md`) and holds no rules: every box, hold and count comes from the model.
+
+| File | Job |
+| --- | --- |
+| `board.mjs` | the screen: asks for the model when it opens and again on a `model_changed` event naming `liveboard` (or `resync_required`, or a reconnect), redraws in place, opens and closes the side panel, keeps the last good board marked stale on an error |
+| `boardlayout.mjs` | pure: the one `LAYOUT` table (every position and size), the nine boxes, ball places in the hopper, lanes and boxes, ride height, allowance fractions, the rows of the side panel |
+| `boardsvg.mjs` | draws the SVG (no library) from the geometry |
+| `boardlists.mjs` | the same content as HTML lists, the error line and the side panel |
+| `board.css` | the board styles; job and agent colours are named once at the top |
+
+- **Layout (first version).** Lanes rise up the left, grouped by agent, with the allowance under each group; the hopper is at the foot of the lanes; the peg board fills the middle; the nine result boxes run along the bottom. To move anything change `LAYOUT` in `boardlayout.mjs`.
+- **Hopper.** The waiting entries in plan order, the next one in the top row nearest the lanes. A held ball is greyed and shows its hold reason on hover and focus; a ball tied to an agent carries that agent's colour mark. What does not fit is counted as "+N more" and is in the list.
+- **Running.** A ball's height is elapsed time against `typical_seconds`, capped at 0.92 of the lane. With no estimate it sits at mid height and is marked; past the typical time it changes colour and says running long.
+- **Lists.** Below 640 px wide the board is not drawn and the lists are the screen. At wider widths the same lists are present for screen readers only. A box click shows that box's list under the board; each Needs you row links to the Inbox page found by the item's number (`/inbox?state=all&search=<number>`).
+- **Data.** One request when the screen opens and one per change event; no timer fetches data. A failed request shows the error with Retry and keeps the last board marked stale. In this item a ball simply appears in its new place (travel is the Boardmotion item).
+- **Tests.** `tests/ui-boardlayout.test.mjs` (pure module); `node tests/ui-board-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-board-scenario.mjs` at 1280 and 390 wide against a fixture model from `tests/ui-board-fixture.mjs`.

@@ -1,13 +1,18 @@
 // Issue #1266: the shell. It wires the client to the app bar: first fetch, live refetch on a change, the theme, and the panel of one agent.
-// A screen module is added by importing it here and giving it the element #main; this item has none.
+// A screen module is added by importing it here and giving it the element #main; the board (#/board) is the first.
 import { fetchModel, openStream } from './client.mjs';
 import { renderBar, renderPanel, renderBanners } from './appbar.mjs';
+import { createBoard } from './board.mjs';
 
 const THEME_KEY = 'foreman-ui-theme';
 const REDRAW_MS = 30000;
 const bar = document.getElementById('appbar');
 const panel = document.getElementById('panel');
 const banners = document.getElementById('banners');
+
+const main = document.getElementById('main');
+const board = createBoard(main);
+const BOARD_HASH = '#/board';
 
 const state = { model: null, groups: new Map(), connection: 'connecting', theme: 'light', open: null, receivedAt: Date.now(), freshness: null };
 
@@ -104,8 +109,26 @@ async function loadGroups() {
   } catch { /* every state then reads as unknown until the next load */ }
 }
 
+// With no board address the main area holds one link to it. The app bar is the same on both.
+function route() {
+  if (location.href.endsWith(BOARD_HASH)) {
+    board.open();
+    return;
+  }
+  board.close();
+  const link = document.createElement('a');
+  link.href = BOARD_HASH;
+  link.textContent = 'Open the live board';
+  const paragraph = document.createElement('p');
+  paragraph.className = 'screen-link';
+  paragraph.append(link);
+  main.replaceChildren(paragraph);
+}
+window.addEventListener('hashchange', route);
+
 applyTheme(readTheme(), false);
 draw();
+route();
 await loadGroups();
 await refresh();
 openStream({
@@ -113,10 +136,14 @@ openStream({
     const was = state.connection;
     state.connection = next;
     draw();
-    if (next === 'live' && (was === 'reconnecting' || was === 'behind')) refresh();
+    if (next === 'live' && (was === 'reconnecting' || was === 'behind')) {
+      refresh();
+      board.changed();
+    }
   },
   onChange: names => {
     if (names === null || names.includes('appbar')) refresh();
+    if (names === null || names.includes('liveboard')) board.changed();
   },
   onFreshness: freshness => {
     const changed = freshness.state !== state.freshness?.state;
