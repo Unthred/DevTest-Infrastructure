@@ -178,3 +178,29 @@ test('no agent or provider name appears in the code of this item', () => {
     assert.doesNotMatch(fs.readFileSync(new URL(f, API), 'utf8'), /claude|codex|anthropic|openai/i, f);
   }
 });
+
+// Issue #1377: homeowner steps of merged pull requests, served by the real router, are Needs you items with their step text and none is a fault.
+test('real data: homeowner steps (PR 1124 step 1 among them) are served under needs_you with step text and the PR as target, none as faults', async t => {
+  const text = 'On a host that is latched now, run clear-latch once';
+  const steps = n => Array.from({ length: n }, (_, i) => ({ text: i === 0 ? text : `Step ${i + 1}`, done: false }));
+  const pendingSteps = {
+    1124: { title: 'Clear latch (#1124)', mergedAt: NOW - 5 * MIN, steps: steps(2) },
+    12345: { title: 'Big number', mergedAt: NOW - 4 * MIN, steps: steps(2) },
+    1130: { title: 'Many steps', mergedAt: NOW - 3 * MIN, steps: steps(10) },
+  };
+  const r = await answer(t, { state: { jobs: {}, pendingSteps }, cache: { pulls: [] } });
+  const d = r.body.data;
+  const mine = d.needs_you.filter(i => i.id.startsWith('homeowner-step-'));
+  assert.equal(mine.length, 14);
+  assert.ok(mine.length >= 6);
+  assert.ok(mine.every(i => i.kind === 'homeowner_step' && i.condition.attention === 'homeowner' && i.step_text));
+  assert.ok(d.needs_you.every(i => i.kind !== 'other'), 'no item is left as kind other');
+  assert.deepEqual(d.faults.filter(i => i.id.startsWith('homeowner-step-')), []);
+  const first = mine.find(i => i.id === 'homeowner-step-1124-1');
+  assert.match(first.step_text, /On a host that is latched now, run clear-latch once/);
+  assert.equal(first.target.key, 'change-1124');
+  assert.equal(first.condition.reason_code, 'homeowner_step_waiting');
+  assert.deepEqual(first.actions.map(a => [a.command, a.enabled, a.refusal_code]), [['homeowner_step.mark_done', false, 'not_built']]);
+  assert.ok(mine.some(i => i.id === 'homeowner-step-1130-10'));
+  assert.ok(mine.some(i => i.id === 'homeowner-step-12345-2'));
+});

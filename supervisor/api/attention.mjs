@@ -21,7 +21,10 @@ const parkPr = act('work_item.park', 'direct', true, BY_PR);
 
 // Row: id pattern, the values it gives, and `example` (an id this pattern matches, used by the tests to run the dead end check over every row).
 // `step` says where a homeowner step's text comes from: the item's text or its action line. Order matters: the first match wins.
-const row = (pattern, example, kind, attention, reasonCode, actions = [], step = null) => ({ pattern, example, kind, attention, reasonCode, actions, step });
+// `target` is a function of the id match that names the pull request the item is about, for the items whose own record carries no reference.
+const row = (pattern, example, kind, attention, reasonCode, actions = [], step = null, target = null) => (
+  { pattern, example, kind, attention, reasonCode, actions, step, target }
+);
 
 export const TABLE = Object.freeze([
   row(/^breaker-halt$/, 'breaker-halt', 'breaker', 'fault', 'breaker_halt', [act('breaker.resume', 'person_only', true)]),
@@ -71,6 +74,10 @@ export const TABLE = Object.freeze([
   row(/^hand-deploy$/, 'hand-deploy', 'homeowner_step', 'homeowner', 'hand_deploy', [], 'text'),
   row(/^history-storage$/, 'history-storage', 'homeowner_step', 'homeowner', 'history_storage', [], 'action'),
   row(/^homeowner-steps-(\d+)$/, 'homeowner-steps-5', 'homeowner_step', 'homeowner', 'homeowner_steps_listed', [], 'text'),
+  // Issue #1377: the pending steps module writes homeowner-step-<pr>-<step>. The old dashboard's Mark done has no command yet, so it is listed as not built.
+  row(/^homeowner-step-(\d+)-(\d+)$/, 'homeowner-step-1124-1', 'homeowner_step', 'homeowner', 'homeowner_step_waiting', [
+    act('homeowner_step.mark_done', 'person_only', false, (item, m) => ({ pull: Number(m[1]), step: Number(m[2]) })),
+  ], 'text', m => ({ kind: 'pull', n: Number(m[1]) })),
   row(/^homeowner-pr-(\d+)$/, 'homeowner-pr-5', 'homeowner_step', 'homeowner', 'needs_homeowner_label', [], 'text'),
   row(/^homeowner-(\d+)$/, 'homeowner-5', 'homeowner_step', 'homeowner', 'needs_homeowner_label', [], 'text'),
   row(/^cap-deadlock$/, 'cap-deadlock', 'stuck_change', 'homeowner', 'open_pr_cap_deadlock', [], 'action'),
@@ -105,7 +112,7 @@ export const TABLE = Object.freeze([
   ]),
 ]);
 
-const UNCLASSIFIED = Object.freeze({ kind: 'other', attention: 'fault', reasonCode: 'unclassified', actions: [], step: null });
+const UNCLASSIFIED = Object.freeze({ kind: 'other', attention: 'fault', reasonCode: 'unclassified', actions: [], step: null, target: null });
 
 function renderAction(a, item, match, known) {
   const enabled = known.has(a.command);
@@ -147,6 +154,7 @@ export function classify(item, known) {
     reason_code: spec.reasonCode,
     actions: spec.actions.map(a => renderAction(a, { ...safe, id }, match, commands)),
     step_text: stepTextOf(spec, safe),
+    target: spec.target ? spec.target(match) : null,
   };
 }
 
