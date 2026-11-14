@@ -10,10 +10,13 @@ export { openGrant, spendGrant, withGrantedModel } from './extrafixround.mjs';
 import { addLabelAsApp } from './appidentity.mjs';
 import { refusalNote } from './pendingsteps.mjs';
 import { postIssueDraft } from './issue-drafts.mjs';
+import { redact } from './redact.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
 export const unparkedPulls = prs => (Array.isArray(prs) ? prs.filter(p => !p.labels?.includes(PARKED)) : prs);
+// Free text of a control record as shown: null when missing, otherwise redacted and cut to 300 characters.
+const displayText = value => (value == null ? null : redact(value, 300));
 const done = (changed, text) => ({ outcome: 'done', changed, text });
 const refused = text => ({ outcome: 'refused', changed: false, text });
 
@@ -96,11 +99,11 @@ export async function runControl(team, dir, st, item, inboxStore, report) {
 }
 
 // The recent control items for the view (the MCP tools show them beside the item or job they concern): who, when, why, and the result.
-// Text is redacted and bounded again here, as for every inbox card.
+// Reason and result are redacted and bounded to 300 characters here (displayText), as for every inbox card.
 export function controlRecords(inboxDir, inboxStore, limit = 50) {
   return inboxStore.allStatuses(inboxDir).filter(s => s.kind === 'control' && s.control).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, limit).map(s => ({
-    id: s.id.slice(0, 8), action: s.control.action, target: s.control.target, by: s.control.by || 'overseer', reason: s.control.reason, state: s.state, changed: s.control.changed ?? null,
-    at: s.createdAt ?? null, result: s.state === 'refused' ? s.reason ?? null : s.result ?? null }));
+    id: s.id.slice(0, 8), action: s.control.action, target: s.control.target, by: s.control.by || 'overseer', reason: displayText(s.control.reason), state: s.state, changed: s.control.changed ?? null,
+    at: s.createdAt ?? null, result: displayText(s.state === 'refused' ? s.reason : s.result) }));
 }
 export const controlsOf = (config, store) => (config.inbox?.dir ? controlRecords(config.inbox.dir, store) : []);
 

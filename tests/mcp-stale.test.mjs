@@ -9,6 +9,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fingerprintOf, createSelfCheck, markStale, markStatus, STALE_TEXT } from '../foreman-mcp/selfcheck.mjs';
+import { createToolset } from '../foreman-mcp/toolset.mjs';
 
 const mcpDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'foreman-mcp');
 const FIRST = 'Live board balls travel from hopper to lane and bounce down the pegs into their box Boardmotion';
@@ -144,4 +145,15 @@ test('issue #1327: markStatus puts the self-check in a first line for text that 
   const check = { startedAt: '2026-01-02T03:04:05.000Z' };
   assert.equal(markStatus('{"error":"x"', check, false), 'mcpSelfCheck: {"startedAt":"2026-01-02T03:04:05.000Z","stale":false}\n{"error":"x"');
   assert.equal(JSON.parse(markStatus('{"version":{"mcp":"abc"}}', check, true)).version.mcp.installed, 'abc');
+});
+test('controls added to an MCP answer are redacted', async t => {
+  const secret = ['pass', 'word'].join('') + '=' + ['hunter', '2horse'].join('');   // assembled at run time; redact masks a password pair
+  const controls = [{ action: 'park', target: '1139', by: 'overseer', at: 1000, reason: `fix limit reached ${secret}`, state: 'done', changed: true, result: 'parked' }];
+  const view = { controls, jobs: [], attention: [], queues: {}, issues: [], prs: [{ number: 1139, title: 'T', state: 'OPEN', labels: ['parked'] }], excluded: [], panels: {}, display: {} };
+  const tools = createToolset({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}) });
+  const out = await tools.call('foreman_why_blocked', { kind: 'pr', number: 1139 });
+  assert.equal(out.isError, false);
+  assert.match(out.text, /fix limit reached/);
+  assert.ok(out.text.includes('[redacted]'), 'the masked form is in the answer');
+  assert.ok(!out.text.includes('hunter2horse'), 'the clear form is not');
 });
