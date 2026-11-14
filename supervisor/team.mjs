@@ -54,6 +54,7 @@ import { enforceNoDeferredSteps, syncPendingSteps } from './homeownersteps.mjs';
 import { markDone, recordPrSteps } from './afterinstall.mjs';
 import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
+import { MAX_MERGES_PER_PASS } from './mergebatch.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
 import { acceptSplit } from './splitaccept.mjs';
@@ -851,7 +852,7 @@ export class Team {
     // Expected files of every running or planned implement job (issue #344): a new implement job whose expected files overlap one is refused.
     this.claimed = new Map();
     for (const j of active) { const rec = this.s.jobs[j.id], n = rec && WRITER_KINDS.has(rec.kind) ? (rec.issue ?? issueOfBranch(rec.branch)) : null; if (n != null && issueByNo.get(n)) for (const f of this.predictFiles(issueByNo.get(n))) this.claimed.set(f, n); }
-    // 1. merge (at most one per tick; heads change after a merge, so re-plan next tick)
+    // 1. merge (every ready pull request in order, up to MAX_MERGES_PER_PASS; each later merge re-reads its pull request first, issue #1410)
     for (const pr of unparkedPulls(prs).sort((x, y) => x.number - y.number)) {   // issue #1115: a parked PR stays in the view; only its actions are held
       const author = agentOfBranch(this.c, pr.headRefName);
       if (!author || pr.isDraft || !SHA.test(pr.headRefOid) || dependencyGate(this, { type: 'merge', pr: pr.number })) continue;
@@ -860,7 +861,7 @@ export class Team {
         const interim = v.interim === true && v.reviewer === author;
         // Applies only while D-024 is not approved (D-021): an interim merge owes a post-merge review by a reviewer on another model.
         actions.push({ type: 'merge', pr: pr.number, head: pr.headRefOid, base: pr.baseRefName, reviewer: v.reviewer, job: v.job, ...(interim && !this.independenceApproved() ? { interim: true, branch: pr.headRefName, author } : {}), });
-        break;
+        if (actions.filter(x => x.type === 'merge').length >= MAX_MERGES_PER_PASS) break;
       }
     }
     // 2. dispatch per role slot: any agent may fill a free slot, and one agent may fill both. Where several agents could, a review goes
@@ -1954,7 +1955,7 @@ export class Team {
     if (action === 'reopen') { await this.reopen(n, `homeowner approved on the dashboard: ${reason}`); return `issue #${n} can be implemented again`; }
     if (action === 'new_review_attempt') return this.grantReviewAttempt(n, reason);
     if (action === 'clear_retry_cap') return this.clearRetryCap(n, reason);
-    if (action === 'unpark') return unparkApproved(n, depsOf(this));   // issue #1115
+    if (action === 'unpark') { const text = await unparkApproved(n, depsOf(this)); (report.parkedChanged ||= []).push(n); return text; }   // issues #1115, #1410
     if (action === 'clear_latch') {   // issue #1160; handinstall.mjs imports team.mjs through upgrade.mjs, so it is loaded here, not at the top
       const { handInstallHold } = await import('./handinstall.mjs');
       return clearLatchApproved({ root: this.root, reason }, { upgradeLock, handInstallHold, now: () => this.clock.now() });
