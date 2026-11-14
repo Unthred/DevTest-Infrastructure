@@ -1,0 +1,44 @@
+{
+  "pr": {
+    "number": 1139,
+    "title": "Address supervisor review follow-ups (#1127)",
+    "headRefName": "codex/issue-1127-review-follow-ups",
+    "headRefOid": "a3761c891aad1456bfff92a1cc1410fd7134f2f5",
+    "sourceIssue": 1127,
+    "fixRounds": 4,
+    "files": [
+      "docs/foreman-mcp.md",
+      "docs/team-loop.md",
+      "foreman-mcp/toolset.mjs",
+      "supervisor/budgetview.mjs",
+      "supervisor/capacity.mjs",
+      "supervisor/capacityteam.mjs",
+      "supervisor/controlactions.mjs",
+      "supervisor/dashboard.mjs",
+      "supervisor/inboxagent.mjs",
+      "supervisor/issueassign.mjs",
+      "supervisor/team.mjs",
+      "tests/capacity-planner.test.mjs",
+      "tests/overseer-control.test.mjs",
+      "tests/pass-speed.test.mjs",
+      "tests/test-resources.test.mjs"
+    ]
+  },
+  "openPrFiles": {
+    "1183": ["browser/resets-card-scenario.mjs", "supervisor/dashboard.mjs", "supervisor/team.mjs", "tests/dashboard-live.test.mjs"],
+    "1189": ["docs/foreman-mcp.md", "foreman-mcp/toolset.mjs", "supervisor/controlactions.mjs", "supervisor/dashboard.mjs", "supervisor/team.mjs"],
+    "1191": ["docs/foreman-mcp.md", "foreman-mcp/toolset.mjs", "supervisor/controlactions.mjs", "supervisor/dashboard.mjs", "supervisor/team.mjs"],
+    "1192": ["README.md", "docs/team-loop.md", "foreman-mcp/toolset.mjs", "supervisor/budgetview.mjs", "supervisor/capacity.mjs", "supervisor/dashboard.mjs", "supervisor/issueassign.mjs", "supervisor/team.mjs", "tests/capacity-planner.test.mjs"],
+    "1200": ["docs/foreman-mcp.md", "docs/team-loop.md", "foreman-mcp/inbox-tools.mjs", "supervisor/dashboard.mjs", "supervisor/team.mjs"],
+    "1232": ["AGENTS.md", "docs/DECISIONS.md", "supervisor/dashboard.mjs", "supervisor/team.mjs", "tests/decision-files.test.mjs"],
+    "1235": ["browser/jobs-scenario.mjs", "supervisor/dashboard.mjs", "supervisor/dashrender.mjs", "tests/jobs-table.test.mjs"],
+    "1242": ["docs/team-loop.md", "supervisor/dashboard.mjs", "supervisor/rebasecheck.mjs", "supervisor/team.mjs"],
+    "1243": ["docs/team-loop.md", "foreman-mcp/inbox.mjs", "supervisor/dashboard.mjs", "supervisor/team.mjs"],
+    "1244": ["browser/work-view-scenario.mjs", "supervisor/dashrender.mjs", "supervisor/dashserver.mjs", "tests/work-table.test.mjs"]
+  },
+  "handSplit": [
+    { "number": 1171, "title": "Supervisor follow-up 3 of 3 Parked items decided for cancel watch transient resume and re review Parkdecide" },
+    { "number": 1172, "title": "Supervisor follow-up 2 of 3 Stale reading probe never starved by the PR counted reserve Probehold" },
+    { "number": 1173, "title": "Supervisor follow-up 1 of 3 Dashboard shows allowance faults from the real tick Warnwire" }
+  ]
+}
