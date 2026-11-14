@@ -1,0 +1,94 @@
+{
+  "$id": "about.schema.json",
+  "title": "The about model: reply of GET /api/v1/about (issue #1448)",
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "short": { "type": "string", "pattern": "^[0-9a-f]{7}$" },
+    "time": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+    "commit": {
+      "type": "object",
+      "required": ["commit", "short"],
+      "additionalProperties": false,
+      "properties": { "commit": { "$ref": "#/$defs/sha" }, "short": { "$ref": "#/$defs/short" } }
+    },
+    "change": {
+      "type": "object",
+      "required": ["text", "group", "pr", "issue"],
+      "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "group": { "enum": ["fixed", "improved", "screens", "tidying"] },
+        "pr": { "type": "integer", "minimum": 1 },
+        "issue": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "install": {
+      "type": "object",
+      "required": ["at", "commit", "short", "current", "changes"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "commit": { "$ref": "#/$defs/sha" },
+        "short": { "$ref": "#/$defs/short" },
+        "current": { "type": "boolean" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "about" },
+        "data": {
+          "type": "object",
+          "required": ["installed", "main", "behind", "hold", "mcp_version", "processes", "installs"],
+          "additionalProperties": false,
+          "properties": {
+            "installed": {
+              "type": "object",
+              "required": ["commit", "short", "installed_at", "verified_at"],
+              "additionalProperties": false,
+              "properties": {
+                "commit": { "anyOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+                "short": { "anyOf": [{ "$ref": "#/$defs/short" }, { "type": "null" }] },
+                "installed_at": { "$ref": "#/$defs/time" },
+                "verified_at": { "$ref": "#/$defs/time" }
+              }
+            },
+            "main": { "anyOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+            "behind": { "type": ["integer", "null"], "minimum": 0 },
+            "hold": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["kind", "since", "reason"],
+                  "additionalProperties": false,
+                  "properties": { "kind": { "enum": ["latch", "refused"] }, "since": { "$ref": "#/$defs/time" }, "reason": { "type": "string" } }
+                }
+              ]
+            },
+            "mcp_version": { "anyOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+            "processes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["role", "pid", "version", "matches_installed"],
+                "additionalProperties": false,
+                "properties": {
+                  "role": { "type": "string" },
+                  "pid": { "type": "integer", "minimum": 1 },
+                  "version": { "$ref": "#/$defs/sha" },
+                  "matches_installed": { "type": ["boolean", "null"] }
+                }
+              }
+            },
+            "installs": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/install" } }
+          }
+        }
+      }
+    }
+  ]
+}
