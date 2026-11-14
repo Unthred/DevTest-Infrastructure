@@ -16,6 +16,7 @@ import { handler } from '../supervisor/dashserver.mjs';
 import { writeToken } from '../supervisor/dashwrite.mjs';
 import { checkProposal, createInbox, SUPERSEDED_BY as MCP_SUPERSEDED_BY, SUPERSEDED_BY_MAX as MCP_MAX } from '../foreman-mcp/inbox.mjs';
 import { inboxToolDefs } from '../foreman-mcp/inbox-tools.mjs';
+import { readRecord, addReason, ensureStartedAt, recordFile, closedReasonAttention } from '../supervisor/closedreason-store.mjs';
 
 const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';
 const BRANCH = 'claude/issue-1157-v2-item-27';
@@ -227,4 +228,71 @@ test('every GitHub call of the action goes through the runner the client was giv
   assert.equal(statusOf(s, id).state, 'done');
   const writes = s.gh.world.calls.filter(c => ['comment', 'close'].includes(c.args[1]) || (c.args[0] === 'api' && c.args.includes('POST')));
   assert.equal(writes.length, 3, 'the branch, the comment and the close all reached the one runner');
+});
+
+// Issue #1460: the approved reason is recorded where the closed-with-no-reason check looks, in the same step as the close.
+const REAL_REASON = 'Issue #1451 Aboutmodel is the overseer\'s first version of the About read model. It was replaced by #1448 Aboutfacts, which adds the plain wording the homeowner asked for. Both cards were approved together by mistake on 14 Nov. Everything in #1451 is carried by #1448; nothing is dropped.';
+const world1451 = { pulls: { 1189: { number: 1189, headRefName: BRANCH, headRefOid: HEAD, state: 'OPEN' } }, issues: { 1451: 'OPEN', 1448: 'OPEN', 1157: 'OPEN' } };
+const droppedIssue = (number, startedAt) => ({ number, title: `issue ${number}`, state: 'CLOSED', stateReason: 'NOT_PLANNED', closedAt: new Date(startedAt + 60000).toISOString() });
+const noreasonIds = (s, number, startedAt) => closedReasonAttention(s.team().root, [droppedIssue(number, startedAt)]).map(a => a.id);
+const startClock = s => { const startedAt = Date.now() - 3600000; ensureStartedAt(s.team().root, startedAt); return startedAt; };
+const approvedItem = () => item(1451, '1448', { reason: REAL_REASON });
+
+test('A1: closing issue 1451 records the approved reason, so Needs you has no closed-noreason item for it', async t => {
+  const s = await serve(t, { gh: fakeGh(world1451) });
+  const startedAt = startClock(s);
+  assert.deepEqual(noreasonIds(s, 1451, startedAt), ['closed-noreason'], 'without an entry the item appears');
+  const id = await approve(s, approvedItem());
+  await s.team().processInbox({});
+  assert.equal(statusOf(s, id).state, 'done');
+  const entry = readRecord(s.team().root).record.reasons['1451'];
+  assert.equal(entry.reason, `Superseded by #1448. ${REAL_REASON}`);
+  assert.equal(entry.call, 'close_superseded');
+  assert.ok(Number.isFinite(entry.at));
+  assert.deepEqual(noreasonIds(s, 1451, startedAt), []);
+});
+
+test('A2: a target that is not open and a close call that throws leave the record without an entry', async t => {
+  const notOpen = await serve(t, { gh: fakeGh({ ...world1451, issues: { ...world1451.issues, 1451: 'CLOSED' } }) });
+  const id = await approve(notOpen, approvedItem());
+  await notOpen.team().processInbox({});
+  assert.equal(statusOf(notOpen, id).state, 'failed');
+  assert.deepEqual(readRecord(notOpen.team().root).record.reasons, {});
+  const gh = fakeGh(world1451), inner = gh.run;
+  gh.run = (args, input) => (args[1] === 'close' ? (() => { throw new Error('boom'); })() : inner(args, input));
+  const throws = await serve(t, { gh });
+  const id2 = await approve(throws, approvedItem());
+  await throws.team().processInbox({});
+  assert.equal(statusOf(throws, id2).state, 'failed');
+  assert.deepEqual(readRecord(throws.team().root).record.reasons, {});
+});
+
+test('A3: an existing entry or a damaged record file does not fail the close; the result says reason not recorded and why', async t => {
+  const dup = await serve(t, { gh: fakeGh(world1451) });
+  addReason(dup.team().root, 1451, { reason: 'Written earlier by hand', at: 1, call: 'k' });
+  const id = await approve(dup, approvedItem());
+  await dup.team().processInbox({});
+  assert.equal(statusOf(dup, id).state, 'done');
+  assert.match(statusOf(dup, id).result, /issue #1451 closed, superseded by #1448 \(reason not recorded: a reason is already recorded\)/);
+  assert.deepEqual(dup.gh.world.closed, [1451]);
+  assert.equal(readRecord(dup.team().root).record.reasons['1451'].reason, 'Written earlier by hand');
+  const bad = await serve(t, { gh: fakeGh(world1451) });
+  fs.mkdirSync(path.dirname(recordFile(bad.team().root)), { recursive: true });
+  fs.writeFileSync(recordFile(bad.team().root), 'not json');
+  const id2 = await approve(bad, approvedItem());
+  await bad.team().processInbox({});
+  assert.equal(statusOf(bad, id2).state, 'done');
+  assert.match(statusOf(bad, id2).result, /closed, superseded by #1448 \(reason not recorded: the record of close reasons is not valid JSON\)/);
+  assert.deepEqual(bad.gh.world.closed, [1451]);
+  assert.equal(fs.readFileSync(recordFile(bad.team().root), 'utf8'), 'not json');
+});
+
+test('A4: a closed pull request gets no entry', async t => {
+  const s = await serve(t);
+  const id = await approve(s, item(1189, '1157'));
+  await s.team().processInbox({});
+  assert.equal(statusOf(s, id).state, 'done');
+  assert.deepEqual(s.gh.world.closed, [1189]);
+  assert.deepEqual(readRecord(s.team().root).record.reasons, {});
+  assert.doesNotMatch(statusOf(s, id).result, /reason not recorded/);
 });
