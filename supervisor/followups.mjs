@@ -32,6 +32,13 @@ const quotePhrase = text => String(text).split(CODE).map((part, i) => (i % 2 ? p
 const fault = text => { const p = parseDependsOn(text); return p.malformed || p.line ? p : null; };
 const neutralise = text => String(text).split('\n').map(l => (new RegExp(PHRASE.source, 'i').test(l) ? quotePhrase(l.replace(/`/g, "'")) : l)).join('\n');
 
+const neutraliseLine = (text, line) => String(text).split('\n').map(l => (l.trim() === line ? quotePhrase(l.replace(/`/g, "'")) : l)).join('\n');
+
+// The sink a tick report passes to appendToBatch: a rejected finding is never dropped, it is listed with its reason (issue #1409).
+export const rejectedSink = (report, id, j, redact) => rejected => {
+  if (report) (report.followUpsRejected ||= []).push(...rejected.map(r => ({ job: id, pr: j.pr, reason: r.reason, text: redact(String(r.text), 300) })));
+};
+
 // Returns { text } safe to append, or { reason } when it cannot be made safe. `check` is the parser (injectable for tests).
 export function makeFindingSafe(finding, check = fault) {
   let text = quotePhrase(finding);
@@ -43,9 +50,10 @@ export function makeFindingSafe(finding, check = fault) {
 // Adds one review's follow-ups to a batch issue body. Idempotent per review job (its marker is in the body already: nothing changes),
 // and a finding whose text is already listed is not added twice. Returns { body, added, rejected: [{ text, reason }] }; a rejected finding
 // is not written, and the caller reports it. A body the parser would hold is never returned changed.
-export function appendToBatch(body, { job, pr, head, items }, check = fault) {
+export function appendToBatch(body, { job, pr, head, items, onRejected }, check = fault) {
   const marker = jobMarker(job, pr, head);
   if (String(body).includes(marker)) return { body: String(body), added: 0, rejected: [] };
+  const done = r => { if (r.rejected.length) onRejected?.(r.rejected); return r; };
   const have = new Set(String(body).split('\n').map(l => norm(l.replace(/^\s*-\s*/, ''))));
   const fresh = [], rejected = [], seen = new Set();
   for (const t of items) {
@@ -56,16 +64,17 @@ export function appendToBatch(body, { job, pr, head, items }, check = fault) {
     if (safe.reason) rejected.push({ text: t, reason: safe.reason }); else fresh.push(safe.text);
   }
   const section = `${marker}\nFrom PR #${pr} at head \`${head}\`:\n${fresh.length ? fresh.map(t => `- ${t}`).join('\n') : '- _nothing new: every finding was already listed above_'}`;
-  const next = `${String(body).replace(/\s+$/, '')}\n\n${section}\n`;
-  if (fresh.length && check(next)) return { body: String(body), added: 0, rejected: [...rejected, ...fresh.map(text => ({ text, reason: 'the batch body would be held by the dependency parser' }))] };
-  return { body: next, added: fresh.length, rejected };
+  let next = `${String(body).replace(/\s+$/, '')}\n\n${section}\n`;
+  let bad = fresh.length ? check(next) : null;
+  // A batch already held by an older line is repaired, not left to refuse every later finding: the line the parser names is neutralised and the check runs once more.
+  if (bad?.line) { next = neutraliseLine(next, bad.line); bad = check(next); }
+  if (bad) return done({ body: String(body), added: 0, rejected: [...rejected, ...fresh.map(text => ({ text, reason: 'the batch body would be held by the dependency parser' }))] });
+  return done({ body: next, added: fresh.length, rejected });
 }
 
-// Returns { body, rejected }.
-export function newBatchBody(area, { job, pr, head, items }) {
+export function newBatchBody(area, { job, pr, head, items, onRejected }) {
   const head0 = `${batchMarker(area)}\nBatched non-blocking review findings for the \`${area}\` area. Foreman adds the follow-ups of later reviews here instead of opening one issue per review; one implementer run clears the list. Follow-up from PR #${pr}.`;
-  const { body, rejected } = appendToBatch(head0, { job, pr, head, items });
-  return { body, rejected };
+  return appendToBatch(head0, { job, pr, head, items, onRejected }).body;
 }
 
 // A batch is only started when something material is in it: a finding the reviewer wrote. A list made only of immaterial

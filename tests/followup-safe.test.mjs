@@ -3,16 +3,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Team } from '../supervisor/team.mjs';
-import { appendToBatch, makeFindingSafe } from '../supervisor/followups.mjs';
+import { appendToBatch, makeFindingSafe, rejectedSink } from '../supervisor/followups.mjs';
 import { parseDependsOn } from '../foreman-mcp/dependency-parser.mjs';
 
 // Real finding from issue #1143, review of PR #1245.
 const REAL = "The invalid case 'a body the dependency parser refuses' is tested with a hand-written string, bodyFault('Depends on: not-an-issue'), so it can drift from what the parser really reads.";
 const PLAIN = 'The helper has no test for an empty list.';
 
-function writer() {
+function writer(existing = null) {
   const calls = { created: [], updated: [] };
-  let issue = null;
+  let issue = existing && { number: 50, body: existing };
   const gh = {
     listPulls: async () => [],
     listPullFiles: async () => ['supervisor/a.mjs'],
@@ -94,11 +94,33 @@ test('invalid: a body the parser would hold is never written, and every finding 
   assert.equal(out.rejected.length, 1);
 });
 
-test('invalid: the writer reports the rejected finding in the tick report', async () => {
-  const { run } = writer();
-  const team = Object.create(Team.prototype);
+test('valid: a batch already held by an older appended line is repaired and later plain findings are still appended', async () => {
+  const marker = '<!-- devtest-followup-batch v1 area=supervisor -->';
+  const held = `${marker}\nBatch.\n- bodyFault('Depends on: not-an-issue')\n`;
+  assert.equal(clean(held), false, 'the starting body is held');
+  const { run } = writer(held);
+  const { body, report } = await run([PLAIN]);
+  assert.ok(body.includes(PLAIN), body);
+  assert.ok(clean(body), body);
+  assert.equal(report.followUpsRejected, undefined);
+});
+
+test('invalid: a body still held after the one retry is not written and the finding reaches the tick report through the writer', async () => {
+  const marker = '<!-- devtest-followup-batch v1 area=supervisor -->';
+  // Three real declarations: the retry neutralises only the line the parser names, so two remain and the parser still holds the body.
+  const held = `${marker}\nBatch.\nDepends on: #1\nDepends on: #2\nDepends on: #3\n`;
+  const { run, calls } = writer(held);
+  const { body, report } = await run([PLAIN]);
+  assert.equal(body, held);
+  assert.equal(calls.updated.length, 0);
+  assert.equal(report.followUpsRejected.length, 1);
+  assert.equal(report.followUpsRejected[0].text, PLAIN);
+  assert.match(report.followUpsRejected[0].reason, /held by the dependency parser/);
+});
+
+test('invalid: the rejected sink puts a finding with its reason in the tick report', () => {
   const report = {};
-  team.reportRejectedFollowUps(report, 'job1', { pr: 9 }, [{ text: 'x', reason: 'because' }]);
+  rejectedSink(report, 'job1', { pr: 9 }, t => t)([{ text: 'x', reason: 'because' }]);
   assert.deepEqual(report.followUpsRejected, [{ job: 'job1', pr: 9, reason: 'because', text: 'x' }]);
-  await run([PLAIN]);
+  rejectedSink(null, 'job1', { pr: 9 }, t => t)([{ text: 'x', reason: 'because' }]);
 });

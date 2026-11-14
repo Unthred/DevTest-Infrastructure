@@ -62,7 +62,7 @@ import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { WRITER_KINDS, openFreeBatch } from './batchissue.mjs';
-import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
+import { areaOf, batchMarker, appendToBatch, newBatchBody, rejectedSink, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { slimFinding } from './rebasehunks.mjs';
 import { holdRefusedRebase, noHeadDetail, pushStep, STOP_STEP } from './rebaserefusal.mjs';
@@ -2241,22 +2241,16 @@ export class Team {
     const texts = followUps.map(f => f.text), material = isMaterial(followUps);
     let files = []; try { files = (await this.gh.listPullFiles?.(j.pr)) || []; } catch { /* area falls back to general */ }
     const area = areaOf(files), marker = batchMarker(area), entry = { job: id, pr: j.pr, head: j.head, items: texts };
+    entry.onRejected = rejectedSink(report, id, j, redact);
     const prs = await this.gh.listPulls().catch(() => []);
     const open = await openFreeBatch(this.gh, marker, { prs, jobs: Object.values(this.s.jobs) });   // frozen batches are skipped (issue #1370: shared)
     if (open) {
-      const { body, rejected } = appendToBatch(open.body, entry);
-      this.reportRejectedFollowUps(report, id, j, rejected);
+      const { body } = appendToBatch(open.body, entry);
       if (body !== open.body) await this.gh.updateIssueBody(open.number, body);
       return open.number;
     }
     if (!material) return null;
-    const created = newBatchBody(area, entry);
-    this.reportRejectedFollowUps(report, id, j, created.rejected);
-    return this.gh.createIssue(`Review follow-ups: ${area}`, created.body);
-  }
-  // Issue #1409: a finding the dependency parser would hold is not written, but is never dropped: the tick report lists it with its reason.
-  reportRejectedFollowUps(report, id, j, rejected) {
-    if (report && rejected.length) (report.followUpsRejected ||= []).push(...rejected.map(r => ({ job: id, pr: j.pr, reason: r.reason, text: redact(String(r.text), 300) })));
+    return this.gh.createIssue(`Review follow-ups: ${area}`, newBatchBody(area, entry));
   }
   // Issue #550: a review that ended without a recorded verdict because the validator refused its verdict file keeps the reason, the file and
   // the next action for Needs you, and does not use up the head's review attempts (no verdict was recorded). The refund is bounded by
