@@ -178,7 +178,7 @@ test('regression: GET /api/v1/meta and GET /api/view.json answer as before, and 
   const meta = await get('/api/v1/meta');
   assert.equal(meta.status, 200);
   const body = JSON.parse(meta.body);
-  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events, body.cursor], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'job.resume', 'upgrade.clear_latch', 'work_item.accept_split', 'work_item.clear_retry_cap', 'work_item.close_reason', 'work_item.requeue'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name })), 'e-0']);   // issue #1254: only the events route exports events
+  assert.deepEqual([body.data.commands.map(c => c.name), body.data.events, body.cursor], [['inbox.approve', 'inbox.reject', 'inbox.undo_decision', 'job.close', 'job.resume', 'upgrade.clear_latch', 'work_item.accept_split', 'work_item.clear_retry_cap', 'work_item.close_reason', 'work_item.requeue'], ['hello', 'heartbeat', 'model_changed', 'command_applied', 'freshness_changed', 'resync_required'].map(name => ({ name })), 'e-0']);   // issue #1254: only the events route exports events
   assert.equal((await get('/api/v1/meta', 'POST')).status, 405);
   assert.equal((await get('/api/view.json')).status, 200);
 });
