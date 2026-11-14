@@ -2,11 +2,13 @@
 // Runs INSIDE the pinned Playwright container (no network; one declared target). Drives the real /inbox page and the real decision post
 // (issue #1262): Approve from a Table row, the outcome in the Compact list, Reject from a Compact row without expanding it, and a refusal
 // for an item decided in another tab a moment before. Writes <name>.json and a screenshot to /out.
-// Usage: node inbox-row-actions-scenario.mjs --target fixture --profile <name> --name <stem>
+// With --mode decisions (issue #1477) it drives the four decision cards' rows instead (browser/inbox-row-decisions.mjs).
+// Usage: node inbox-row-actions-scenario.mjs --target fixture --profile <name> --name <stem> [--mode decisions]
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { bridge, isAllowed, PROFILES } from './capture.mjs';
+import { runDecisions } from './inbox-row-decisions.mjs';
 
 const arg = k => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : null; };
 const target = arg('target') || 'fixture', profile = arg('profile') || 'desktop-1280', name = arg('name') || 'inbox-row-actions', out = arg('out') || '/out';
@@ -16,6 +18,7 @@ const { port } = await bridge(path.join('/targets', `${target}.sock`));
 process.env.HOME = '/tmp';
 const pw = await import(pathToFileURL('/cache/package/index.mjs').href);
 const browser = await (pw.default ?? pw).chromium.launch({ headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--disable-dev-shm-usage'] });
+const mode = arg('mode') || 'rows';
 const COOLDOWN_MS = 1200;   // the route allows one decision a second
 let failed = true;
 try {
@@ -27,6 +30,15 @@ try {
     style.textContent = '.agent-item{display:none!important}';
     document.head.append(style);
   }));
+  if (mode === 'decisions') {
+    const page = await runDecisions({ ctx, port, profile, check });
+    await page.screenshot({ path: path.join(out, `${name}.png`) });
+    failed = checks.some(c => !c.ok);
+    fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify({ profile, checks }, null, 2));
+    for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'} ${c.name}${c.ok ? '' : ` :: ${c.detail}`}`);
+    await browser.close();
+    process.exit(failed ? 1 : 0);
+  }
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e.message).slice(0, 200)));

@@ -9,8 +9,10 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ESC[c]);
 const input = c => (c.input === 'superseded_by'
   ? '<input class="decision-input" type="text" name="superseded_by" required maxlength="60" placeholder="superseded by, e.g. 12, 13" aria-label="Superseded by (issue or pull request numbers)">'
   : '');
-const control = (id, c, anchor) => `<form method="post" action="/decision" class="decision-form"><input type="hidden" name="card" value="${esc(id)}">`
-  + `<input type="hidden" name="control" value="${esc(c.action)}"><input type="hidden" name="back" value="${esc(anchor)}">${input(c)}`
+// Issue #1477: `from` is the page the post returns to without script (the Inbox page at its filter); empty means the Overview.
+const control = (id, c, anchor, from) => `<form method="post" action="/decision" class="decision-form"><input type="hidden" name="card" value="${esc(id)}">`
+  + `<input type="hidden" name="control" value="${esc(c.action)}"><input type="hidden" name="back" value="${esc(anchor)}">`
+  + `${from ? `<input type="hidden" name="from" value="${esc(from)}">` : ''}${input(c)}`
   + `<button class="btn decision-control" type="submit" title="${esc(c.does)}">${esc(c.label)}</button></form>`;
 
 const status = (pending, controls) => {
@@ -34,7 +36,7 @@ const retryInstallForm = '<form method="post" action="/api/v1/commands/upgrade.r
   + '<div class="sub retry-install-status" role="status" aria-live="polite" hidden></div></form>';
 
 // item: a Needs you item with its `card`; `decision` is its by-hand next step text; `anchor` is the id of the element the card sits in.
-export function decisionHtml(item, anchor = '') {
+export function decisionHtml(item, anchor = '', from = '') {
   const card = item.card;
   if (!card) return `<div class="sub">Decision: ${esc(item.decision)}</div>`;
   if (card.error) return `<div class="decision-card decision-error" role="alert"><div class="sub">Error: ${esc(card.error)}</div></div>`;
@@ -42,7 +44,7 @@ export function decisionHtml(item, anchor = '') {
   const open = card.controls.filter(c => !pending.includes(c.action));
   const form = card.type === 'closed-noreason' && item.issues?.length ? closeReasonForm(item) : '';
   const retry = card.type === 'upgrade-blocked' ? retryInstallForm : '';
-  const acts = open.length ? `<div class="acts">${open.map(c => control(item.id, c, anchor)).join('')}</div>` : '';
+  const acts = open.length ? `<div class="acts">${open.map(c => control(item.id, c, anchor, from)).join('')}</div>` : '';
   return `<div class="decision-card" data-decision="${esc(card.type)}"><div class="sub decision-reason">Why: ${esc(card.reason)}</div>`
     + `<div class="sub decision-clears">${esc(card.clears[0].toUpperCase() + card.clears.slice(1))}.</div>`
     + (item.decision ? `<div class="sub">Decision: ${esc(item.decision)}</div>` : '')
