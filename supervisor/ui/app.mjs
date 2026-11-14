@@ -3,6 +3,7 @@
 import { fetchModel, openStream } from './client.mjs';
 import { renderBar, renderPanel, renderBanners } from './appbar.mjs';
 import { createBoard } from './board.mjs';
+import { createAbout } from './about.mjs';
 
 const THEME_KEY = 'foreman-ui-theme';
 const REDRAW_MS = 30000;
@@ -13,6 +14,7 @@ const banners = document.getElementById('banners');
 const main = document.getElementById('main');
 const board = createBoard(main);
 const BOARD_HASH = '#/board';
+const about = createAbout();
 
 const state = { model: null, groups: new Map(), connection: 'connecting', theme: 'light', open: null, receivedAt: Date.now(), freshness: null };
 
@@ -42,8 +44,11 @@ function positionPanel(chip) {
 
 function draw() {
   const focused = document.activeElement?.closest?.('[data-agent]')?.dataset.agent;
+  const aboutFocused = document.activeElement?.closest?.('[data-about]');
   const current = view();
   renderBar(bar, current);
+  bar.append(about.button());
+  if (aboutFocused) bar.querySelector('[data-about]')?.focus();
   renderBanners(banners, current);
   const agent = openAgent();
   panel.hidden = !agent;
