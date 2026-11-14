@@ -1,19 +1,14 @@
 // Issue #1375: a failed CI check is rerun once before a CI fix job is planned, and a red main is shown to the homeowner.
 // The decisions here are pure; the two watch functions carry them out through the team's GitHub adapter.
 // Recorded state (team state file): `ciRerun[<pr>:<head>]` holds one rerun per head, `ciRerunStats` counts them, `mainCi` is the red main item.
-import { scannerOnly, checksState, latestChecks, checkDone, isCancelled, CHECK_OK, OPEN_PULLS_CAP } from './team.mjs';
+import { scannerOnly, checksState, failedChecks, checkLabel, OPEN_PULLS_CAP, RERUN_SETTLE_MS } from './checkstate.mjs';
 import { unparkedPulls } from './controlactions.mjs';
 
-// GitHub updates the pull request's check list a few seconds after a rerun is accepted; until then the old failure is still listed.
-export const RERUN_SETTLE_MS = 60000;
-const SAFE_NAME = /^[A-Za-z0-9 ._:()\/-]{1,80}$/;
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'ERROR']);
 const rawState = (team, pr) => checksState(pr.statusCheckRollup, team.retried(pr));
-// The completed checks of the head that neither succeeded nor were cancelled.
-const failedChecksOf = (team, pr) => latestChecks(pr.statusCheckRollup)
-  .filter(c => checkDone(c) && !isCancelled(c, team.retried(pr)) && !CHECK_OK.includes(c.conclusion || c.state));
+const failedChecksOf = (team, pr) => failedChecks(pr.statusCheckRollup, team.retried(pr));
 const keyOf = pr => `${pr.number}:${pr.headRefOid}`;
-const safeName = c => { const n = c.name || c.context; return typeof n === 'string' && SAFE_NAME.test(n) ? n : 'a check'; };
+const safeName = checkLabel;
 const runOf = c => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl || '')?.[1] ?? null;
 
 // True while a requested rerun of this head has not had time to replace the old result: the pull request counts as waiting for CI.
@@ -47,27 +42,49 @@ export async function watchCi(team, report, guard, pulls) {
 }
 
 async function watchCiRerun(team, report, pulls) {
-  const now = team.clock.now(), records = team.s.ciRerun ||= {};
+  const now = team.clock.now();
+  const records = team.s.ciRerun ||= {};
   const open = new Set(pulls.map(keyOf));
   if (pulls.length < OPEN_PULLS_CAP) for (const k of Object.keys(records)) if (!open.has(k)) delete records[k];
   for (const pr of pulls) {
     if (pr.isDraft || !/^[0-9a-f]{40}$/.test(pr.headRefOid || '')) continue;
-    const key = keyOf(pr), failed = failedChecksOf(team, pr), record = records[key];
+    const key = keyOf(pr);
+    const failed = failedChecksOf(team, pr);
+    const record = records[key];
     if (record && now - record.at < RERUN_SETTLE_MS && !record.requestFailed) continue;   // still replacing the old result
     const action = decideRerun({ ciState: rawState(team, pr), record, failed });
     if (action === 'request') await requestRerun(team, report, pr, failed);
     else if (action === 'unreliable' || action === 'real') {
-      Object.assign(record, { result: action, settledAt: now });
-      count(team.s, action);
-      team.save();
+      settleRerun(team, report, pr, record, action);
     }
   }
 }
 
+// The outcome is kept in the Activity log (the unblock log) as well as in the record, which is dropped once the pull request closes:
+// a green rerun usually merges soon after, and the unreliable failure with its job name must outlast that.
+function settleRerun(team, report, pr, record, action) {
+  Object.assign(record, { result: action, settledAt: team.clock.now() });
+  count(team.s, action);
+  const names = record.jobs.join(', ');
+  const unreliable = action === 'unreliable';
+  team.logUnblock(report, {
+    target: pr.number, tk: 'pull',
+    what: unreliable ? `unreliable CI failure on PR #${pr.number}: ${names}` : `CI failure on PR #${pr.number} confirmed by the rerun: ${names}`,
+    why: 'the failed jobs were rerun once before a CI fix job was planned',
+    result: unreliable ? 'the rerun was green; no CI fix job planned' : 'the rerun was red again; the CI fix job is planned',
+  });
+  team.save();
+}
+
 async function requestRerun(team, report, pr, failed) {
-  const runs = [...new Set(failed.map(runOf).filter(Boolean))], jobs = [...new Set(failed.map(safeName))].slice(0, 8);
+  const runs = [...new Set(failed.map(runOf).filter(Boolean))];
+  const jobs = [...new Set(failed.map(safeName))].slice(0, 8);
   const record = team.s.ciRerun[keyOf(pr)] = { at: team.clock.now(), jobs, runs };
-  if (!runs.length || !team.gh.rerunFailedJobs) { record.noRun = true; team.save(); return; }   // nothing to rerun: the CI fix is planned as today
+  if (!runs.length || !team.gh.rerunFailedJobs) {   // nothing to rerun: the CI fix is planned as today
+    record.noRun = true;
+    team.save();
+    return;
+  }
   team.save();   // recorded before the call, so a failing or lost request is never repeated for the head
   try {
     const what = `re-ran the failed CI jobs on PR #${pr.number}`;
@@ -76,9 +93,15 @@ async function requestRerun(team, report, pr, failed) {
       for (const r of runs) await team.gh.rerunFailedJobs(r);
       return 'failed jobs rerun requested (once per head)';
     });
-    if (sent) count(team.s, 'requested'); else record.requestFailed = true;
+    if (sent) {
+      count(team.s, 'requested');
+    } else {
+      record.requestFailed = true;
+      count(team.s, 'requestFailed');
+    }
   } catch (error) {
-    record.requestFailed = true; count(team.s, 'requestFailed');
+    record.requestFailed = true;
+    count(team.s, 'requestFailed');
     const reason = String(error?.message || error).slice(0, 160);
     (report.warnings ||= []).push({ kind: 'ci-rerun', pr: pr.number, warning: `the rerun of the failed CI jobs on PR #${pr.number} could not be requested: ${reason}` });
   }

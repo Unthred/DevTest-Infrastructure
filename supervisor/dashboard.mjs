@@ -11,8 +11,10 @@ import { normalize as breakerStateOf, haltView as breakerHaltView, byCause as br
 import { typeOfKind } from './models.mjs';
 import { readStatusIssueState } from './statusissue.mjs';
 import path from 'node:path';
+import { robustnessView } from './robustview.mjs';
+export { robustnessView };   // issue #1375: moved to its own module
 import { homeownerQuestion } from './homeowner-question.mjs';
-import { stoppedAttention, rearmView, endNote, withEndNote } from './faultview.mjs';
+import { stoppedAttention, endNote, withEndNote } from './faultview.mjs';
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
@@ -459,17 +461,6 @@ function attentionItems({ config, cache, jobs, states, plan, snapshots, now, all
   return items;
 }
 
-// Issue #995: job liveness (limit and last activity per running job), retry counts by cause, and what a recovery re-armed.
-export function robustnessView(state, team, jobs, now) {
-  const live = team.livenessView?.() || { limitMs: 0, running: {}, cancelled: [] };
-  const running = (jobs || []).filter(j => j.status === 'running').map(j => {
-    const id = String(j.id).slice(0, 8), at = live.running?.[id]?.lastActivityAt ?? null;
-    return { id, kind: j.kind ?? null, lastActivityAt: at, idleMs: Number.isFinite(at) ? Math.max(0, now - at) : null };
-  });
-  const retries = Object.entries(state.sameCause || {}).map(([k, v]) => ({ key: k, cause: v.cause, count: v.count, capped: (team.retryCapItems?.() || []).some(i => i.subject === k.slice(k.indexOf(':') + 1) && i.type === k.slice(0, k.indexOf(':'))) }));
-  const rearm = state.rearm || null, up = (() => { try { return JSON.parse(fs.readFileSync(path.join(team.root || '', 'team', 'self-upgrade.json'), 'utf8')).rearmed || null; } catch { return null; } })();
-  return { limitMinutes: Math.round((live.limitMs || 0) / 60000), running, cancelled: (live.cancelled || []).slice(-5), retries, rearm: rearmView(rearm, up), infraFaults: team.faults?.summary?.() ?? null };
-}
 // Issue #259: PRs that made no progress past the limit. Read from the stored result of the tick's stall check, so a PR that has since
 // moved, merged or closed is dropped here at once. PRs stalled for the same set of reasons share one item, and a PR that already has an
 // item of its own (any item whose ref is that PR, or the decision hold) gets none. A failed check is its own item.

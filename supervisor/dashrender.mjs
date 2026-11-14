@@ -395,7 +395,8 @@ function breakerCard(view) {
 // Issue #995: liveness limit and last activity per running job, retry counts by cause, and what a recovery re-armed.
 function robustnessCard(view) {
   const r = view.robustness;
-  if (!r || (!r.running.length && !r.retries.length && !r.rearm && !r.cancelled.length)) return '';
+  const reruns = r?.ciReruns, anyRerun = !!reruns && Object.values(reruns).some(n => n > 0);
+  if (!r || (!r.running.length && !r.retries.length && !r.rearm && !r.cancelled.length && !anyRerun)) return '';
   const ago = ms => (ms == null ? 'unknown' : `${Math.round(ms / 60000)} min ago`);
   const jobs = r.running.map(j => `<tr><td>${esc(j.id)}</td><td>${esc(j.kind || '')}</td><td>${esc(ago(j.idleMs))}</td></tr>`).join('');
   const retries = r.retries.map(x => `<tr><td>${esc(x.key)}</td><td>${esc(x.cause)}</td><td>${x.count}${x.capped ? ' (stopped)' : ''}</td></tr>`).join('');
@@ -403,6 +404,7 @@ function robustnessCard(view) {
     + (jobs ? `<table><thead><tr><th>Job</th><th>Kind</th><th>Last activity</th></tr></thead><tbody>${jobs}</tbody></table>` : '')
     + (r.cancelled.length ? `<p class="sub">Cancelled for inactivity: ${r.cancelled.map(c => escT(`${c.job} (${c.reason})`)).join('; ')}</p>` : '')
     + (retries ? `<table><thead><tr><th>Item</th><th>Same cause</th><th>Attempts</th></tr></thead><tbody>${retries}</tbody></table>` : '')
+    + (anyRerun ? `<p class="sub">Failed CI checks rerun once before a CI fix job: ${reruns.requested} rerun${reruns.requested === 1 ? '' : 's'}, ${reruns.unreliable} green (unreliable failure, no CI fix job), ${reruns.real} red again (CI fix planned), ${reruns.requestFailed} could not be requested.</p>` : '')
     + (r.rearm ? `<p class="sub">Re-armed after ${escT(r.rearm.scopes.join(', '))} cleared: ${escT(r.rearm.items.join(', '))}.</p>` : '');
   return card({ id: 'robustness', title: 'Job liveness and retries', span: 12, body, cls: 'panel', type: 'info' });
 }

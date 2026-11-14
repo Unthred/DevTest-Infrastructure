@@ -143,3 +143,19 @@ test('mainCiStatus: cancelled runs are not a failure and an empty list is pendin
   assert.equal(mainCiStatus([]).state, 'pending');
   assert.equal(mainCiStatus([{ name: 'x', status: 'completed', conclusion: 'cancelled', head_sha: H(1) }]).state, 'green');
 });
+
+test('an unreliable failure outlasts the closing pull request: the Activity log names the job and the dashboard counts it', async t => {
+  const w = world(t);
+  await w.team.tick();
+  w.clock.t += 60_000;
+  w.gh.pulls[0] = pr(greenTest);
+  await w.team.tick();
+  w.gh.pulls = [];
+  w.clock.t += 1000;
+  await w.team.tick();
+  assert.deepEqual(w.team.s.ciRerun, {}, 'the per-head record is dropped with the pull request');
+  const entry = w.team.s.unblock.log.find(e => /unreliable CI failure on PR #1309: test/.test(e.what));
+  assert.ok(entry, 'the outcome is kept in the Activity log with the failed job name');
+  const v = await buildView({ config: config(), root: w.dir, jobs: [], events: [], state: w.team.s, cache: { pulls: [], issues: [] }, snapshots: [], now: w.clock.t + 1000, register: REGISTER });
+  assert.deepEqual(v.robustness.ciReruns, { requested: 1, unreliable: 1, real: 0, requestFailed: 0 });
+});
