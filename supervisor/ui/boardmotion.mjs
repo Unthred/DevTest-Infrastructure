@@ -77,6 +77,9 @@ const slotsByKey = (placed, keyOf) => new Map(placed.map(entry => [keyOf(entry.i
 const firstSlot = geometry => ({ x: geometry.hopper.x + 8 + LAYOUT.ballRadius, y: geometry.hopper.y + 6 + LAYOUT.ballRadius });
 const boxCentre = box => ({ x: box.x + box.w / 2, y: box.y + box.h * 0.6 });
 
+// What a style may add to a plan: the time at which each point is reached (eased speed) and the points of a trail drawn during the flight.
+const shaping = ({ offsets, trail }) => ({ ...(offsets ? { offsets } : {}), ...(trail ? { trail } : {}) });
+
 const laneOf = (geometry, laneId) => geometry.groups.flatMap(group => group.lanes).find(entry => entry.lane.id === laneId);
 
 function launchTravel(event, ctx) {
@@ -85,7 +88,7 @@ function launchTravel(event, ctx) {
   const from = ctx.prevHopper.get(identOf(event)) ?? firstSlot(ctx.gPrev);
   const lane = laneOf(ctx.gNext, event.lane_id);
   const planned = ctx.style.plan({ kind: 'launch', jobId: event.job_id, lane, box: null, from, to: { x: rest.x, y: rest.y }, geometry: ctx.gNext });
-  return { target: { kind: 'running', id: event.job_id }, kind: 'launch', points: planned.points, durationMs: planned.durationMs };
+  return { target: { kind: 'running', id: event.job_id }, kind: 'launch', points: planned.points, durationMs: planned.durationMs, ...shaping(planned) };
 }
 
 function landTravel(event, ctx) {
@@ -97,7 +100,7 @@ function landTravel(event, ctx) {
   const start = { x, y: event.from === 'lane_top' ? LAYOUT.laneTop + LAYOUT.ballRadius : LAYOUT.laneBottom - LAYOUT.ballRadius };
   const plan = ctx.style.plan({ kind: 'land', jobId: event.job_id, lane, box, from: start, to: end, geometry: ctx.gNext });
   return { target: { kind: 'landed', id: event.job_id }, kind: 'land', points: plan.points, durationMs: plan.durationMs,
-    touches: plan.touches, effects: plan.effects };
+    touches: plan.touches, effects: plan.effects, ...shaping(plan) };
 }
 
 function returnTravel(event, ctx) {
@@ -106,7 +109,7 @@ function returnTravel(event, ctx) {
   const box = ctx.gPrev.boxes.find(candidate => candidate.id === event.box);
   const from = ctx.prevBoxes.get(event.job_id) ?? ctx.nextBoxes.get(event.job_id) ?? (box ? boxCentre(box) : firstSlot(ctx.gPrev));
   const planned = ctx.style.plan({ kind: 'return', jobId: event.job_id, lane: null, box, from, to, geometry: ctx.gNext });
-  return { target: { kind: 'waiting', ident: identOf(event) }, kind: 'return', points: planned.points,
+  return { target: { kind: 'waiting', ident: identOf(event) }, kind: 'return', points: planned.points, ...shaping(planned),
     durationMs: planned.durationMs, delayMs: ctx.landMs.get(event.job_id) ?? 0, laps: { from: event.laps_from, to: event.laps_to } };
 }
 
