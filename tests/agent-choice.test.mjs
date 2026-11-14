@@ -61,7 +61,7 @@ test('a short window that cannot cover the job skips the agent and the same agen
   const almostFull = { used: 0.97, resetsAt: NOW + 2 * HOUR };
   const large = choose(candidate('A', { short: almostFull, share: share(0.001, 0.1) }), candidate('B', { share: share(0.05, 0.1) }));
   assert.equal(large.chosen, 'B');
-  assert.equal(large.candidates[0].skipped, 'short window cannot cover the job');
+  assert.match(large.candidates[0].skipped, /^short window cannot cover the job: actual short room 3% is below the job's 10%/);
   const small = choose(candidate('A', { short: almostFull, share: share(0.001, 0.01) }), candidate('B', { share: share(0.05, 0.1) }));
   assert.equal(small.chosen, 'A');
 });
@@ -146,6 +146,66 @@ test('equal cost uses a preferred pin and then config order only', () => {
   const preferred = choose(candidate('A'), candidate('B', { pin: 'preferred' }));
   assert.equal(preferred.chosen, 'B');
   assert.equal(preferred.rule, 'preferred pin');
+});
+
+// Issue #1424, real data of 14 Nov 2026 07:57 UTC.
+const SEEN = Date.parse('2026-11-14T07:57:00Z');
+const seen = changes => candidate('first', {
+  weekly: { used: 0.72, resetsAt: Date.parse('2026-11-19T04:00:00Z') },
+  short: { used: 0.25, resetsAt: Date.parse('2026-11-14T11:40:00Z') },
+  rate: { weekly: 0.027, short: 0.2386 },
+  share: share(0.002, 0.002),
+  ...changes,
+});
+const chooseSeen = (...candidates) => chooseAgent({ candidates, now: SEEN });
+
+test('real data: a negative projected short room no longer refuses a job the window has room for', () => {
+  const result = chooseSeen(seen(), candidate('second', { mayDo: false }));
+  assert.equal(result.chosen, 'first');
+  const row = result.candidates[0];
+  assert.ok(Math.abs(row.shortRoom - -0.137) < 0.001, `projected short room ${row.shortRoom}`);
+  assert.ok(Math.abs(row.shortActualRoom - 0.75) < 1e-9);
+  assert.match(describeChoice(result), /first: .*actual short room 75%; projected short room -13\.7%.*qualifies/);
+});
+
+test('boundary: actual short room equal to the job share qualifies, and a missing short reading is treated as before', () => {
+  const equal = choose(candidate('A', { short: { used: 0.9, resetsAt: NOW + HOUR }, share: share(0.01, 0.1) }));
+  assert.equal(equal.chosen, 'A');
+  assert.equal(choose(candidate('A', { short: null })).chosen, 'A');
+});
+
+test('invalid: too little actual short room, a window past its reset and a candidate at reserve are refused', () => {
+  const full = choose(candidate('A', { short: { used: 0.999, resetsAt: NOW + HOUR }, share: share(0.01, 0.01) }));
+  assert.equal(full.chosen, null);
+  assert.match(full.candidates[0].skipped, /actual short room 0\.1% is below the job's 1%/);
+  assert.equal(choose(candidate('A', { short: { used: 0.1, resetsAt: NOW - HOUR } })).chosen, null);
+  assert.equal(choose(candidate('A', { atOrBelowReserve: true, short: { used: 0, resetsAt: NOW + HOUR } })).chosen, null);
+});
+
+test('a negative projected spare loses to a positive one and wins when it is the only candidate', () => {
+  const over = candidate('A', { weekly: { used: 0.5, resetsAt: NOW + 100 * HOUR }, rate: { weekly: 0.02, short: 0 }, share: share(0.0001) });
+  const fine = candidate('B', { share: share(0.05) });
+  assert.equal(choose(over, fine).chosen, 'B');
+  const alone = choose(over, candidate('B', { mayDo: false }));
+  assert.equal(alone.chosen, 'A');
+  assert.ok(alone.candidates[0].spare < 0);
+});
+
+test('property: a candidate with a free slot, the job type, reserve left and real room in both windows is always chosen', () => {
+  let seed = 7;
+  const next = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < 300; i += 1) {
+    const rows = [0, 1, 2].map(n => candidate(`c${n}`, {
+      weekly: { used: next() * 0.95, resetsAt: NOW + (1 + next() * 160) * HOUR },
+      short: { used: next() * 0.95, resetsAt: NOW + (0.1 + next() * 5) * HOUR },
+      rate: { weekly: next() * 0.3, short: next() * 0.5 },
+      share: share(next() * 0.04, next() * 0.04),
+      freeSlot: next() > 0.3,
+      mayDo: next() > 0.3,
+    }));
+    const roomy = rows.some(r => r.freeSlot && r.mayDo && 1 - r.short.used >= r.share.short);
+    if (roomy) assert.notEqual(choose(...rows).chosen, null, JSON.stringify(rows));
+  }
 });
 
 function share(weekly, short = weekly * 7, source = 'history', note = 'median history') {
