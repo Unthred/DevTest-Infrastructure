@@ -2,6 +2,7 @@
 // A launch is seen as evidence: a new job record, or (a merge or inbox item) no skip, wait, block or warning recorded for it.
 import { usageLimitSkip } from './tickskips.mjs';
 import { kindOfReason, heldReasonOf } from './planledger.mjs';
+import { rereadForMerge } from './mergebatch.mjs';
 
 const KIND_OF_SKIP = { usage_limit: 'allowance', parked_agent: 'allowance', reserve: 'allowance', admission_refusal: 'admission', dependency_wait: 'order_guard' };
 const JOBLESS = new Set(['merge', 'inbox']);
@@ -27,7 +28,12 @@ export function outcomeOfAttempt(team, report, before, jobsBefore, act) {
 }
 
 export async function launchPlanned(team, actions, report, { guard, lap, ledger, refresh }) {
+  let merges = 0;
   for (const act of actions) {
+    if (act.type === 'merge' && merges++ > 0) {   // issue #1410: main moved with the earlier merge; read this pull request again first
+      const stale = await rereadForMerge(team.gh, act);
+      if (stale) { ledger.held(act, 'order_guard', `order guard: not merged this pass, ${stale}; the next pass decides`); continue; }
+    }
     // Issue #344: several jobs start in one tick, so the allowance is checked again right before each start; a limit reached while
     // an earlier job was starting holds the rest until the next tick (merges are not jobs).
     const l = act.type !== 'merge' ? (await refresh(team, act)) || team.limitedOf(act.agent) : null;   // issue #1163: refresh first when due

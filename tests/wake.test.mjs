@@ -37,7 +37,8 @@ test('a request sets one merged flag and spawns a runner; only the one that set 
   assert.equal(labelOf(pendingRequest(root).reasons), 'approve', 'the pass is labelled by the most important reason');
   assert.deepEqual(takeRequest(root).sort(), ['approve', 'job-end']);
   assert.equal(pendingRequest(root), null, 'taking the flag clears it');
-  assert.throws(() => requestWake({ root, reason: 'schedule', ...s }), /unknown wake reason/);
+  const refused = requestWake({ root, reason: 'schedule', log: () => {}, ...s });
+  assert.equal(refused.refused, true); assert.match(refused.why, /unknown wake reason/);
 });
 test('the hourly cap drops event requests, records the drop for the dashboard, and expires', t => {
   const root = tmp(t), s = spawner();
@@ -49,7 +50,7 @@ test('the hourly cap drops event requests, records the drop for the dashboard, a
   assert.equal(dropped.requested, false); assert.equal(dropped.capped, true); assert.match(dropped.why, /scheduled pass is the fallback/);
   assert.equal(s.calls.length, 5, 'a dropped request spawns nothing');
   const st = wakeStatus(root, 6000, 5); assert.equal(st.capHit, true); assert.equal(st.droppedLastHour, 1); assert.equal(st.acceptedLastHour, 5);
-  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 0, inbox: 1, approve: 0, 'known-time': 0, ci: 0 });
+  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 0, inbox: 1, approve: 0, 'known-time': 0, ci: 0, 'follow-up': 0 });
   assert.equal(wakeStatus(root, 1000 + 3700000, 5).capHit, false, 'the drop is forgotten after the hour');
   assert.equal(requestWake({ root, reason: 'job-end', now: 1000 + 3700000, cap: 5, ...s }).requested, true, 'the cap expires');
   assert.equal(WAKE_MAX_PER_HOUR, 40);
@@ -98,7 +99,7 @@ test('at exactly the cap a job end that would set the flag is dropped, a merging
   assert.deepEqual(pendingRequest(root).reasons.sort(), ['approve', 'inbox']);
   const st = wakeStatus(root, 2003);
   assert.equal(st.acceptedLastHour, 40, 'neither the approve nor the merge is counted'); assert.equal(st.mergedLastHour, 1);
-  assert.equal(st.droppedLastHour, 1); assert.deepEqual(st.droppedByReason, { 'job-end': 1, install: 0, inbox: 0, approve: 0, 'known-time': 0, ci: 0 });
+  assert.equal(st.droppedLastHour, 1); assert.deepEqual(st.droppedByReason, { 'job-end': 1, install: 0, inbox: 0, approve: 0, 'known-time': 0, ci: 0, 'follow-up': 0 });
 });
 test('past the cap install and inbox requests that would set the flag are dropped, with their reason; approve never', t => {
   const root = tmp(t), s = spawner();
@@ -107,7 +108,7 @@ test('past the cap install and inbox requests that would set the flag are droppe
   assert.equal(requestWake({ root, reason: 'inbox', now: 1101, cap: 2, ...s }).requested, false);
   for (let i = 0; i < 3; i++) { assert.equal(requestWake({ root, reason: 'approve', now: 1200 + i, cap: 2, ...s }).requested, true); takeRequest(root); }
   const st = wakeStatus(root, 1300, 2);
-  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 1, inbox: 1, approve: 0, 'known-time': 0, ci: 0 }); assert.equal(st.droppedLastHour, 2); assert.equal(st.acceptedLastHour, 2);
+  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 1, inbox: 1, approve: 0, 'known-time': 0, ci: 0, 'follow-up': 0 }); assert.equal(st.droppedLastHour, 2); assert.equal(st.acceptedLastHour, 2);
 });
 test('merged and dropped-by-reason expire after the hour; an unknown reason is refused', t => {
   const root = tmp(t), s = spawner();
@@ -115,8 +116,8 @@ test('merged and dropped-by-reason expire after the hour; an unknown reason is r
   requestWake({ root, reason: 'job-end', now: 1002, cap: 1, ...s });
   assert.equal(wakeStatus(root, 1003, 1).mergedLastHour, 1); assert.equal(wakeStatus(root, 1003, 1).droppedLastHour, 1);
   const later = wakeStatus(root, 1000 + 3700000, 1);
-  assert.equal(later.mergedLastHour, 0); assert.equal(later.droppedLastHour, 0); assert.deepEqual(Object.values(later.droppedByReason), [0, 0, 0, 0, 0, 0]);
-  assert.throws(() => requestWake({ root, reason: 'bogus', ...s }), /unknown wake reason/);
+  assert.equal(later.mergedLastHour, 0); assert.equal(later.droppedLastHour, 0); assert.deepEqual(Object.values(later.droppedByReason), [0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(requestWake({ root, reason: 'bogus', log: () => {}, ...s }).refused, true);
 });
 
 // ---- the lock

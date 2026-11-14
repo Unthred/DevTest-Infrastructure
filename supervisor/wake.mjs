@@ -20,10 +20,12 @@ import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
 import { append as appendChange } from './api/eventlog.mjs';
 
-export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time', 'ci'];
-export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve', 'known-time', 'ci'];
+import { normalizeReason } from './wakereasons.mjs';
+
+export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time', 'ci', 'follow-up'];
+export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve', 'known-time', 'ci', 'follow-up'];
 // Priority when several requests merge into one pass: the label recorded for it. An install pass verifies new code, so it comes first.
-const PRIORITY = ['install', 'approve', 'inbox', 'ci', 'job-end', 'known-time', 'schedule'];
+const PRIORITY = ['install', 'approve', 'inbox', 'ci', 'job-end', 'follow-up', 'known-time', 'schedule'];
 export const WAKE_MAX_PER_HOUR = 40;
 // A pass lock held this long is treated as a hung pass: a scheduled run then goes ahead without it (the tick lock and the install lock
 // still serialise the parts that must not overlap), so a hung wake pass can never stop the schedule.
@@ -126,8 +128,14 @@ function decideRequest(s, { reason, now, cap }) {
   }
   return { next: { ...keep, requested: flag, accepted: [...accepted, now] }, taken: true };
 }
-export function requestWake({ root, reason, now = Date.now(), cap = WAKE_MAX_PER_HOUR, spawnPass }) {
-  if (!EVENT_TRIGGERS.includes(reason)) throw new Error('unknown wake reason');
+// An unknown reason is refused in a logged sentence and a result the caller can read (issue #1410), never a throw the caller swallows.
+export function requestWake({ root, reason: asked, now = Date.now(), cap = WAKE_MAX_PER_HOUR, spawnPass, log = line => console.error(line) }) {
+  const reason = normalizeReason(asked);
+  if (!EVENT_TRIGGERS.includes(reason)) {
+    const why = `unknown wake reason "${String(asked).slice(0, 40)}"; no pass was requested`;
+    try { log(`ai-supervisor: ${why}`); } catch { /* logging is best effort */ }
+    return { requested: false, refused: true, why };
+  }
   const outcome = withFileLock(root, () => {
     const { next, taken } = decideRequest(readWake(root), { reason, now, cap });
     writeWake(root, next);
