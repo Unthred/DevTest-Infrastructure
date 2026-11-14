@@ -25,8 +25,8 @@ async function desktopChecks(page, ctx) {
   await page.locator('.board-svg').waitFor({ timeout: 10000 });
   check('three lanes are drawn in two agent groups', (await page.locator('.board-svg .lane').count()) === 3 && (await page.locator('.board-svg .agent-name').count()) === 2,
     await texts(page.locator('.board-svg .agent-name')));
-  const labels = await texts(page.locator('.board-svg .lane-label'));
-  check('each lane is labelled with its model', labels.join(',') === 'sonnet,opus,gpt-5', labels);
+  const labels = await texts(page.locator('.board-svg .lane-model'));
+  check('each lane carries its model name along it', labels.join(',') === 'sonnet,opus,gpt-5', labels);
   const allowance = await texts(page.locator('.board-svg .allow'));
   check('each group shows the weekly and short windows with the reset time, an unknown one says unknown',
     allowance.length === 4 && /Weekly: 86% left/.test(allowance[0]) && /5 hour: 99% left/.test(allowance[1]) && /Weekly: 69% left/.test(allowance[2]) && /5 hour: unknown$/.test(allowance[3])
