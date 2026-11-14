@@ -53,6 +53,7 @@ export function stuckCause(team, pr) {
   if (rejected && team.fixCount(n) >= max && !finalRoundPending) {
     return { kind: 'fix-limit', text: `${team.fixCount(n)} fix rounds (limit ${max}) have not cleared ${team.rejectionCause(pr)}` };
   }
+  if (team.s.verdicts[`${n}:${pr.headRefOid}`]?.verdict === 'PASS') return null;
   const cap = sameCauseCap(team.c.limits);
   const stopped = capped(team.s, { type: 'rebase', subject: n, head: pr.headRefOid }, cap) ? team.s.sameCause[`rebase:${n}`] : null;
   return stopped ? { kind: 'rebase-cap', text: `rebases of this PR stopped ${stopped.count} times for the same cause (cap ${cap})` } : null;
