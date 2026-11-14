@@ -90,6 +90,7 @@ export const TABLE = Object.freeze([
   row(/^noreviewer-(\d+)$/, 'noreviewer-7', 'stuck_change', 'fault', 'no_independent_reviewer'),
   row(/^rebase-lost-/, 'rebase-lost-abcd1234', 'stuck_change', 'fault', 'rebase_lost_work'),
   row(/^ci-/, 'ci-41', 'stuck_change', 'fault', 'ci_not_passing'),
+  row(/^main-ci-red$/, 'main-ci-red', 'other', 'fault', 'main_ci_red', [act('ci.rerun_main', 'direct', true)]),   // issue #1375: the command is not built
   row(/^pause-/, 'pause-claude', 'stale_reading', 'unknown', 'allowance_reading_disagrees'),
   row(/^(?:no-tick|tick-failed|tick-stale)$/, 'tick-stale', 'host', 'fault', 'tick_not_running'),
   row(/^agentfault-/, 'agentfault-claude', 'host', 'fault', 'agent_parked'),

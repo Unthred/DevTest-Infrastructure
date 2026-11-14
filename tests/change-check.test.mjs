@@ -269,7 +269,8 @@ function world(t, { prs = [], issues = [] } = {}) {
   const calls = () => (fs.existsSync(path.join(gh, 'calls')) ? fs.readFileSync(path.join(gh, 'calls'), 'utf8').split('\n').filter(Boolean) : []);
   const issueReads = () => calls().filter(l => /^issue list.*title,state/.test(l)).length;
   // Issue #1325: the paged reads of verdict comments for the best 24 hours are not conditional probes.
-  const pagedComments = /issues\/comments -f per_page=100 -f page=/;
+  // Issue #1375: the one read of main's check runs, made by every full pass, is not a conditional probe either.
+  const pagedComments = /issues\/comments -f per_page=100 -f page=|commits\/main\/check-runs/;
   const probes = () => calls().filter(l => /^api /.test(l) && !pagedComments.test(l)).length;
   const set = (f, v) => fs.writeFileSync(path.join(gh, f), v);
   // One pass; `full` says the planner read the issue list, `probes` how many conditional requests the check made.
