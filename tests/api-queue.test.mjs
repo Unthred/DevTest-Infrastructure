@@ -199,7 +199,7 @@ test('boundary: a slot hold has no since, a no-line issue has no actions, and a 
   assert.equal(item.estimated_start_at, null);
   assert.deepEqual(item.prerequisites, { line_state: 'none', raw_line: null, declared: [], open: [] });
   assert.deepEqual([item.condition.reason_code, item.condition.since, item.actions, item.role], ['slot', null, [], 'reviewer']);
-  assert.equal(byKey(reply, 'change-1179').stage, 'installed');
+  assert.equal(byKey(reply, 'change-1179').stage, 'merged');
   assert.equal(byKey(reply, 'issue-1171'), undefined);
 });
 
