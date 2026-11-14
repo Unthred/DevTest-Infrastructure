@@ -85,9 +85,14 @@ function compare(left, right) {
 function ruleOf(winner, runnerUp) {
   if (winner.pin === 'required') return 'required pin';
   if (!runnerUp) return 'only qualifying candidate';
+  if (winner.spare >= 0 && runnerUp.spare < 0) return 'non-negative projected spare';
   if (Math.abs(choiceCost(winner) - choiceCost(runnerUp)) > EPSILON) return 'least plan cost';
   if (winner.pin === 'preferred' && runnerUp.pin !== 'preferred') return 'preferred pin';
   return 'config order';
+}
+
+function shortRefusal(actualRoom, jobShare) {
+  return `short window cannot cover the job: actual short room ${percent(actualRoom)} is below the job's ${percent(jobShare)}`;
 }
 
 function rowOf(candidate, order, target, now) {
@@ -122,7 +127,7 @@ function rowOf(candidate, order, target, now) {
     shortRoom,
     shortActualRoom,
     shortWindow: unknownShort ? 'unknown' : (shortProblem ? 'invalid' : 'known'),
-    skipped: reason ?? (shortCannotCover ? `short window cannot cover the job: actual short room ${percent(shortActualRoom)} is below the job's ${percent(candidate.share.short)}` : null),
+    skipped: reason ?? (shortCannotCover ? shortRefusal(shortActualRoom, candidate.share.short) : null),
   };
 }
 

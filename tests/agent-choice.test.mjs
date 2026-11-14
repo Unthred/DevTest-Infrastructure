@@ -191,6 +191,17 @@ test('a negative projected spare loses to a positive one and wins when it is the
   assert.ok(alone.candidates[0].spare < 0);
 });
 
+test('the recorded rule names the non-negative projected spare when it decides, even if the other costs less', () => {
+  const over = candidate('A', { weekly: { used: 0.5, resetsAt: NOW + 100 * HOUR }, rate: { weekly: 0.02, short: 0 }, share: share(0.0001) });
+  const fine = candidate('B', { share: share(0.05) });
+  const result = choose(over, fine);
+  assert.equal(result.chosen, 'B');
+  assert.equal(result.rule, 'non-negative projected spare');
+  const pinned = choose({ ...over, share: share(0.05), pin: 'preferred' }, fine);
+  assert.equal(pinned.chosen, 'B');
+  assert.equal(pinned.rule, 'non-negative projected spare');
+});
+
 test('property: a candidate with a free slot, the job type, reserve left and real room in both windows is always chosen', () => {
   let seed = 7;
   const next = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
