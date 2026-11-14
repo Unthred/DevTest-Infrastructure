@@ -110,7 +110,7 @@ function reconcileOnce(root, registry, installing = false) {
     const due = current.nextAttemptAt != null && current.nextAttemptAt <= Date.now();
     if (['paused_limit', 'queued'].includes(current.status) && ((current.autoResume && eligible) || current.autoRestart) && due) {
       if (handHold) { held++; continue; }
-      recover(root, current.id, false); startWorker(root, current.id, registry); resumed++;
+      recover(root, current.id, false, { who: 'worker recovery', which: 'auto-restart' }); startWorker(root, current.id, registry); resumed++;
     } else if (current.status === 'running') { transition(root, current, 'blocked', 'orphaned_worker'); blocked++; }
   }
   return { resumed, blocked, released, ...(held ? { held } : {}) };
@@ -131,8 +131,8 @@ function realJobs(root, registry) {
     alive: async job => jobProcessesAlive(job),
     // Issue #163: one automatic resume of a job that stopped on a transient cause. Same recovery as `resume`, with the attempt
     // counters reset so the worker gets one more bounded round instead of stopping at once on retry_exhausted.
-    resume: async id => {
-      const job = recover(root, id, false);
+    resume: async (id, cause) => {
+      const job = recover(root, id, false, cause);
       job.attempts = 0; job.incompleteRetries = 0; job.nextAttemptAt = Date.now(); saveJob(root, job, realClock, true);
       startWorker(root, id, registry);
     },
@@ -721,7 +721,7 @@ async function main() {
   }
   if (command === 'resume') {
     if (!['paused_manual', 'paused_limit', 'blocked', 'failed'].includes(job.status)) throw new SupervisorError('job is not resumable');
-    recover(root, id, a.force === true);
+    recover(root, id, a.force === true, { who: 'homeowner command', which: 'resume' });
     startWorker(root, id, registry); print(readJob(root, id)); return;
   }
   if (command === 'release') { releaseLeases(root, job); print(job); return; }

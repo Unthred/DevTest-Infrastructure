@@ -8,6 +8,7 @@ import { limitFromAllowance } from './allowance.mjs';
 import { redact } from './redact.mjs';
 import { markIncomplete } from './incomplete.mjs';
 import { noteGateError } from './gateerror.mjs';
+import { normalizeCause } from './restartcause.mjs';
 
 export const defaultRegistry = new URL('./providers.json', import.meta.url).pathname;
 export const terminal = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
@@ -91,10 +92,10 @@ export function saveJob(root, job, clock = realClock, force = false) {
     job.updatedAt = clock.now(); atomicJson(file, job);
   } finally { fs.unlinkSync(path.join(lockDir, 'owner.json')); fs.rmdirSync(lockDir); }
 }
-export function event(root, job, kind, clock = realClock) {
+export function event(root, job, kind, clock = realClock, detail = null) {
   const file = path.join(root, 'events', `${job.id}.jsonl`);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(file, JSON.stringify({ at: clock.now(), job: job.id, kind }) + '\n', { mode: 0o600 });
+  fs.appendFileSync(file, JSON.stringify({ at: clock.now(), job: job.id, kind, ...(detail ? { detail } : {}) }) + '\n', { mode: 0o600 });
 }
 // Issue #579: a git call that times out under host load is retried (longer each time) before it counts as a failure, and a failure keeps
 // its real reason (timeout, spawn error, or the redacted first line of stderr) instead of a bare "Git check failed".
@@ -475,7 +476,7 @@ export function claimWorker(root, id) {
   catch (error) { if (error.code === 'EEXIST') throw new SupervisorError('worker claim exists; recover after checking process ownership'); throw error; }
   return () => { if (fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).pid === process.pid) fs.unlinkSync(file); };
 }
-export function recover(root, id, force = false) {
+export function recover(root, id, force = false, cause = null) {
   const job = readJob(root, id);
   if (job.workerPid && processStart(job.workerPid) === job.workerStart) throw new SupervisorError('worker is still running; refusing takeover');
   if (childAlive(job)) throw new SupervisorError('child PID still exists; refusing takeover');
@@ -497,5 +498,5 @@ export function recover(root, id, force = false) {
   acquireLeases(root, job); // terminal states released them (issue #80); refuse if another job took the issue meanwhile
   delete job.stop;   // issue #1179: a restarted job is judged by how it ends now, not by an earlier stop
   job.workerPid = null; job.workerStart = null; job.childPid = null; job.status = 'queued'; saveJob(root, job, realClock, true);
-  event(root, job, 'recovered'); return job;
+  event(root, job, 'recovered', realClock, { cause: normalizeCause(cause) }); return job;   // issue #1423: who or what restarted the job
 }
