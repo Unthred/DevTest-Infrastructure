@@ -93,6 +93,7 @@ const SUBMIT_CASES = [
   ['address with password', 'ht' + 'tp://alice:' + hex(4) + '@host.example'],
   ['word then separator', 'the colour tok' + 'en: crimson'],
   ['word then separator', 'reset the pass' + 'word: required'],
+  ['word then separator', 'run it with --tok' + 'en ' + hex(8)],
 ];
 test('#1372: the submit-time check names the field, the rule and the line, and quotes none of the text', () => {
   for (const [rule, text, ...skipWord] of SUBMIT_CASES) {
@@ -114,4 +115,10 @@ test('#1372: foreman_propose itself refuses a submit-time match naming the rule 
   assert.equal(r.isError, true);
   assert.match(r.text, /rule \\"word then separator\\" matched on line 3\./);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'items')), [], 'nothing was written');
+});
+test('#1380: the advice for the flag form of the last rule covers a space after the flag', () => {
+  const flag = checkProposal({ ...DRAFT, body: 'run it with --tok' + 'en ' + hex(8) });
+  assert.match(flag.error, /colon, equals sign or space comes right after that flag\.$/);
+  const word = checkProposal({ ...DRAFT, body: 'the colour tok' + 'en: crimson' });
+  assert.match(word.error, /colon or equals sign comes right after that word\.$/);
 });
