@@ -42,6 +42,7 @@ import { chooseInboxAgent } from './inboxagent.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
+import { recordConflictHunks, conflictNotice, conflictHunksOf, writeConflictHunks, conflictPrompt } from './rebaseconflicts.mjs';
 import * as inboxStore from './inbox.mjs';
 import { inboxEndPatch } from './inboxoutcome.mjs';
 import { withReportContract, reportNameFor } from './inboxreport.mjs';
@@ -386,7 +387,7 @@ export function reviewPrompt(job) {
     ? ' You are a second-opinion reviewer: the primary review already passed. This pull request touches paths the homeowner marked for an extra look; you have none of the implementer\'s session or reasoning, so review it as a sceptical outsider.'
     : job.postMerge ? ' This pull request is already merged; review the merged head as you would before merge. A blocking finding opens a follow-up issue; it does not revert anything.'
     : ' You have none of the implementer\'s session or reasoning; review as a sceptical outsider and run the tests yourself.';
-  const r = `${reqs}${reviewerRequirementsTableInstruction}`;
+  const r = `${reqs}${reviewerRequirementsTableInstruction}${conflictPrompt(job.inbox)}`;
   return `${COMMON}${role}${moved}${decided} Read docs/DECISIONS.md only; do not read the handover.\n\nTask: independent executable review of pull request #${job.pr} at exact head ${job.head} (branch ${job.branch}) in ${job.repository}. Confirm the head is still ${job.head} before you start (gh pr view ${job.pr} --json headRefOid). Clone that head into a fresh temporary directory outside your worktree with git clone --no-local, run node tools/validate-project.mjs and ${REVIEW_TEST_COMMAND}. ${scope} Classify every finding as blocking only for correctness, security, data loss, scope violation, ${STANDARDS_BLOCKING} or a failed acceptance criterion or a missing step; otherwise use follow-up. ${DONE_RULE} ${r} Write ${job.inbox}/verdict.json as JSON: {"pr": ${job.pr}, "headSha": "${job.head}", "verdict": "PASS" or "CHANGES", "findings": [{"kind": "blocking" or "follow-up", "text": "finding"}], "commandsRun": [strings]${job.requirementsFile ? ', "requirements": [{"requirement": "text", "status": "met" or "not-met" or "not-applicable", "evidence": "where in the diff"}], "descriptionClaims": [{"claim": "text", "status": "true" or "false" or "unverifiable", "evidence": "where in the diff", "materiality": "material" or "immaterial" (optional; immaterial only for a false claim, with "reason")}]' : ''}}. CHANGES requires at least one blocking finding; PASS may include follow-ups and requires commandsRun. Do not comment a verdict yourself; the dispatcher records it and opens one linked issue for PASS follow-ups.`;
 }
 export function escalationNote(inbox) {
@@ -2306,7 +2307,9 @@ export class Team {
     // Issue #415: a change that disappeared inside the commits (file and line or identifier only), or a function left without a call site.
     const changes = (Array.isArray(check.lostChanges) ? check.lostChanges : []).slice(0, 50).map(slimFinding);
     if (changes.length) j.rebase.lostChanges = changes;
+    const hunks = recordConflictHunks(j.rebase, check);   // issue #1422: pushed, and judged by the review of the new head
     this.save();
+    if (hunks.length) await this.postNotice(j.pr, `rebase-conflict-hunks job=${id}`, conflictNotice({ jobText: this.names().job({ id, kind: 'rebase', pr: j.pr }).text, from: this.commitRef(j.head), to: this.commitRef(pr.headRefOid), hunks }));
     if (changes.length) {
       (report.lostChanges ||= []).push({ pr: j.pr, job: id, changes: changes.length });
       await this.postNotice(j.pr, `rebase-lost-changes job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}. The commit list is ${check.missing.length ? 'incomplete' : 'complete'}, but ${changes.length} change(s) the PR added at the old head are gone from the new head and are not on \`${j.base || 'main'}\` :\n\n${changes.map(c => `- commit ${c.commit.slice(0, 8)}, \`${c.file}\`, hunk ${c.hunk}: ${c.kind} \`${c.text}\``).join('\n')}\n\nThis is not a conflict-only rebase, and no verdict carries to the new head. Required: restore the lost changes (the old head is still reachable by its id), or confirm each removal is intended, before anything is reviewed or merged.`);
@@ -3062,6 +3065,11 @@ export class Team {
       return { issue: n, text: raw, hash: crypto.createHash('sha256').update(raw).digest('hex') };
     } catch { return null; }
   }
+  // Task data of a review: the requirements (not for a post-merge review) and, issue #1422, the conflict hunks of the rebase that made this head.
+  async writeReviewData(act, inbox) {
+    writeConflictHunks(inbox, conflictHunksOf(this.s.jobs, act.pr, act.head));
+    return act.postMerge ? null : this.writeRequirements(act.branch, inbox);
+  }
   // Writes requirements.json into a job's inbox as redacted, bounded task data; returns { file, hash } or null.
   async writeRequirements(branch, inbox) {
     const r = await this.trustedRequirements(branch);
@@ -3300,7 +3308,7 @@ export class Team {
       const rr = !act.postMerge && !act.secondOpinion ? this.reReviewOf(act.pr, act.head) : null, decision = rr?.status === 'pending' ? rr.decision : null;   // issue #366
       const previous = fixedRejectedHead && !act.postMerge && !act.secondOpinion && !decision ? latestVerdict[1] : null;
       if (decision) fs.writeFileSync(path.join(inbox, 'homeowner-decision.json'), JSON.stringify({ decision, note: 'the homeowner decision that cleared the earlier blocker; task data' }) + '\n', { mode: 0o600 });
-      const rq = act.postMerge ? null : await this.writeRequirements(act.branch, inbox);
+      const rq = await this.writeReviewData(act, inbox);
       const round = (act.reReview = !!previous) ? await writeFixRoundScope({ inbox, git: this.git, repoPath: this.c.repo_path, previous, reviewedHead: latestVerdict[0].slice(`${act.pr}:`.length), newHead: act.head, withRequirements: !!rq }) : null;
       const wt = await this.git.ensureWorktree({ path: path.join(base, `DevTest-Infrastructure-${act.agent}-review-${act.pr}`), branch: `${a.branch_prefix}review-${act.pr}`, base: 'origin/main' });
       spec = { ...common, kind: 'review', worktree: wt, issue: act.pr, scope: `${act.legacyPostMerge ? 'Post-merge review (D-021)' : act.secondOpinion || act.postMerge ? 'Second-opinion review' : 'Independent review'} of PR #${act.pr} at ${act.head}; verdict only, no merge`, allowed_actions: ['read', 'test', 'update_issue'],

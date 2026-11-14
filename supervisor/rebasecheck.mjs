@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { SupervisorError } from './core.mjs';
-import { compareChangedPairs } from './rebasehunks.mjs';
+import { classifyChanges } from './rebasehunks.mjs';
 import { recordRefusal, readRefusal, recordStop, STOPPED } from './rebaserefusal.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -15,7 +15,7 @@ const BRANCH = /^[A-Za-z0-9._/-]+$/;
 function runner(repo) {
   return (args, input) => {
     const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: 120000, maxBuffer: 64 << 20, input });
-    if (r.status !== 0) throw new SupervisorError(`git ${args[0]} failed`);
+    if (r.status !== 0) throw Object.assign(new SupervisorError(`git ${args[0]} failed`), { stdout: r.stdout });   // merge-tree reports a conflict on stdout
     return r.stdout;
   };
 }
@@ -58,9 +58,9 @@ export function checkRebase({ repoPath, base, oldHead, newHead }) {
     const m = now.find(n => !used.has(n.sha) && n.ident === c.ident && n.subject === c.subject);
     if (m) { used.add(m.sha); changedPairs.push({ old: c, now: m }); } else if (!alreadyApplied(run, c.sha, base)) missing.push({ sha: c.sha, subject: c.subject });
   }
-  const lostChanges = compareChangedPairs(run, { pairs: changedPairs, base, oldHead, extra: now.filter(n => !used.has(n.sha)).map(n => n.sha) });
+  const { lostChanges, conflictHunks } = classifyChanges(run, { pairs: changedPairs, base, oldHead, newHead, extra: now.filter(n => !used.has(n.sha)).map(n => n.sha) });
   const commits = now.map(c => ({ sha: c.sha, subject: c.subject }));
-  return { oldHead, newHead, commits, missing, lostChanges, resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
+  return { oldHead, newHead, commits, missing, lostChanges, conflictHunks, resolvedConflicts: resolvedConflicts(run, base, oldHead, newHead) };
 }
 
 // Issue #640: a commit that a resolution emptied (git drops it) is not missing when the new base already holds its change (a squash
@@ -255,7 +255,7 @@ export function pushRebase({ worktree, branch, base, oldHead }) {
     return { pushed: false, reason, message, attempt, stop: attempt >= 2, ...check };
   };
   if (check.missing.length) return refused('missing');
-  if (check.lostChanges.length) return refused('lost-changes');   // issue #415: nothing is pushed as a clean rebase
+  if (check.lostChanges.length) return refused('lost-changes');   // issue #415; issue #1422: conflictHunks do not refuse, the review judges them
   const r = spawnSync('git', ['-C', worktree, 'push', '--quiet', `--force-with-lease=refs/heads/${branch}:${oldHead}`, 'origin', `HEAD:refs/heads/${branch}`], { encoding: 'utf8', timeout: 120000 });
   if (r.status !== 0) return { pushed: false, reason: 'lease', ...check };
   return { pushed: true, ...check };
