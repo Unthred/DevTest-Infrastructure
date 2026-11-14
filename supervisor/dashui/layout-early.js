@@ -82,3 +82,17 @@
     });
   } catch (e) { /* no usable saved layout: the server order stands */ }
 })();
+(function () {
+  // Issue #1453: the period each summary card shows, kept per card in its own key (dashui/headline-period.mjs) and applied before the first paint.
+  try {
+    var w = window.innerWidth, bp = w >= 1100 ? 'desktop' : w >= 640 ? 'tablet' : 'phone';
+    var grid = document.querySelector('.cards[data-layout]');
+    var saved = JSON.parse(localStorage.getItem('dash.period.' + (grid ? grid.getAttribute('data-layout') : location.pathname) + '.' + bp));
+    if (!saved || typeof saved !== 'object') return;
+    var cards = document.querySelectorAll('.card.headline[data-card]'), i, id;
+    for (i = 0; i < cards.length; i++) {
+      id = cards[i].getAttribute('data-card');
+      if (Object.prototype.hasOwnProperty.call(saved, id) && (saved[id] === '24h' || saved[id] === '7d')) cards[i].setAttribute('data-period', saved[id]);
+    }
+  } catch (e) { /* the default period stands */ }
+})();
