@@ -87,6 +87,16 @@ test('a pull request at the fix limit counts as held and not as fix; the tile te
   assert.doesNotMatch(none, /held for the homeowner/);
 });
 
+test('a parked or needs-homeowner pull request with red CI counts as held and not as fix', async t => {
+  const pulls = [
+    pull(1, { labels: ['needs-homeowner'], statusCheckRollup: RED }),
+    pull(2, { labels: ['parked'], statusCheckRollup: RED }),
+    pull(3, { statusCheckRollup: RED }),
+  ];
+  const view = await viewOf(t, pulls);
+  assert.deepEqual(queueSplit(view), { implement: 0, review: 0, fix: 1, rebase: 0, waiting: 0, held: 2, total: 3 });
+});
+
 test('boundary: an empty queue gives all zeros; one pull request with two reviewers gives review 1', async t => {
   assert.deepEqual(queueSplit({ queues: {} }), { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, held: 0, total: 0 });
   assert.deepEqual(queueSplit({}), { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, held: 0, total: 0 });

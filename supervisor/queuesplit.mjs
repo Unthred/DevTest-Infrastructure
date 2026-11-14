@@ -3,6 +3,7 @@
 //   - An 'issue' entry is implement work.
 //   - A pull request entry is held (fix limit or the homeowner's decision: nothing will run on it), waiting (CI, a rebase carry
 //     waiting for CI, merge), rebase (conflict or not mergeable) or fix (CHANGES, red CI, draft).
+// A parked or needs-homeowner label also makes a pull request held: nothing runs on it, whatever its CI says (D-040, issue #320).
 // The queue entries carry only free text as the reason, so the carry and held texts are tested before the rebase and fix words.
 const HELD_REASON = /fix limit reached|continue limit reached|needs the homeowner|waiting for the homeowner|parked/i;
 
@@ -18,6 +19,7 @@ export function queueSplit(view) {
   const n = { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, held: 0, total: 0 };
   const entries = Object.values(view.queues || {}).flat();
   const reviewed = new Set(entries.filter(e => e.type === 'review').map(e => e.ref));
+  const heldByLabel = new Set((view.prs || []).filter(p => p.parked || p.needsHomeowner).map(p => p.number));   // the queue reason text does not carry labels
   const seen = new Set();
   for (const e of entries) {
     if (e.type === 'pr' && reviewed.has(e.ref)) continue;
@@ -27,7 +29,7 @@ export function queueSplit(view) {
     n.total++;
     if (e.type === 'issue') n.implement++;
     else if (e.type === 'review') n.review++;
-    else n[pullRequestKind(e.reason || '')]++;
+    else n[heldByLabel.has(e.ref) ? 'held' : pullRequestKind(e.reason || '')]++;
   }
   return n;
 }

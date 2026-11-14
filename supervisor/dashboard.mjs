@@ -919,7 +919,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
       openedAt: (() => { const t = Date.parse(p?.createdAt); if (Number.isFinite(t)) return t; const f = costJobs.filter(j => (state.jobs?.[j.id]?.kind || j.kind) === 'implement' && Number.isFinite(j.updatedAt)).map(j => j.updatedAt); return f.length ? Math.min(...f) : null; })(),
       costUsd: costJobs.some(j => Number.isFinite(j.usage?.costUsdEstimate)) ? costJobs.reduce((s, j) => s + (Number.isFinite(j.usage?.costUsdEstimate) ? j.usage.costUsdEstimate : 0), 0) : null,
       tokens: rel.some(j => j.usage) ? rel.reduce((s, j) => s + (tokensOf(j) || 0), 0) : null,
-      head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), mergedAt: m?.mergedAt ?? null,
+      head: p?.headRefOid ?? null, needsHomeowner: (p?.labels || []).includes('needs-homeowner'), parked: (p?.labels || []).includes('parked'), mergedAt: m?.mergedAt ?? null,
       url: `https://github.com/${repo}/pull/${n}`, verdicts: vs, jobs: prJobs,
       timeline: [...vs.map(v => ({ at: v.at, text: `${v.reviewer}${v.model ? ` (${v.model})` : ''}: ${v.verdict} at ${v.head}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length === 1 ? '' : 's'})` : ''}` })),
         ...vs.filter(v => v.carry).map(v => ({ at: v.carry.at ?? v.at, text: `verdict ${carryText(v.carry)}` })), ...(m ? [{ at: m.mergedAt, text: 'merged' }] : []), ...prJobs.map(j => ({ at: j.startedAt, text: `${j.agent}: ${j.kind} job ${j.status}` }))].filter(r => Number.isFinite(r.at)).sort((a, b) => a.at - b.at) };
