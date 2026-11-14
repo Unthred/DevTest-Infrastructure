@@ -4,25 +4,28 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { validateItem, hashOf, dirs, allStatuses, finish } from './inbox.mjs';
+import { validateItem, SUPERSEDED_BY, hashOf, dirs, allStatuses, finish } from './inbox.mjs';
 
 export const LIVE = new Set(['approved', 'running']);
 const refuse = (status, text, extra = {}) => ({ ok: false, status, text, ...extra });
 
 // Finds the card in the current view and the control it offers. The target comes from the card, never from the request.
-export function resolveClick(view, { card, control }) {
+export function resolveClick(view, { card, control, supersededBy = '' }) {
   const item = (view?.panels?.needsYou || []).find(a => a.id === card);
   if (!item) return refuse(409, 'That card has already cleared. Nothing was changed.', { cleared: true });
   const offered = (item.card?.controls || []).find(c => c.action === control);
   if (!offered) return refuse(409, 'That control no longer applies to this card.');
-  return { ok: true, item, control: offered };
+  // Issue #1337: the numbers are checked here, before anything is recorded; the target still comes from the card.
+  if (offered.input === 'superseded_by' && !SUPERSEDED_BY.test(supersededBy.trim())) return refuse(400, 'Enter one to five superseding issue or pull request numbers, separated by commas.');
+  return { ok: true, item, control: offered.input ? { ...offered, supersededBy: supersededBy.trim() } : offered };
 }
 
 // Writes the approved item. Returns { ok, id } or { ok:false, status, text } when the same change is already waiting for the tick.
 export function recordClick(inboxDir, { item, control }, now = Date.now(), by = 'homeowner') {
   const kind = control.action === 'park' ? 'control' : 'action';
   const reason = `${by} pressed ${control.label} on the ${item.card.type} card`;
-  const raw = { kind, title: `${control.label} ${control.target} (decision card)`, action: control.action, target: control.target, reason };
+  const raw = { kind, title: `${control.label} ${control.target} (decision card)`, action: control.action, target: control.target, reason,
+    ...(control.input === 'superseded_by' ? { superseded_by: control.supersededBy } : {}) };
   const v = validateItem(raw);
   if (!v.ok) return refuse(400, `The control could not be recorded: ${v.reason}.`);
   const waiting = allStatuses(inboxDir).some(s => LIVE.has(s.state) && s.click?.action === control.action && s.click?.target === control.target);

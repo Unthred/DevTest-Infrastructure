@@ -15,10 +15,11 @@ export const CONTROLS = {
   unpark: { label: 'Unpark', target: 'any', does: 'Removes the parked label so the planner may take it again.' },
   clear_latch: { label: 'Clear upgrade latch', target: 'latch', does: 'Clears the upgrade latch so the next tick may install merged work. Refused when no latch is set or an install is running.' },
   resume_breaker: { label: 'Resume breaker', target: 'scope', does: 'Resumes this halted breaker cause exactly as `team breaker resume` does, recorded with who and why. Refused when it is no longer halted.' },
+  close_superseded: { label: 'Close as superseded', target: 'any', input: 'superseded_by', does: 'Saves a pull request branch under saved/, then closes this pull request or issue with a comment naming the numbers you enter. Refused when it is not open, a number does not exist, or a job is running on it.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };
 
-const LATER_FIX = 'An extra fix round and closing as superseded arrive with slice 2 of #1111 (new routine actions); merge, approve and verdict with slice 3.';
+const LATER_FIX = 'An extra fix round arrives with slice 2 of #1111 (new routine actions); merge, approve and verdict with slice 3.';
 const LATER_VERDICT = 'Recording a review verdict from the dashboard arrives with slice 3 of #1111; until then review it on the pull request.';
 const NO_BUTTON = 'Decided on the item itself; there is no routine control for it.';
 
@@ -29,8 +30,8 @@ const T = {
   'tick-stale': { clears: 'clears when the next tick is recorded', actions: [] },
   breaker: { clears: 'clears when a later job of the halted type completes, or when you resume the breaker with the control on this card', actions: ['resume_breaker'],
     later: 'The control resumes only the top halt cause; a second, lower halt is resumed with the Resume button on the breaker card or ai-supervisor team breaker resume.' },
-  fixlimit: { clears: 'clears when a new head is reviewed PASS; no more fix jobs start', actions: ['park'], later: LATER_FIX },
-  churn: { clears: 'clears when the current head is no longer a CHANGES verdict (a new head reviewed PASS); no more fix jobs start', actions: ['park'], later: LATER_FIX },
+  fixlimit: { clears: 'clears when a new head is reviewed PASS; no more fix jobs start', actions: ['close_superseded', 'park'], later: LATER_FIX },
+  churn: { clears: 'clears when the current head is no longer a CHANGES verdict (a new head reviewed PASS); no more fix jobs start', actions: ['close_superseded', 'park'], later: LATER_FIX },
   retrycap: { clears: 'clears when you clear the retry cap or the head changes; Foreman starts no more of that job until then', actions: ['clear_retry_cap', 'park'] },
   reviewlimit: { clears: 'clears when a review records a verdict, or a new head starts a fresh review', actions: ['new_review_attempt', 'park'] },
   reviewrefused: { clears: 'clears when a review at this head records a valid verdict, or a new head is pushed', actions: ['new_review_attempt', 'park'] },
@@ -45,14 +46,14 @@ const T = {
   homeowner: { clears: 'clears when you answer on the issue and the needs-homeowner label is removed', actions: [], later: NO_BUTTON },
   'decision-proposal': { clears: 'clears when the decision (a register entry or its docs/decisions file) is homeowner-approved with your recorded approval, or the pull request is closed', actions: [], later: NO_BUTTON },
   decision: { clears: 'clears when the register entry reads homeowner-approved on main', actions: [], later: NO_BUTTON },
-  stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['park'] },
+  stalled: { clears: 'clears when the pull request makes progress, merges or closes', actions: ['close_superseded', 'park'] },
   'stall-check-error': { clears: 'clears when the next stalled-PR check succeeds', actions: [] },
   job: { clears: 'clears when the job is resumed or closed, or a newer job for the same work starts', actions: ['resume_job', 'close_job'] },
   split: { clears: 'clears when you accept the split, or reshape the issue by hand', actions: [], later: 'Accept the split with the command shown; it has no button yet.' },
   prclosed: { clears: 'clears when the pull request is open again or the item is dropped on the next pass', actions: [] },
   'rebase-lost': { clears: 'clears when the dropped commits are restored on the branch or the head moves', actions: [], later: NO_BUTTON },
   'stale-mark': { clears: 'clears when the issue is reopened for Foreman, or a pull request exists for it', actions: ['reopen'] },
-  ci: { clears: 'clears when the checks on the current head are green or the head moves', actions: ['park'] },
+  ci: { clears: 'clears when the checks on the current head are green or the head moves', actions: ['close_superseded', 'park'] },
   inbox: { clears: 'clears when you approve or reject the proposal on this card', actions: [] },
   inboxfail: { clears: 'clears three days after it failed, or sooner when the work is done another way', actions: [] },
   inboxrefused: { clears: 'clears three days after the latest refusal; the overseer can propose again', actions: [] },
@@ -132,7 +133,7 @@ export function decisionCard(item, ctx = {}) {
   for (const action of wanted) {
     const spec = CONTROLS[action];
     const target = targetFor(item, spec);
-    if (target && applies(action, target, c)) controls.push({ action, target, label: spec.label, does: spec.does });
+    if (target && applies(action, target, c)) controls.push({ action, target, label: spec.label, does: spec.does, ...(spec.input ? { input: spec.input } : {}) });
   }
   return { type, reason: reasonOf(item, type), clears: entry.clears, controls, later: entry.later ?? null };
 }

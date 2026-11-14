@@ -163,7 +163,7 @@ export async function checkForChanges({ repository, prev, config, run, now = Dat
 
 // ---- the client wrapper ----------------------------------------------------------------------------------------------------------
 const READS = new Set(['listPulls', 'listIssues', 'listMergedPulls', 'listClosedPulls', 'listLabels', 'prComments', 'issueComments', 'getIssue', 'issueAuthorAssociation', 'getComment']);
-const WRITES = new Set(['comment', 'createIssue', 'updateIssueBody', 'pinIssue', 'addLabel', 'removeLabel', 'rerunRun', 'merge', 'board']);
+const WRITES = new Set(['comment', 'createIssue', 'updateIssueBody', 'pinIssue', 'addLabel', 'removeLabel', 'rerunRun', 'merge', 'board', 'saveBranch', 'closeItem']);
 const RECENT = new Set(['listPulls', 'listIssues']), RECENT_MS = 20000;
 const keyOf = (name, args) => `${name}|${JSON.stringify(args)}`;
 

@@ -1,0 +1,19 @@
+Read-only task: make no commit, push, branch or pull request, and edit nothing outside {{INBOX}}.
+
+Task: pull request #{{PR}} (branch {{BRANCH}}, source issue {{ISSUE}}) is stuck: {{REASON}}. Foreman has parked it. Draft a split of the remaining work into 2 to 4 smaller items that can each merge on their own.
+
+Read, in this order:
+1. The source issue (`gh issue view {{ISSUE}}`) and pull request, including its verdicts.
+2. The pull request diff (`gh pr diff {{PR}}`).
+3. {{INBOX}}/context.json: the files of this pull request and every other open pull request.
+
+Write {{INBOX}}/split-stuck-draft.json and nothing else:
+{"items": [{"title": "one line", "scope": "one line", "files": ["path/a.mjs"], "acceptance": [{"tag": "before PR", "text": "one line"}, {"tag": "after install", "text": "one line"}], "tests": ["tests/a.test.mjs: what it proves"], "prerequisite": null}]}
+
+Rules:
+- Make 2 to 4 items. Each names only the files it edits, relative to the repository root.
+- Do not name a file another open pull request changes (see context.json); choose a different cut instead.
+- Each item has its own acceptance list. Every line is tagged "before PR" or "after install", and each item has at least one "before PR" line.
+- Each item names its tests.
+- "prerequisite" is the 1-based number of an earlier item that must merge first, or null. Use it only when that order is real.
+- Every title, scope, acceptance line and test is one line of plain text, with no secrets.

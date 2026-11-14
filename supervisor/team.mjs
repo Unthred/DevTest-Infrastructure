@@ -51,7 +51,7 @@ import { verifyPass } from './livechecks.mjs';
 import { scanInboxNow } from './wake.mjs';
 import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
-import { dispatchApproved, unparkApproved, depsOf, unparkedPulls, resumeBreakerApproved } from './controlactions.mjs';
+import { dispatchApproved, unparkApproved, depsOf, unparkedPulls, routineApproved } from './controlactions.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -1965,7 +1965,7 @@ export class Team {
     const id = st.id, now = () => this.clock.now();
     if (!inboxStore.claim(dir, id, 'approved', { state: 'running' }, now())) return;   // issue #856: an Undo won; run nothing
     try {
-      const result = String(await (resumeBreakerApproved(this, item, st) ?? this.applyInboxAction(item, report))).slice(0, 300);   // #1332
+      const result = String(await (routineApproved(this, item, st) ?? this.applyInboxAction(item, report))).slice(0, 300);   // #1332, #1337
       inboxStore.finish(dir, id, { state: 'done', result }, now());
       (report.actions ||= []).push({ type: 'inbox-action', result: `${item.action} ${item.target}: ${result}` });
     } catch (error) {
