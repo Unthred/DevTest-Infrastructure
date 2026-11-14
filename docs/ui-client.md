@@ -20,6 +20,7 @@ The page works under the existing content security policy: script and style file
 | `status.mjs` | the one status function: a condition becomes a tone (the shape drawn by `app.css`) |
 | `appbar.mjs` | draws the bar, the agent panel and the lines under the bar from the app bar model |
 | `format.mjs` | percentages, durations such as `3h 23m`, Europe/London times, state words |
+| `about.mjs` | the About box (issue #1449), below |
 | `app.css` | named colour tokens (light and dark, 4.5 to 1 or better), the bar and the status shapes |
 
 No agent name is in the code: the agents are drawn in the order the model serves them.
@@ -121,3 +122,18 @@ Part 4 of the live board, common code only, so it is the same in every style.
 A plan may also return `offsets` (the share of the time at which each point is reached; the Launch pad uses it to ease the speed, where the other styles keep an even speed) and `trail` (the points of the arc). `boardmotion.mjs` passes both into the travel, `boardtravel.mjs` uses `offsets` in place of the even spread, and `boardtrail.mjs` draws the trail as a dotted line for as long as the flight lasts. Under reduced motion no travel starts, so no trail is drawn.
 
 Tests: `tests/ui-boardstyle-launch.test.mjs`; `node tests/ui-boardstyle-launch-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-boardstyle-launch-scenario.mjs` at 1280.
+
+## The About box (issue #1449)
+
+An **About** button sits at the end of the app bar (`app.mjs` appends it after each redraw and keeps focus on it). It opens a native `dialog` drawn by `about.mjs` from the about model (`GET /api/v1/about`, `docs/api-contract.md`). Nothing is fetched until the box is opened; each opening fetches the model again. Escape and the Close button close it and focus returns to the About button.
+
+- **Top, always shown:** the name Foreman, the short version, when it was installed in words (`Installed today at 09:18`, `Installed yesterday at ...`, otherwise the date), and one status line: upgrades paused with the reason, `N changes waiting to install`, `Up to date`, or that the waiting count is not known.
+- **Three parts, each a native `details` element** (they work from the keyboard):
+  - *What is new in this version*, open at first: the current install's changes as plain sentences under Fixed, Improved, Screens and Tidying; a heading only when it has a change. With no install recorded it says `Nothing new is recorded yet.`
+  - *Earlier*, closed at first: one closed part per day (Today, Yesterday, then the date, Europe/London) with its count (`1 change`, `2 changes`) holding that day's changes under the same headings. The current install is not repeated.
+  - *Technical details*, closed at first: the full commit, the commit of main, the MCP server version, each process with its role and whether it runs the installed version, and the pull request and issue numbers of the current install as plain text.
+- No link leads to GitHub. All text is set with `textContent`, so angle brackets in a sentence show as text.
+- If the model cannot be fetched the box says so in one line and offers **Try again**; it never shows an empty list as if nothing had changed.
+- At 760 px wide or less the box fills the screen and its content scrolls.
+
+Test: `node tests/ui-about-browser.mjs <dir>` (Tower, pinned Chromium, after `node browser/prepare-cache.mjs`) runs `browser/ui-about-scenario.mjs` at 1280 and 390 wide against the real dashboard handler, the real about model and the real web UI files over a temporary state root.
