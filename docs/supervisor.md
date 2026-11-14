@@ -95,6 +95,9 @@ Cron runs the reconcile script with almost no `PATH`, so `gh`, `codex` and `clau
   | `team.mjs` fix limit | `Needs the homeowner: PR #n is still rejected (<cause>) after <n> fix rounds ... Decision needed ...` | action | action |
   | `team.mjs` unblock limit | `Needs the homeowner: Foreman reached <limit>; automatic unblocking has stopped. #n` | action | action |
   | `pendingstepssync.mjs` | `<n> homeowner steps are still waiting: PR #n (<title>), ... See Needs you on the dashboard.` | action | action |
+  | `watchlist.mjs` installed | `Watched change installed: <#n> is merged and installed (<sha>).` | action | info |
+  | `watchlist.mjs` stopped | `Needs the homeowner: watched change <#n> has stopped: <reason>.` | action | action |
+  | `statesave.mjs` save failed | `Foreman cannot save state: <message>` | action | action |
 - **Fix-limit alert retries.** An alert is retried on later ticks until the channel accepts it, then never repeated, and a failure never undoes the notice.
 
 ## Installs do not wait for running jobs (issue #845, replaces the drain of issue #136)

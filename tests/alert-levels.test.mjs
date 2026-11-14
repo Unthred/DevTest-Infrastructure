@@ -127,3 +127,10 @@ test('foreman_alerts shows the level of each alert', async t => {
   const view = alertsView(w.root, { now: Date.now() + 1000 });
   assert.deepEqual(view.alerts.map(a => [a.level, a.delivered]).sort(), [['action', true], ['info', false]]);
 });
+
+test('the supervisor doc table lists every source file that raises an alert', () => {
+  const doc = fs.readFileSync(new URL('../docs/supervisor.md', import.meta.url), 'utf8');
+  for (const file of ['upgrade.mjs', 'team.mjs', 'pendingstepssync.mjs', 'watchlist.mjs', 'statesave.mjs']) {
+    assert.ok(doc.includes(`\`${file}\``), `${file} raises an alert but is not in the docs/supervisor.md table`);
+  }
+});
