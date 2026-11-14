@@ -156,7 +156,7 @@ test('overseer parity: clear_latch is proposed with no target, becomes a card fo
   assert.ok(propose.inputSchema.properties.action.enum.includes('clear_latch'));
   const r = await tools.call('foreman_propose', { kind: 'action', title: 'Clear the upgrade latch', action: 'clear_latch', reason: 'cause fixed' });
   assert.ok(!r.isError, r.text);
-  assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 1);
+  assert.equal(fs.readdirSync(path.join(dir, 'items')).filter(n => !n.startsWith('.n')).length, 1);
 });
 
 // The job commands, through the real entry point (a child process), against a state root with two jobs that share a prefix.

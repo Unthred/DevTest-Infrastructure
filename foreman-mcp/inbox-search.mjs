@@ -18,7 +18,7 @@ export function normaliseInboxText(value) {
 export const inboxSearchTerms = query => normaliseInboxText(query).split(' ').filter(Boolean);
 
 export function inboxSearchText(record = {}) {
-  return [record.title, record.body, record.prompt, record.why, record.reason,
+  return [record.reference, record.title, record.body, record.prompt, record.why, record.reason,
     record.kind, record.state, record.issue, record.pr, record.target,
     ...(Array.isArray(record.links) ? record.links : [])].join(' ');
 }

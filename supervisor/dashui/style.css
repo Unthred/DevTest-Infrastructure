@@ -484,7 +484,7 @@ html[data-sticky=on] .crumbstrip{position:sticky;top:var(--bar-real,var(--bar-h)
 .refresh-now{font-size:inherit;padding:0 var(--sp2)}
 @media print{.refresh-box{display:none}}
 
-.inbox-id code{font-weight:600}.inbox-kind{color:var(--mut);font-size:.9em}
+.inbox-ref{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}.inbox-id code{font-weight:600}.inbox-kind{color:var(--mut);font-size:.9em}
 /* ---- issue #927: layout controls on the right, card picker, card groups, app bar editing */
 .layoutbar{justify-content:flex-end}
 .layoutbar .lay-hint{flex:1 1 100%;text-align:right}

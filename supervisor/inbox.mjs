@@ -12,6 +12,8 @@ import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
 import { afterFormatRefusal, afterLabels, resolveAfter } from '../foreman-mcp/draft-after.mjs';
+import { referenceText } from '../foreman-mcp/inbox-reference.mjs';
+import { assignNumber, hasNumber, unnumberedOldestFirst } from './inboxnumber.mjs';
 
 export const KINDS = ['prompt', 'issue_draft', 'action', 'control'];
 // Issue #855: kinds only Foreman raises itself (raiseHostValue). The overseer cannot submit one: scan() validates files without `internal`.
@@ -172,9 +174,16 @@ export function audit(inboxDir, entry, now = Date.now()) {
 export const statusOf = (inboxDir, id) => (ID_RE.test(String(id)) ? readJson(path.join(dirs(inboxDir).status, `${id}.json`)) : null);
 function setStatus(inboxDir, id, patch, now) {
   const file = path.join(dirs(inboxDir).status, `${id}.json`), cur = readJson(file) || {};
-  writeAtomic(file, { ...cur, ...patch, id, updatedAt: now });
+  const number = hasNumber(cur) ? cur.number : assignNumber(inboxDir, id);   // issue #1414: given once, when the item is first recorded
+  writeAtomic(file, { ...cur, ...patch, id, number, updatedAt: now });
   if (FINAL_NOW.includes(patch.state)) { try { fs.unlinkSync(path.join(dirs(inboxDir).items, `${id}.json`)); } catch { /* already gone */ } }
-  return { ...cur, ...patch, id };
+  return { ...cur, ...patch, id, number };
+}
+const numberFields = s => ({ number: s.number ?? null, reference: referenceText(s.number, s.issue) });   // issue #1414
+// Issue #1414: items recorded before numbers existed get theirs once, oldest first; a second run finds none left. updatedAt is kept, so
+// the fourteen-day clean-up is not restarted. An item whose lock is held is left for the next pass.
+function numberExisting(inboxDir) {
+  for (const s of unnumberedOldestFirst(allStatuses(inboxDir))) withLock(inboxDir, s.id, () => setStatus(inboxDir, s.id, {}, s.updatedAt));
 }
 
 // Picks up new item files. A file is read only if it is a regular file (never a symlink), small, and has a well-formed name; an item
@@ -185,6 +194,7 @@ export function scan(inboxDir, now = Date.now(), { maxPending = LIMITS.pending }
   fs.mkdirSync(d.status, { recursive: true, mode: 0o755 });
   // The MCP server reads this to refuse at submit time exactly what pickup would refuse (it cannot write status/, so it only reads).
   try { if (readJson(limitsFile(inboxDir))?.pending !== maxPending) writeAtomic(limitsFile(inboxDir), { pending: maxPending }); } catch { /* the MCP server then uses its default */ }
+  numberExisting(inboxDir);
   sweepFinished(inboxDir, now);
   let names = [];
   try { names = fs.readdirSync(d.items); } catch { return { picked: 0 }; }
@@ -257,9 +267,10 @@ const actionText = it => `${it.action} ${it.target}${it.superseded_by ? ` (super
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
     const l = loadItem(inboxDir, s.id);
-    if (!l.ok) return { id: s.id, kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
+    if (!l.ok) return { id: s.id, ...numberFields(s), kind: s.kind, state: s.state, createdAt: s.createdAt ?? null, title: s.title ?? null, hash: s.hash?.slice(0, 12) ?? '', broken: l.reason };
     const it = l.item, clip = (t, n) => redactLong(String(t ?? '').replace(/\r/g, ''), n, ' [cut]').trim();
-    return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
+    return { id: s.id, ...numberFields(s),
+      kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
       waitsFor: it.after ? afterLabels(inboxDir, it.after) : undefined,
       will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.' + chainNote(inboxDir, it),
       text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? actionText(it) : it.body, LIMITS.prompt) };

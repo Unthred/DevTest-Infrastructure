@@ -10,6 +10,8 @@ import { secretShapedRefusal } from './refusal-reason.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 import { afterFormatRefusal, afterLabels, resolveAfter } from './draft-after.mjs';
+import { numberFromReference, referenceOf, referenceText } from './inbox-reference.mjs';
+import { idOfNumber, releaseReservation, reservedNumber, reserveNumber } from './inbox-reserve.mjs';
 
 export const LIMITS = { title: 200, prompt: 8000, body: 8000, why: 400, reason: 300, waiting: 30, action: 40, target: 40 };
 // issue #629: the names Foreman accepts; issue #1160: clear_latch takes no target (checkProposal fills in the fixed word)
@@ -106,10 +108,10 @@ const waitsForOf = (dir, s, item) => {
   return labels ? { waitsFor: labels } : {};
 };
 // Issue #1314: `stored` lists which optional fields were kept, so a dropped one is visible in the reply.
-function submittedReply(dir, id, item, link) {
+function submittedReply(dir, id, item, link, number) {
   const stored = OPTIONAL.filter(k => item[k] !== undefined);
   const waitsFor = item.after ? { waitsFor: afterLabels(dir, item.after) } : {};
-  return { id, shortId: id.slice(0, 8), link, state: 'submitted', stored, ...waitsFor, note: SUBMITTED_NOTE };
+  return { id, shortId: id.slice(0, 8), number, reference: referenceOf(number), link, state: 'submitted', stored, ...waitsFor, note: SUBMITTED_NOTE };
 }
 export function createInbox({ dir, baseUrl = null }) {
   // Issue #977: the dashboard link for an item, so the overseer can pass it on. Absent when no dashboard address is configured.
@@ -138,11 +140,17 @@ export function createInbox({ dir, baseUrl = null }) {
       const w = waiting(), full = c.item.kind !== 'control' && w.total >= w.limit;   // a stop is never held back by a full queue (issue #1115)
       if (full) throw new Error(`the inbox is full: ${w.total} items are waiting (${w.pending} for the homeowner's decision, ${w.unpicked} not yet picked up by Foreman); the limit is ${w.limit}. Wait for the homeowner to decide some`);
       const id = crypto.randomBytes(16).toString('hex'), file = path.join(items, `${id}.json`);
-      fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 });
-      return submittedReply(dir, id, c.item, linkFor(id));
+      const number = reserveNumber(dir, id);   // issue #1414: Foreman adopts this number when it picks the item up
+      try { fs.writeFileSync(file, JSON.stringify(c.item) + '\n', { flag: 'wx', mode: 0o600 }); } catch (err) { releaseReservation(dir, number); throw err; }
+      return submittedReply(dir, id, c.item, linkFor(id), number);
     },
     status(id) {
       if (!dir) throw new Error('the inbox is not configured on this server');
+      const wanted = numberFromReference(id);   // issue #1414: the card number the dashboard shows ("C142")
+      if (wanted !== null) {
+        id = idOfNumber(dir, wanted);
+        if (!id) throw new Error('no such item');
+      }
       if (/^[a-f0-9]{8}$/.test(String(id))) {   // the short id the dashboard shows: resolved only when exactly one item starts with it
         // Foreman deletes items/<id>.json once an item is finished, so status/ is searched as well.
         const found = new Set();
@@ -157,10 +165,11 @@ export function createInbox({ dir, baseUrl = null }) {
       let s = null; try { s = JSON.parse(fs.readFileSync(path.join(status, `${id}.json`), 'utf8')); } catch { /* none yet */ }
       if (!s) {
         if (!fs.existsSync(path.join(items, `${id}.json`))) throw new Error('no such item');
-        return { id, shortId: id.slice(0, 8), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
+        const number = reservedNumber(dir, id);
+        return { id, shortId: id.slice(0, 8), number, reference: referenceOf(number), link: linkFor(id), state: 'waiting', note: 'Foreman has not picked this item up yet (it does so on its next tick).' };
       }
       return {
-        id, shortId: id.slice(0, 8), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null,
+        id, shortId: id.slice(0, 8), number: s.number ?? null, reference: referenceText(s.number, s.issue), link: linkFor(id), state: s.state, kind: s.kind ?? null, reason: s.reason ?? null, result: s.result ?? null,
         decidedAt: s.decidedAt ? new Date(s.decidedAt).toISOString() : null,
         updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
         issue: s.issue ?? null, job: s.job ?? null,
@@ -188,6 +197,8 @@ export function createInbox({ dir, baseUrl = null }) {
         const record = {
           id: s.id,
           shortId: s.id.slice(0, 8),
+          number: s.number ?? null,
+          reference: referenceText(s.number, s.issue),
           title: item?.title ?? s.title ?? null,
           body: item?.body ?? null,
           prompt: item?.prompt ?? null,

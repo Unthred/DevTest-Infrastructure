@@ -249,6 +249,7 @@ function world(t, { prs = [], issues = [] } = {}) {
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'gbp.mjs'), path.join(code, 'foreman-mcp', 'gbp.mjs'));
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'inbox-search.mjs'), path.join(code, 'foreman-mcp', 'inbox-search.mjs'));
   fs.cpSync(path.join(here, '..', 'foreman-mcp', 'draft-after.mjs'), path.join(code, 'foreman-mcp', 'draft-after.mjs'));
+  for (const f of ['inbox-reference.mjs', 'inbox-reserve.mjs']) fs.cpSync(path.join(here, '..', 'foreman-mcp', f), path.join(code, 'foreman-mcp', f));
   const teamFile = path.join(code, 'supervisor', 'team.json'), team = JSON.parse(fs.readFileSync(teamFile, 'utf8'));
   team.enabled = true; team.repo_path = repo; team.worktree_base = dir; team.agents.claude.issues = [901]; team.agents.codex.issues = []; team.limits.chain_seconds = 0;
   fs.writeFileSync(teamFile, JSON.stringify(team));

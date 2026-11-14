@@ -84,7 +84,8 @@ test('route: a JSON decision answers with the state and undo time; the card leav
   const s = await serve(t, dir);
   assert.equal((await view(s)).panels.inbox.length, 2);
   const page0 = (await s.get('/inbox')).body;
-  assert.match(page0, new RegExp(`<li class="inbox-item" id="att-inbox-${a}"[\\s\\S]*?<h3 class="inbox-title t">Tidy docs 1</h3>`), 'the live decision handler receives an Inbox list row and title');
+  const listRow = new RegExp(`<li class="inbox-item" id="att-inbox-${a}"[\\s\\S]*?<h3 class="inbox-title t"><span class="inbox-ref">C[12]</span> Tidy docs 1</h3>`);
+  assert.match(page0, listRow, 'the live decision handler receives an Inbox list row and title');
   assert.match(page0, /<details class="inbox-decided" hidden>/, 'an empty list is ready for the script to fill');
   assert.match(page0, /<span class="inbox-outcome" hidden><\/span>/);
   assert.match(page0, /<div class="inbox-err" role="alert" hidden>/);

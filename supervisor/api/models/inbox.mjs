@@ -4,6 +4,7 @@
 import { allStatuses, pendingCards, UNDO_MS, ACTIONS } from '../../inbox.mjs';
 import { redactLong } from '../../redact.mjs';
 import { reasonCodeOf } from '../inbox-reasons.mjs';
+import { referenceText } from '../../../foreman-mcp/inbox-reference.mjs';
 import { filterOf, pageOf, countBy, sortItems } from '../inbox-query.mjs';
 
 export const name = 'inbox';
@@ -56,6 +57,8 @@ function itemOf(status, card, now, known) {
   return {
     id: status.id.slice(0, 8),
     full_id: status.id,
+    number: status.number ?? null,   // issue #1414: the card number people use ("C142")
+    reference: referenceText(status.number, status.issue),
     kind,
     state,
     attention: attentionOf(state),

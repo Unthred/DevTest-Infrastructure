@@ -63,7 +63,7 @@ const CARDS_SCHEMA = {
 
 const STATUS_SCHEMA = {
   type: 'object',
-  properties: { id: { type: 'string', pattern: '^([a-f0-9]{8}|[a-f0-9]{32})$' } },
+  properties: { id: { type: 'string', pattern: '^([a-f0-9]{8}|[a-f0-9]{32}|[Cc][0-9]{1,9})$', description: 'the id foreman_propose returned (8 or 32 characters) or the card reference, for example C142' } },
   required: ['id'],
   additionalProperties: false,
 };
@@ -93,7 +93,7 @@ export function inboxToolDefs(inbox, search = null, cards = null) {
     },
     {
       name: 'foreman_proposal_status',
-      description: 'The state of a proposal made with foreman_propose: waiting, pending (awaiting the homeowner), refused (with the reason), rejected, approved, running, done or failed, with the result summary once there is one.',
+      description: 'The state of a proposal made with foreman_propose, found by its id or its card reference such as C142 (the number the dashboard shows at the start of the title; with the issue number once posted): waiting, pending (awaiting the homeowner), refused (with the reason), rejected, approved, running, done or failed, with the result summary once there is one.',
       inputSchema: STATUS_SCHEMA,
       run: args => inbox.status(args.id),
     },
