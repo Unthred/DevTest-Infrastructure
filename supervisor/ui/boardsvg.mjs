@@ -1,6 +1,8 @@
 // Issue #1312: draws the board as SVG from the geometry of boardlayout.mjs. Elements are built with textContent only, so no text from the
 // model is read as markup. It keeps no state: board.mjs passes the model, the time and what is open.
-import { LAYOUT, boardGeometry, hopperBalls, boxBalls, runningBalls, allowanceView, isOut, jobClass, agentClass, ballName, boxLabel } from './boardlayout.mjs';
+import { LAYOUT, boardGeometry, hopperBalls, boxBalls, runningBalls, allowanceView, isOut, jobClass, agentClass, boxLabel } from './boardlayout.mjs';
+import { familyClass, agentIdOf, ballShape, accessibleName } from './boardball.mjs';
+import { iconMasks, ballBody, drawLaneModel } from './boardballdraw.mjs';
 import * as pegStyle from './boardstyle-peg.mjs';
 import { percent, dateTime, duration } from './format.mjs';
 
@@ -18,13 +20,17 @@ const text = (x, y, content, cls = '') => {
   return node;
 };
 
-// A ball: a circle with its number, a lap count above zero, and a hint (hold reason, no estimate, running long) shown on hover and focus.
+const laps = entry => (entry.laps > 0 ? `, ${entry.laps} ${entry.laps === 1 ? 'lap' : 'laps'}` : '');
+
+// A ball: its shape (the agent's icon or a disc with a letter) in the colour of its job family, its number, a lap count above zero, and a
+// hint (hold reason, no estimate, running long) shown on hover and focus. The accessible name is job type, number, agent and model.
 function ball(entry, place, extra) {
-  const { x, y, cls, key, label, hint, mark } = extra;
-  const group = svg('g', { class: `ball ${cls}`, tabindex: '0', role: 'button', 'data-ball': key, 'aria-label': `${label}${hint ? `. ${hint}` : ''}` });
-  group.append(svg('circle', { cx: x, cy: y, r: LAYOUT.ballRadius }));
-  const number = text(x, y + 3, entry.number == null ? '–' : String(entry.number), 'num');
-  group.append(number);
+  const { x, y, cls, key, label, hint, mark, data, icons } = extra;
+  const agentId = agentIdOf(entry, data);
+  const shape = ballShape(data, agentId, icons?.href(agentId) ?? null);
+  const group = svg('g', { class: `ball ${familyClass(entry.job_type)} ${cls}`, tabindex: '0', role: 'button', 'data-ball': key,
+    'aria-label': `${label}, ${accessibleName(entry, data)}${laps(entry)}${hint ? `. ${hint}` : ''}` });
+  group.append(...ballBody(svg, x, y, shape, agentId, entry.number));
   if (mark) group.append(svg('rect', { class: `tied ${mark}`, x: x + 4, y: y - LAYOUT.ballRadius - 2, width: 7, height: 7 }));
   if (entry.laps > 0) group.append(text(x - LAYOUT.ballRadius, y - LAYOUT.ballRadius, `${entry.laps}↻`, 'laps'));
   if (hint) {
@@ -36,14 +42,14 @@ function ball(entry, place, extra) {
   return group;
 }
 
-function drawLanes(root, geometry, data, view) {
+function drawLanes(root, geometry, data, view, running) {
   for (const group of geometry.groups) {
     const out = isOut(group.agent);
     const layer = svg('g', { class: `group${out ? ' out' : ''}`, 'data-agent-group': group.agent.id });
     layer.append(text(group.x, 22, group.agent.display_name, 'agent-name'));
     for (const { lane, x, w } of group.lanes) {
       layer.append(svg('rect', { class: 'lane', x, y: LAYOUT.laneTop, width: w, height: LAYOUT.laneBottom - LAYOUT.laneTop, rx: 6, 'data-lane': lane.id }));
-      layer.append(text(x + w / 2, LAYOUT.laneBottom + 14, lane.model ?? 'default', 'lane-label'));
+      layer.append(drawLaneModel(svg, lane, { x, w }, running.filter(ride => ride.job.lane_id === lane.id).map(ride => ride.y)));
     }
     drawAllowance(layer, geometry, group, view);
     root.append(layer);
@@ -83,7 +89,7 @@ function drawAllowance(layer, geometry, group, view) {
   if (agent.out_reason) layer.append(text(group.x, top + 120, agent.out_reason.slice(0, 40), 'out-label'));
 }
 
-function drawHopper(root, geometry, data) {
+function drawHopper(root, geometry, data, view) {
   const { hopper } = geometry;
   const group = svg('g', { class: 'hopper', 'data-hopper': '' });
   group.append(svg('rect', { class: 'hopper-box', x: hopper.x, y: hopper.y, width: hopper.w, height: hopper.h, rx: 8 }));
@@ -93,22 +99,24 @@ function drawHopper(root, geometry, data) {
     const tied = item.tied_agent ? agentClass(data.agents, item.tied_agent) : null;
     const hint = item.held ? `Held: ${item.held.reason}` : '';
     const cls = `${jobClass(item.job_type)}${item.held ? ' held' : ''}`;
-    group.append(ball(item, geometry, { x, y, cls, key: `waiting:${item.place}`, label: `Waiting place ${item.place}, ${ballName(item)}`, hint, mark: tied }));
+    group.append(ball(item, geometry, { x, y, cls, key: `waiting:${item.place}`, label: `Waiting place ${item.place}`, hint, mark: tied,
+      data, icons: view.icons }));
   }
   if (hidden > 0) group.append(text(hopper.x + hopper.w - 8, hopper.y + hopper.h - 6, `+${hidden} more, see the list`, 'more'));
   root.append(group);
 }
 
-function drawRunning(root, geometry, data, now) {
-  for (const { job, ride, x, y } of runningBalls(data.running, geometry, now)) {
+function drawRunning(root, geometry, data, view, placed) {
+  for (const { job, ride, x, y } of placed) {
     const state = ride.long ? ' long' : ride.noEstimate ? ' no-estimate' : '';
     const hint = ride.long ? 'Running long' : ride.noEstimate ? 'No estimate' : '';
-    const label = `Running, ${ballName(job)}${hint ? `, ${hint.toLowerCase()}` : ''}`;
-    root.append(ball(job, geometry, { x, y, cls: `${jobClass(job.job_type)}${state}`, key: `running:${job.job_id}`, label, hint, mark: null }));
+    const label = 'Running';
+    root.append(ball(job, geometry, { x, y, cls: `${jobClass(job.job_type)}${state}`, key: `running:${job.job_id}`, label, hint, mark: null,
+      data, icons: view.icons }));
   }
 }
 
-function drawBoxes(root, geometry, data) {
+function drawBoxes(root, geometry, data, view) {
   for (const { box, placed, hidden } of boxBalls(data.landed, geometry)) {
     const group = svg('g', { class: `box box-${box.id}`,
       tabindex: '0', role: 'button', 'data-box': box.id, 'aria-label': `${box.label}, ${data.counts[box.id] ?? 0} in the last 24 hours` });
@@ -118,7 +126,7 @@ function drawBoxes(root, geometry, data) {
     root.append(group);
     for (const { item, x, y } of placed) {
       root.append(ball(item, geometry, { x, y, cls: jobClass(item.job_type),
-        key: `landed:${item.job_id}`, label: `${boxLabel(box.id)}, ${ballName(item)}`, hint: '', mark: null }));
+        key: `landed:${item.job_id}`, label: boxLabel(box.id), hint: '', mark: null, data, icons: view.icons }));
     }
     if (hidden > 0) root.append(text(box.x + box.w - 6, box.y + box.h - 6, `+${hidden}`, 'more'));
   }
@@ -134,11 +142,12 @@ export function drawBoard(data, width, now, view, style = pegStyle) {
   const hatch = svg('pattern', { id: 'hatch', width: 6, height: 6,
     patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svg('rect', { width: 3, height: 6, class: 'hatch-bar' }));
   const scenery = style.draw(geometry, svg);
-  root.append(svg('defs', {}, hatch, ...scenery.defs));
+  root.append(svg('defs', {}, hatch, ...iconMasks(svg, data.agents, view.icons), ...scenery.defs));
   root.append(...scenery.nodes);
-  drawLanes(root, geometry, data, view);
-  drawHopper(root, geometry, data);
-  drawRunning(root, geometry, data, now);
-  drawBoxes(root, geometry, data);
+  const running = runningBalls(data.running, geometry, now);
+  drawLanes(root, geometry, data, view, running);
+  drawHopper(root, geometry, data, view);
+  drawRunning(root, geometry, data, view, running);
+  drawBoxes(root, geometry, data, view);
   return root;
 }

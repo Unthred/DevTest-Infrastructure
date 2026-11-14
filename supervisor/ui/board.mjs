@@ -4,6 +4,7 @@
 // (boardmotion.mjs, boardtravel.mjs). Opening the screen, Retry and a resize move nothing. No timer fetches data or starts travel.
 // Part 3 (issue #1315): the scenery and the path of a ball come from the chosen board style (boardstyle-<name>.mjs). Styles load when the screen
 // opens; the switch (boardswitch.mjs) redraws at once and starts no travel.
+// Part 4 (issue #1317): a ball is its agent's icon in its job family colour; icons are asked for once per agent each time the screen opens.
 import { fetchModel } from './client.mjs';
 import { drawBoard } from './boardsvg.mjs';
 import { renderLists, boxSection, errorLine, detailPanel, el } from './boardlists.mjs';
@@ -14,6 +15,8 @@ import * as pegStyle from './boardstyle-peg.mjs';
 import { dateTime } from './format.mjs';
 import { planChange, carryLaps, withLaps } from './boardmotion.mjs';
 import { Travels, prefersReducedMotion } from './boardtravel.mjs';
+import { IconStore } from './boardicons.mjs';
+import { legend } from './boardlegend.mjs';
 
 // The ball a key such as running:<job id>, waiting:<place> or landed:<job id> stands for.
 export function findBall(data, key) {
@@ -59,6 +62,8 @@ export class BoardScreen {
     this.storage = deps.storage === undefined ? browserStorage() : deps.storage;
     this.styleLoader = deps.loadStyles ?? loadStyles;
     this.changedCount = 0;
+    this.iconDeps = deps.icons ?? {};
+    this.icons = null;
     this.onClick = event => this.activate(event.target);
     this.onKey = event => this.key(event);
     this.onResize = () => this.draw();
@@ -67,6 +72,7 @@ export class BoardScreen {
   open() {
     if (this.root) return;
     this.root = el('div', { class: 'board-screen' });
+    this.icons = new IconStore(() => this.draw(), this.iconDeps);
     this.main.replaceChildren(this.root);
     this.main.addEventListener('click', this.onClick);
     document.addEventListener('keydown', this.onKey);
@@ -96,6 +102,7 @@ export class BoardScreen {
     document.removeEventListener('keydown', this.onKey);
     window.removeEventListener('resize', this.onResize);
     this.root = null;
+    this.icons?.close();
     this.ball = null;
     this.box = null;
     this.travels.stop();
@@ -122,6 +129,7 @@ export class BoardScreen {
       this.model = await this.load('liveboard');
       this.receivedAt = Date.now();
       this.error = null;
+      this.icons?.request(this.model.data.agents);
       if (compare && before) this.travelFrom(before, this.model.data);
     } catch (error) {
       this.error = String(error.message ?? error);
@@ -145,7 +153,7 @@ export class BoardScreen {
   }
 
   view() {
-    return { receivedAt: this.receivedAt, now: Date.now() };
+    return { receivedAt: this.receivedAt, now: Date.now(), icons: this.icons };
   }
 
   body() {
@@ -156,7 +164,7 @@ export class BoardScreen {
     if (svg) holder.append(svg);
     const parts = [];
     if (svg && this.width() >= LAYOUT.minWidth && showSwitch([...this.styles.keys()])) parts.push(renderSwitch(this.styles, this.styleName));
-    parts.push(holder);
+    parts.push(legend(), holder);
     if (this.box) parts.push(el('div', { class: 'picked-box' }, boxSection(data, this.box, BOXES.find(box => box.id === this.box).label, 'h2')));
     parts.push(renderLists(data, this.view()));
     const found = this.ball ? findBall(data, this.ball) : null;
