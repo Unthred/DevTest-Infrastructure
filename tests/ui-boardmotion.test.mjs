@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { MOTION, PEG, diffBoard, splitEvents, planLand, planChange, pegPoints, hashOf, offsetsOf, carryLaps, withLaps, targetKey }
   from '../supervisor/ui/boardmotion.mjs';
 import { LAYOUT, boardGeometry } from '../supervisor/ui/boardlayout.mjs';
+import { Travels } from '../supervisor/ui/boardtravel.mjs';
 
 const lane = (agent, model) => ({ id: `${agent}/${model}`, agent, model, job_types: ['implement'] });
 const agent = id => ({ id, display_name: id, condition: { state: 'idle' }, weekly: null, short: null, reading: null, out_until: null, out_reason: null });
@@ -52,7 +53,7 @@ test('valid: pull request 1244 lands in Changes asked, then waiting again gives 
   const land = diffBoard(running1244, changes1244);
   assert.deepEqual(land.map(event => [event.type, event.box]), [['land', 'changes_asked']]);
   const back = diffBoard(changes1244, again1244);
-  assert.deepEqual(back, [{ type: 'return', job_id: '6ff7be3f', number: 1244, job_type: 'review', box: 'changes_asked', laps_from: 1, laps_to: 2 }]);
+  assert.deepEqual(back, [{ type: 'return', job_id: '6ff7be3f', number: 1244, job_type: 'review', box: 'changes_asked', laps_from: 1, laps_to: 2, after_land: false }]);
   const carry = carryLaps(new Map(), back, again1244);
   assert.equal(withLaps(again1244, carry).waiting[0].laps, 2, 'the waiting ball shows one more lap');
   assert.equal(carryLaps(carry, [], board()).size, 0, 'the figure is forgotten once the item is no longer waiting');
@@ -200,4 +201,30 @@ test('valid: hashOf is stable, offsetsOf runs from 0 to 1, targetKey finds the b
   assert.equal(targetKey({ kind: 'landed', id: 'aaaa1307' }, third1307), 'landed:aaaa1307');
   assert.equal(targetKey({ kind: 'waiting', ident: 'review:1244' }, again1244), 'waiting:1');
   assert.equal(targetKey({ kind: 'waiting', ident: 'review:1244' }, first1307), null);
+});
+
+test('valid: a landing in Changes asked and the item waiting again in one reply give a land then a return that waits for the land', () => {
+  const both = board({ waiting: [waiting(1, 1244, 'review')], landed: changes1244.landed });
+  const events = diffBoard(running1244, both);
+  assert.deepEqual(events.map(event => event.type), ['land', 'return']);
+  assert.equal(events[1].laps_to, 2);
+  const { travels } = planChange(running1244, both, { width: WIDTH, now: 0 });
+  const [land, back] = travels;
+  assert.deepEqual([land.kind, back.kind], ['land', 'return']);
+  assert.equal(back.delayMs, land.durationMs, 'the ball rolls back only after it has dropped into its box');
+  assert.deepEqual(diffBoard(both, both), [], 'the next equal reply gives nothing more');
+});
+
+test('valid: a newer travel or a vanished ball ends the older travel of the same ball', () => {
+  let clock = 0;
+  const travels = new Travels({ now: () => clock });
+  const launch = { target: { kind: 'running', id: 'aaaa1307' }, kind: 'launch', points: [{ x: 0, y: 0 }, { x: 5, y: 5 }], durationMs: 900 };
+  travels.begin([launch], second1307);
+  clock = 300;
+  travels.begin([{ ...launch, kind: 'land', target: { kind: 'landed', id: 'aaaa1307' } }], third1307);
+  assert.deepEqual(travels.active.map(travel => travel.kind), ['land'], 'the launch ends because its ball is no longer running');
+  clock = 400;
+  travels.begin([{ ...launch, kind: 'land', target: { kind: 'landed', id: 'aaaa1307' } }], third1307);
+  assert.equal(travels.active.length, 1, 'a newer travel of the same ball replaces the older one');
+  assert.equal(travels.active[0].startedAt, 400);
 });

@@ -41,8 +41,9 @@ export function diffBoard(prev, next, warn = quiet) {
     events.push({ type: 'land', job_id: job.job_id, lane_id: job.lane_id, job_type: job.job_type, number: job.number,
       box: boxOf(job.box, warn), from: wasRunning.has(job.job_id) ? 'lane_top' : 'lane_foot' });
   }
+  // The landings of both replies: the review that lands in Changes asked and the fix queued behind it often arrive in one reply.
   const latest = new Map();
-  for (const job of prev.landed) {
+  for (const job of [...prev.landed, ...next.landed]) {
     if (job.number == null) continue;
     const held = latest.get(job.number);
     if (!held || Date.parse(job.ended_at) > Date.parse(held.ended_at)) latest.set(job.number, job);
@@ -50,7 +51,8 @@ export function diffBoard(prev, next, warn = quiet) {
   for (const item of next.waiting) {
     const job = latest.get(item.number);
     if (!job || !RETURN_BOXES.has(job.box) || wasWaiting.has(item.number)) continue;
-    events.push({ type: 'return', job_id: job.job_id, number: item.number, job_type: item.job_type, box: job.box, laps_from: job.laps, laps_to: job.laps + 1 });
+    events.push({ type: 'return', job_id: job.job_id, number: item.number, job_type: item.job_type, box: job.box, laps_from: job.laps, laps_to: job.laps + 1,
+      after_land: !wasLanded.has(job.job_id) });
   }
   return events;
 }
@@ -175,10 +177,10 @@ function returnTravel(event, ctx) {
   const to = ctx.nextHopper.get(identOf(event));
   if (!to) return null;
   const box = ctx.gPrev.boxes.find(candidate => candidate.id === event.box);
-  const from = ctx.prevBoxes.get(event.job_id) ?? (box ? boxCentre(box) : firstSlot(ctx.gPrev));
+  const from = ctx.prevBoxes.get(event.job_id) ?? ctx.nextBoxes.get(event.job_id) ?? (box ? boxCentre(box) : firstSlot(ctx.gPrev));
   const floor = ctx.gNext.height - LAYOUT.bottomPad - LAYOUT.ballRadius;
   return { target: { kind: 'waiting', ident: identOf(event) }, kind: 'return', points: [from, { x: from.x, y: floor }, { x: to.x, y: floor }, to],
-    durationMs: MOTION.returnMs, laps: { from: event.laps_from, to: event.laps_to } };
+    durationMs: MOTION.returnMs, delayMs: ctx.landMs.get(event.job_id) ?? 0, laps: { from: event.laps_from, to: event.laps_to } };
 }
 
 // The remaining hopper balls close up when one of them has left.
@@ -206,7 +208,16 @@ export function planChange(prev, next, { width, now }, warn = quiet) {
     prevBoxes: slotsByKey(boxBalls(prev.landed, gPrev, warn).flatMap(entry => entry.placed), job => job.job_id),
     nextBoxes: slotsByKey(boxBalls(next.landed, gNext, warn).flatMap(entry => entry.placed), job => job.job_id) };
   const make = { launch: launchTravel, land: landTravel, return: returnTravel };
-  const travels = animate.map(event => make[event.type](event, ctx)).filter(Boolean);
+  ctx.landMs = new Map();
+  // Lands are planned first: a return that arrives with its own land waits until the ball has dropped into its box.
+  const ordered = [...animate.filter(event => event.type !== 'return'), ...animate.filter(event => event.type === 'return')];
+  const travels = [];
+  for (const event of ordered) {
+    const travel = make[event.type](event, ctx);
+    if (!travel) continue;
+    if (event.type === 'land') ctx.landMs.set(event.job_id, travel.durationMs);
+    travels.push(travel);
+  }
   return { events, travels: [...travels, ...closeUps(animate, ctx)], changed };
 }
 

@@ -16,7 +16,7 @@ export class Travels {
   // A new change: travels of a ball that is no longer where it was, or that has a newer travel, end at its new place.
   begin(planned, data) {
     const at = this.now();
-    this.active = this.active.filter(travel => at - travel.startedAt < travel.durationMs && targetKey(travel.target, data) !== null
+    this.active = this.active.filter(travel => at - travel.startedAt < travel.durationMs + (travel.delayMs ?? 0) && targetKey(travel.target, data) !== null
       && !planned.some(next => sameTarget(next.target, travel.target)));
     this.active.push(...planned.map(travel => ({ ...travel, startedAt: at })));
   }
@@ -28,7 +28,7 @@ export class Travels {
   // Puts every travel still under way on its ball in the freshly drawn root, at the point of its path it has reached by now.
   apply(root, data) {
     const at = this.now();
-    this.active = this.active.filter(travel => at - travel.startedAt < travel.durationMs);
+    this.active = this.active.filter(travel => at - travel.startedAt < travel.durationMs + (travel.delayMs ?? 0));
     for (const travel of this.active) {
       const key = targetKey(travel.target, data);
       const node = key === null ? null : root.querySelector(`.board-svg [data-ball="${CSS.escape(key)}"]`);
@@ -40,7 +40,7 @@ export class Travels {
     const rest = travel.points[travel.points.length - 1];
     const offsets = offsetsOf(travel.points);
     const frames = travel.points.map((point, index) => ({ transform: `translate(${point.x - rest.x}px, ${point.y - rest.y}px)`, offset: offsets[index] }));
-    const animation = node.animate(frames, { duration: travel.durationMs, easing: 'linear' });
+    const animation = node.animate(frames, { duration: travel.durationMs, delay: travel.delayMs ?? 0, fill: 'backwards', easing: 'linear' });
     animation.currentTime = elapsed;
     if (travel.laps) this.showLaps(node, travel.laps, animation);
   }
