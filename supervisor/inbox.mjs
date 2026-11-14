@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { redactLong } from './redact.mjs';
+import { secretShaped, secretShapedInFile, secretShapedReason, maskedReason } from './inbox-refusal.mjs';
 import { validateHostValue, HOST_KEYS } from './hostvalue.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependencies.mjs';
 import { matchesInboxSearch } from '../foreman-mcp/inbox-search.mjs';
@@ -87,30 +88,14 @@ export const limitsFile = inboxDir => path.join(dirs(inboxDir).status, 'limits.j
 export const dirs = inboxDir => ({ items: path.join(inboxDir, 'items'), status: path.join(inboxDir, 'status'), audit: path.join(inboxDir, 'audit.jsonl') });
 export const hashOf = item => crypto.createHash('sha256').update(JSON.stringify(item)).digest('hex');
 
-// Text that looks like a credential, or an AI attribution line the project forbids. Matching is on the raw text, so it cannot be hidden by
-// a case change. The list is deliberately broad: a refused item costs the overseer one rewrite.
-const SECRET_RULES = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]{8,}/,
-  /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/,
-  /\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/,
-  /\bhv[sbr]\.[\w-]{8,}/,
-  /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/i,
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@/i,
-  /\b(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential)s?["']?\s*[:=]\s*["']?(?!\[)[^\s"',;&]{6,}/i,
-  /\b(?![0-9a-f]{40}\b)(?![0-9a-f]{64}\b)[A-Za-z0-9_-]{40,}\b/,
-];
-// issue #802: file content (a saved worktree) is scanned without the generic long-token rule (the last one), which flags ordinary
-// content such as a package-lock.json integrity hash. Every credential-shaped rule still applies.
-const FILE_SECRET_RULES = SECRET_RULES.slice(0, -1);
-export const secretShapedInFile = text => FILE_SECRET_RULES.some(re => re.test(String(text ?? '')));
+// Credential-shaped text is checked by supervisor/inbox-refusal.mjs (issue #1372), which names each rule. An AI attribution line is forbidden too.
 const ATTRIBUTION_RULES = [
   /\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|openai|anthropic|copilot|gemini|ai)\b/i,
   /\bco-authored-by:/i,
   /\bnoreply@anthropic\.com\b/i,
   /\bclaude\.ai\/code\b/i,
 ];
-export const secretShaped = text => SECRET_RULES.some(re => re.test(String(text ?? '')));
+export { secretShaped, secretShapedInFile };
 export const attributionShaped = text => ATTRIBUTION_RULES.some(re => re.test(String(text ?? '')));
 
 const flat = t => String(t).replace(/\r/g, '').replace(/\t/g, ' ').trim();
@@ -135,11 +120,11 @@ export function validateItem(raw, { internal = false } = {}) {
     if (v.length > max[k]) return { ok: false, reason: `${k} is longer than ${max[k]} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, reason: `${k} contains control characters` };
     if (raw.kind === 'host_value' && k === 'value') continue;   // checked against its key's exact shape below; the card must show it as it is
-    if (secretShaped(v)) return { ok: false, reason: `${k} contains secret-shaped text` };
+    if (secretShaped(v)) return { ok: false, reason: secretShapedReason(k, v) };
     if (attributionShaped(v)) return { ok: false, reason: `${k} contains AI attribution text, which this project does not allow` };
     // The card shows redacted text, so anything the display redactor would change (e-mail addresses, digests, short key=value values)
     // is refused: the card must show exactly what the job receives.
-    if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: `${k} contains text the dashboard would mask (an e-mail address, a hex digest, a key=value pair or user@host); describe it without the literal value` };
+    if (displayChanges(v) && !(raw.kind === 'host_value' && k === 'key')) return { ok: false, reason: maskedReason(k, v) };
   }
   if (/[\r\n]/.test(raw.title)) return { ok: false, reason: 'title must be one line' };
   if (raw.kind === 'issue_draft') {
