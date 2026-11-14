@@ -83,7 +83,8 @@ function ruleOf(winner, runnerUp) {
 function rowOf(candidate, order, target, now) {
   const weekly = candidate.weekly;
   const short = candidate.short ?? null;
-  const reason = initialReason(candidate, target, now);
+  const shortProblem = short ? windowProblem(short, 'short', now) : null;
+  const reason = initialReason(candidate, target, now) ?? shortProblem;
   const weeklyRate = rateOf(candidate, 'weekly');
   const shortRate = rateOf(candidate, 'short');
   const spare = weekly && Number.isFinite(weekly.used) && Number.isFinite(weekly.resetsAt)
@@ -108,7 +109,7 @@ function rowOf(candidate, order, target, now) {
     recentRate: weeklyRate,
     shortRate,
     shortRoom,
-    shortWindow: unknownShort ? 'unknown' : 'known',
+    shortWindow: unknownShort ? 'unknown' : (shortProblem ? 'invalid' : 'known'),
     skipped: reason ?? (shortCannotCover ? 'short window cannot cover the job' : null),
   };
 }
@@ -141,7 +142,9 @@ export function describeChoice(result) {
     const note = row.shareNote ? `; ${row.shareNote}` : '';
     const short = row.shortWindow === 'unknown'
       ? 'short window unknown'
-      : `short room ${percent(row.shortRoom)}`;
+      : row.shortWindow === 'invalid'
+        ? 'short room unknown'
+        : `short room ${percent(row.shortRoom)}`;
     const slot = row.freeSlot ? 'free slot' : 'full slot';
     const decision = row.skipped ? `skipped: ${row.skipped}` : 'qualifies';
     return `${row.id}: ${spare}; ${share}${note}; recent rate ${percent(row.recentRate)}/h; ${short}; ${slot}; ${decision}`;

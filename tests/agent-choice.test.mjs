@@ -73,6 +73,14 @@ test('an unknown short window is named in the row rather than silently skipped',
   assert.match(describeChoice(result), /A: .*short window unknown/);
 });
 
+test('a malformed short window is refused with its reason instead of a false room', () => {
+  const result = choose(candidate('A', { short: { used: 'x', resetsAt: NOW + HOUR } }));
+  assert.equal(result.chosen, null);
+  assert.equal(result.candidates[0].shortWindow, 'invalid');
+  assert.match(result.candidates[0].skipped, /short use is not a number/);
+  assert.match(describeChoice(result), /short room unknown; free slot; skipped: short use is not a number/);
+});
+
 test('a rising recent rate moves new work to the other agent before reserve', () => {
   const readings = [
     allowance(2, 0.1),
