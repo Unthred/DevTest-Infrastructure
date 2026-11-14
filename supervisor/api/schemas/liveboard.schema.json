@@ -8,7 +8,7 @@
     "nullableTimestamp": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
     "agent": {
       "type": "object",
-      "required": ["id", "display_name", "condition", "weekly", "short", "reading", "out_until", "out_reason"],
+      "required": ["id", "display_name", "condition", "weekly", "short", "reading", "out_until", "out_reason", "icon"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string" },
@@ -18,7 +18,8 @@
         "short": { "$ref": "appbar.schema.json#/$defs/window" },
         "reading": { "$ref": "appbar.schema.json#/$defs/reading" },
         "out_until": { "$ref": "#/$defs/nullableTimestamp" },
-        "out_reason": { "type": ["string", "null"] }
+        "out_reason": { "type": ["string", "null"] },
+        "icon": { "type": ["string", "null"], "pattern": "^/api/v1/agent-icon/" }
       }
     },
     "lane": {
