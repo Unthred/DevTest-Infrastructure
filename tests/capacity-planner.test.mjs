@@ -66,8 +66,9 @@ test('at or below the reserve in the last day: the agent starts no implement wor
   assert.match(w.team.ownerOut('claude').why, /no new implement work/);
 });
 
-test('a contested implementer slot goes to the agent with more remaining capacity, not to config order', async t => {
-  const w = world(t, { budget: { starting_capacity: { claude: 1e6, codex: 1e7 } }, issues: [issue(23), issue(5, 'CLOSED'), issue(2), issue(3, 'CLOSED')],
+test('a contested implementer slot goes to the agent the job costs least of its plan, not to config order', async t => {
+  const records = [1, 2, 3].flatMap(i => [finished('claude', 'implement', 100000, i), finished('codex', 'implement', 100000, i + 3)]);
+  const w = world(t, { budget: { starting_capacity: { claude: 1e6, codex: 1e7 } }, jobRecords: records, issues: [issue(23), issue(5, 'CLOSED'), issue(2), issue(3, 'CLOSED')],
     allowance: { claude: weekly('claude', 0.5, RESET), codex: weekly('codex', 0.5, RESET) } });
   const plan = await w.team.plan();
   const impl = plan.filter(a => a.type === 'implement');
