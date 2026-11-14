@@ -18,6 +18,32 @@ const QUEUED_ISSUE_NUMBERS = Array.from({ length: 14 }, (_, i) => 1141 + i);
 const schema = name => JSON.parse(fs.readFileSync(new URL(`schemas/${name}`, API), 'utf8'));
 const schemas = Object.fromEntries(['common.schema.json', 'queue.schema.json'].map(name => [name, schema(name)]));
 const head = number => String(number).repeat(40).slice(0, 40);
+const iso = value => new Date(value).toISOString();
+const issue = (number, extra = {}) => ({
+  number,
+  title: `Issue ${number}`,
+  state: 'OPEN',
+  body: '',
+  labels: [],
+  createdAt: iso(NOW - 3 * HOUR),
+  ...extra,
+});
+const check = conclusion => [{ name: 'ci', status: 'COMPLETED', conclusion }];
+const pull = (number, branch, conclusion, extra = {}) => ({
+  number,
+  title: `Change ${number}`,
+  headRefName: branch,
+  headRefOid: head(number),
+  baseRefName: 'main',
+  isDraft: false,
+  mergeable: 'MERGEABLE',
+  statusCheckRollup: check(conclusion),
+  createdAt: iso(NOW - 2 * HOUR),
+  url: `https://github.com/o/r/pull/${number}`,
+  labels: [],
+  closingIssuesReferences: [],
+  ...extra,
+});
 const config = {
   schema_version: 1,
   enabled: true,
@@ -33,16 +59,6 @@ const config = {
 };
 
 function fixture() {
-  const iso = value => new Date(value).toISOString();
-  const issue = (number, extra = {}) => ({
-    number,
-    title: `Issue ${number}`,
-    state: 'OPEN',
-    body: '',
-    labels: [],
-    createdAt: iso(NOW - 3 * HOUR),
-    ...extra,
-  });
   const queuedIssues = QUEUED_ISSUE_NUMBERS.map(number => issue(number));
   const issues = [
     ...queuedIssues,
@@ -54,24 +70,8 @@ function fixture() {
     issue(1185, { body: 'Depends on: #1157 inline' }),
     issue(1190, { state: 'CLOSED', closedAt: iso(NOW - HOUR) }),
   ];
-  const check = conclusion => [{ name: 'ci', status: 'COMPLETED', conclusion }];
-  const pull = (number, branch, conclusion, extra = {}) => ({
-    number,
-    title: `Change ${number}`,
-    headRefName: branch,
-    headRefOid: head(number),
-    baseRefName: 'main',
-    isDraft: false,
-    mergeable: 'MERGEABLE',
-    statusCheckRollup: check(conclusion),
-    createdAt: iso(NOW - 2 * HOUR),
-    url: `https://github.com/o/r/pull/${number}`,
-    labels: [],
-    closingIssuesReferences: [],
-    ...extra,
-  });
   const pulls = [pull(1178, 'beta/issue-1170-review', 'SUCCESS'), pull(1180, 'alpha/issue-1190-cap', 'FAILURE', { labels: ['needs-homeowner'] })];
-  const job = {
+  const implementJob = {
     id: 'a'.repeat(32),
     provider: 'prov-a',
     kind: 'implement',
@@ -83,8 +83,19 @@ function fixture() {
     attempts: 1,
     usage: { inputTokens: 12000, outputTokens: 3000, costUsdEstimate: 0.42 },
   };
+  const reviewJob = {
+    id: 'b'.repeat(32),
+    provider: 'prov-b',
+    kind: 'review',
+    issue: 1178,
+    branch: 'beta/issue-1170-review',
+    status: 'running',
+    createdAt: NOW - 10 * MINUTE,
+    updatedAt: NOW - MINUTE,
+    attempts: 1,
+  };
   return {
-    jobs: [job],
+    jobs: [implementJob, reviewJob],
     cache: {
       tick: { at: NOW - MINUTE, status: 'ok', error: null, lastOkAt: NOW - MINUTE },
       fetchedAt: NOW - MINUTE,
@@ -125,7 +136,10 @@ function fixture() {
       },
     },
     state: {
-      jobs: { [job.id]: { kind: 'implement', agent: 'alpha', issue: 1155 } },
+      jobs: {
+        [implementJob.id]: { kind: 'implement', agent: 'alpha', issue: 1155 },
+        [reviewJob.id]: { kind: 'review', agent: 'beta', pr: 1178, head: head(1178) },
+      },
       sameCause: { 'fix:1180': { cause: 'ci-failed', count: 3, head: head(1180), at: NOW - 3 * HOUR, raised: false } },
       fixAttempts: {}, verdicts: {}, mergeLog: [{ pr: 1179, issue: 1171, agent: 'alpha', mergedAt: NOW - HOUR }],
     },
@@ -175,7 +189,8 @@ test('valid: retry cap has its real since and clear action; active implement and
   const active = byKey(reply, 'issue-1155');
   assert.deepEqual([active.stage, active.role, active.usage], ['implementing', 'implementer', { tokens: 15000, cost_pence: 32 }]);
   const review = byKey(reply, 'change-1178');
-  assert.deepEqual([review.stage, review.role], ['in_review', 'reviewer']);
+  assert.deepEqual([review.stage, review.role, review.condition.state], ['in_review', 'reviewer', 'running']);
+  assert.equal(reply.body.data.summary.open_changes, 2);
 });
 
 test('boundary: a slot hold has no since, a no-line issue has no actions, and a change merged today appears once without its issue', async t => {
@@ -184,7 +199,7 @@ test('boundary: a slot hold has no since, a no-line issue has no actions, and a 
   assert.equal(item.estimated_start_at, null);
   assert.deepEqual(item.prerequisites, { line_state: 'none', raw_line: null, declared: [], open: [] });
   assert.deepEqual([item.condition.reason_code, item.condition.since, item.actions, item.role], ['slot', null, [], 'reviewer']);
-  assert.ok(byKey(reply, 'change-1179'));
+  assert.equal(byKey(reply, 'change-1179').stage, 'installed');
   assert.equal(byKey(reply, 'issue-1171'), undefined);
 });
 

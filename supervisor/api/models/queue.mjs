@@ -192,6 +192,7 @@ function isToday(value, now, timeZone) {
 }
 
 export function build(view, context) {
+  const openChanges = list(view.prs).filter(change => OPEN_CHANGE.has(change.status));
   const mergedToday = list(view.prs).filter(change => (
     change.status === 'merged' && isToday(change.mergedAt, context.now, view.tz || 'UTC')
   ));
@@ -209,8 +210,7 @@ export function build(view, context) {
         change.issue === issue.number && OPEN_CHANGE.has(change.status) && change.awaitingReview
       )),
     }));
-  const changes = list(view.prs)
-    .filter(change => OPEN_CHANGE.has(change.status) || (change.status === 'merged' && isToday(change.mergedAt, context.now, view.tz || 'UTC')))
+  const changes = [...openChanges, ...mergedToday]
     .map(change => itemOf({
       view,
       context,
@@ -227,7 +227,7 @@ export function build(view, context) {
       ranked: items.filter(item => item.rank !== null).length,
       held: items.filter(item => item.condition.state === 'held').length,
       parked: items.filter(item => item.stage === 'parked').length,
-      open_changes: changes.filter(item => item.stage !== 'merged').length,
+      open_changes: openChanges.length,
       max_open_changes: context.config.limits?.max_open_prs ?? null,
     },
     stages: ['queued', 'implementing', 'in_review', 'fixing', 'rebasing', 'ready_to_merge', 'merged', 'installed', 'verified', 'parked'],
