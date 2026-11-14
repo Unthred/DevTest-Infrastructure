@@ -174,7 +174,7 @@ const round3 = n => Math.round(n * 1000) / 1000;
 test('the Overview centres the tiles, explains Data age, splits the queue and shows throughput and cost', async () => {
   const view = await overviewView(); view.headline = stats();
   view.queues = { codex: [{ type: 'issue', ref: 1, reason: 'next' }, { type: 'issue', ref: 2, reason: 'x' }, { type: 'review', ref: 3, reason: 'review' }, { type: 'pr', ref: 4, reason: 'CI failing' }, { type: 'pr', ref: 5, reason: 'needs a rebase: conflict' }, { type: 'pr', ref: 6, reason: 'CI pending' }] };
-  assert.deepEqual(queueSplit(view), { implement: 2, review: 1, fix: 1, rebase: 1, waiting: 1, total: 6 });
+  assert.deepEqual(queueSplit(view), { implement: 2, review: 1, fix: 1, rebase: 1, waiting: 1, held: 0, total: 6 });
   const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
   assert.match(html, /2 implement, 1 review, 1 fix, 1 rebase, 1 waiting on CI or merge; \d+ running now/);
   assert.match(html, /how old the GitHub data behind this page is/);

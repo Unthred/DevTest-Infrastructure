@@ -24,6 +24,7 @@ import { outcomeFromQuery, outcomeNote } from './probeoutcome.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
 import { bestLine } from './dashbest.mjs';
+import { queueSplit, queueText } from './queuesplit.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -551,20 +552,9 @@ function headlinePage(view, query, path, route) {
     emptyState: empty('Nothing in this period', 'No items behind this number.') }) });
   return { title: CARD_TITLES[id], crumbs: [['/', 'Overview'], [null, CARD_TITLES[id]]], body: grid('headline', summary + t2) };
 }
-// Issue #928: the queue tile's split. 'issue' entries are implement work and 'review' entries are reviews; a pull request entry is a fix (CHANGES, red CI, draft), a rebase (conflict or not mergeable) or just waiting (CI pending, merge on the next tick).
-export function queueSplit(view) {
-  const n = { implement: 0, review: 0, fix: 0, rebase: 0, waiting: 0, total: 0 };
-  for (const q of Object.values(view.queues || {})) for (const e of q) {
-    n.total++;
-    if (e.type === 'issue') n.implement++;
-    else if (e.type === 'review') n.review++;
-    else if (/rebase|conflict|not mergeable/i.test(e.reason || '')) n.rebase++;
-    else if (/CHANGES|CI failing|draft|fix/i.test(e.reason || '')) n.fix++;
-    else n.waiting++;
-  }
-  return n;
-}
-const queueSub = (view, running) => { const n = queueSplit(view); return `${n.implement} implement, ${n.review} review, ${n.fix} fix, ${n.rebase} rebase${n.waiting ? `, ${n.waiting} waiting on CI or merge` : ''}; ${running} running now`; };
+// Issue #1378: the queue tile's split lives in queuesplit.mjs; it stays exported from here.
+export { queueSplit };
+const queueSub = (view, running) => queueText(queueSplit(view), running);
 function overview(view, query) {
   const range = Object.hasOwn(RANGES, query.get('range')) ? query.get('range') : DEFAULT_RANGE;
   const now = view.generatedAt;
