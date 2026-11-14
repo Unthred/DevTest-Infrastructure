@@ -131,6 +131,8 @@ test('a hunk dropped from a file with no conflict is refused', t => {
   assert.deepEqual(res.conflictHunks, []);
 });
 
+// Regression guard for the review of 6677d72: the replay targets the rebased predecessor. Main's guard refuses this case too,
+// so it fails only against a replay onto the bare base.
 test('a later commit that edits an earlier commit\'s lines in a file main did not touch: a dropped hunk there is refused', t => {
   const lines = (a, b) => Array.from({ length: 20 }, (_, i) => (i === 4 ? a : i === 14 ? b : `line ${i + 1}`)).join('\n') + '\n';
   const r = scratch(t, {
