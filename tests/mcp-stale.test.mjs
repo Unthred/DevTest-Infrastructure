@@ -80,7 +80,7 @@ test('while stale a proposal and a control tool are refused with the restart tex
   const proposal = await s.call('foreman_propose', { kind: 'issue_draft', title: FIRST, body: 'body' });
   assert.equal(proposal.isError, true);
   assert.equal(proposal.body.error, STALE_TEXT);
-  for (const [name, args] of [['foreman_park', { number: 5, reason: 'r' }], ['foreman_unpark', { number: 5, reason: 'r' }], ['foreman_stop_job', { id: 'abcdef12', reason: 'r' }], ['foreman_release_agent', { agent: 'codex', reason: 'r' }]]) {
+  for (const [name, args] of [['foreman_park', { number: 5, reason: 'r' }], ['foreman_unpark', { number: 5, reason: 'r' }], ['foreman_stop_job', { id: 'abcdef12', reason: 'r' }], ['foreman_release_agent', { agent: 'codex', reason: 'r' }], ['foreman_withdraw', { id: 'abcdef12', reason: 'r' }]]) {
     const r = await s.call(name, args);
     assert.equal(r.isError, true, name);
     assert.equal(r.body.error, STALE_TEXT, name);

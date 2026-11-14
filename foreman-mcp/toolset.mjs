@@ -9,7 +9,7 @@ import { stopRecordTool, viewReasons, DEFAULT_STOP_DIRS } from './stoprecord.mjs
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 // Tools that write a proposal: refused while the server is stale (issue #1314).
-const WRITERS = new Set(['foreman_propose', 'foreman_park', 'foreman_stop_job', 'foreman_unpark', 'foreman_release_agent']);
+const WRITERS = new Set(['foreman_propose', 'foreman_park', 'foreman_stop_job', 'foreman_unpark', 'foreman_release_agent', 'foreman_withdraw']);
 const WITH_CONTROLS = new Set(['foreman_why_blocked', 'foreman_jobs']);
 
 export function createToolset(options) {
