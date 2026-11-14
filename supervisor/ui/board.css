@@ -83,3 +83,6 @@
 .ball-panel dd { margin: 0; overflow-wrap: anywhere; }
 @media (pointer: coarse) { .board-lists .item, .picked-box .item, .board-error button, .ball-panel button { min-height: var(--touch); } }
 .board-svg .hatch-bar { fill: var(--line); }
+
+/* issue #1313: the line that says how many things changed when too many for travel arrived at once */
+.board-changed { margin: 0 0 var(--gap); color: var(--muted); font-weight: 600; }

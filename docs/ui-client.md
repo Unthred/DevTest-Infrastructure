@@ -57,11 +57,23 @@ Shown when the page address ends in `#/board`; with no such ending the main area
 | `boardlayout.mjs` | pure: the one `LAYOUT` table (every position and size), the nine boxes, ball places in the hopper, lanes and boxes, ride height, allowance fractions, the rows of the side panel |
 | `boardsvg.mjs` | draws the SVG (no library) from the geometry |
 | `boardlists.mjs` | the same content as HTML lists, the error line and the side panel |
+| `boardmotion.mjs` | pure: compares two liveboard replies into launch, land and return events, plans every travel path, carries the laps a returning ball shows |
+| `boardtravel.mjs` | holds the travels under way and puts each back on its ball after every redraw with the Web Animations API |
 | `board.css` | the board styles; job and agent colours are named once at the top |
 
 - **Layout (first version).** Lanes rise up the left, grouped by agent, with the allowance under each group; the hopper is at the foot of the lanes; the peg board fills the middle; the nine result boxes run along the bottom. To move anything change `LAYOUT` in `boardlayout.mjs`.
 - **Hopper.** The waiting entries in plan order, the next one in the top row nearest the lanes. A held ball is greyed and shows its hold reason on hover and focus; a ball tied to an agent carries that agent's colour mark. What does not fit is counted as "+N more" and is in the list.
 - **Running.** A ball's height is elapsed time against `typical_seconds`, capped at 0.92 of the lane. With no estimate it sits at mid height and is marked; past the typical time it changes colour and says running long.
 - **Lists.** Below 640 px wide the board is not drawn and the lists are the screen. At wider widths the same lists are present for screen readers only. A box click shows that box's list under the board; each Needs you row links to the Inbox page found by the item's number (`/inbox?state=all&search=<number>`).
-- **Data.** One request when the screen opens and one per change event; no timer fetches data. A failed request shows the error with Retry and keeps the last board marked stale. In this item a ball simply appears in its new place (travel is the Boardmotion item).
+- **Data.** One request when the screen opens and one per change event; no timer fetches data. A failed request shows the error with Retry and keeps the last board marked stale. Travel (issue #1313) is described under "Ball travel" below.
 - **Tests.** `tests/ui-boardlayout.test.mjs` (pure module); `node tests/ui-board-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-board-scenario.mjs` at 1280 and 390 wide against a fixture model from `tests/ui-board-fixture.mjs`.
+
+## Ball travel (issue #1313)
+
+Part 2 of the live board. Travel starts only from the comparison `board.mjs` makes when the change stream says `liveboard` changed (`changed()`); opening the screen, Retry and a resize never start one, and no timer does.
+
+- **Events** (`diffBoard`): *launch* (a job is running that was not), *land* (a job is in `landed` that was not there before; it leaves the top of its lane if it was running, the foot if it was unseen), *return* (an item whose ball landed in Changes asked, Failed or Out of allowance is waiting again; its laps go from the landed figure to one more). An empty first reply gives no events.
+- **Paths.** Launch: hopper place to the lane, 0.9 s, and the remaining hopper balls close up. Land: from the lane over the pegs into the box, 1.5 to 3 s, five pegs touched; the path is a function of the job id, the lane and the box (a hash of the id, no random numbers, no physics). Return: along the bottom back to the hopper, 1.8 s. The pegs are the ones `boardsvg.mjs` draws (`PEG`).
+- **Rules.** More than 12 events in one change are shown at once and the line "N things changed" is shown. Reduced motion (`prefers-reduced-motion`) and widths below 640 px: nothing travels. A moving ball is a normal ball and can be clicked; a newer change for the same ball (it ran, landed or moved on) ends its travel at its new place.
+- **Laps.** A waiting entry of the model carries no laps, so a return remembers the figure it raised for as long as the item waits. After a reload, a waiting ball shows none until it runs.
+- **Tests.** `tests/ui-boardmotion.test.mjs` (pure module); `node tests/ui-boardmotion-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-boardmotion-scenario.mjs` at 1280 wide.

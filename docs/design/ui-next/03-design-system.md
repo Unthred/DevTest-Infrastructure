@@ -164,7 +164,7 @@ Bottom centre, above the tab bar on phone. Says what happened in the command's w
 - After a command the client updates the affected rows from the command result at once, then the stream confirms.
 - The prototype re-renders a screen from state and restores focus, caret and scroll. The production client should key rows by entity key and replace only changed rows, so an open row or a text selection inside a row survives too.
 - The live indicator has four states: Connecting, Live, Reconnecting, Behind. "Behind" (no heartbeat for 35 seconds) also raises the banner.
-- Motion: none beyond a 150 ms switch transition; removed under reduced motion.
+- Motion: none beyond a 150 ms switch transition, with one exception: on the live board screen (`#/board`) a ball may travel (launch 0.9 s, land 1.5 to 3 s, return 1.8 s), and only when a job event or a model change caused it. Never decorative, never on a timer. All of it is removed under reduced motion, and below 640 px (where there is no board) there is none.
 
 ## 6. Accessibility and input
 
