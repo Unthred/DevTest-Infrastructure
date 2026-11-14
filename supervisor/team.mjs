@@ -36,6 +36,7 @@ import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
+import { chooseInboxAgent } from './inboxagent.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
 import { budgetSettings, assessAgent, weeklyHistory, admits, mayTakeOver, modeLine, MODE_LABEL } from './budget.mjs';
 import { archiveOverflow, archiveVerdict } from './history.mjs';
@@ -1947,13 +1948,19 @@ export class Team {
     if (inbox >= roleCount(L, 'inbox')) return { started: false, why: 'no free inbox slot' };
     const gate = admit ? admit() : { ok: true };
     if (!gate.ok) return { started: false, why: gate.why || 'the host is busy' };
-    const unread = await budgetsWithPulls(this); if (unread) return unread;
-    let agent = null;
-    for (const [name, a] of this.agents()) {
-      if (this.limitedOf(name).out || this.providerSlotFull(a.provider, 'inbox', usedBy)) continue;
-      const B = this.modes?.[name]; if (B && !admits(B, 'implement', 0).ok) continue;
-      agent = name; break;
-    }
+    const unread = await budgetsWithPulls(this);
+    if (unread) return unread;
+    const choice = chooseInboxAgent({
+      agents: this.agents(),
+      limitedOf: this.limitedOf,
+      providerSlotFull: this.providerSlotFull.bind(this),
+      usedBy,
+      modes: this.modes,
+      admits
+    });
+    // The prefix is neutral: admits also refuses for the waiting mode, reviews only and the weekly cost check, so it never says "reserve".
+    if (choice.allowanceRefusal) return { started: false, why: `allowance: ${choice.allowanceRefusal}` };
+    const agent = choice.agent;
     if (!agent) return { started: false, why: 'no agent can take an implement job now (allowance, usage limit or provider cap)' };
     const id = next.id;
     const adopt = () => { const jid = Object.keys(this.s.jobs).find(k => this.s.jobs[k].inboxId === id); if (jid) inboxStore.finish(dir, id, { adopt: { id: jid, rec: this.s.jobs[jid] } }, this.clock.now()); };
