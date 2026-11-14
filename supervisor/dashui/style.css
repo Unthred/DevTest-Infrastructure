@@ -435,7 +435,8 @@ body.layout-editing{overscroll-behavior:contain}
 .cards.editing .tools{visibility:hidden}
 /* Issue #866, #1453: the summary cards show one period; data-period on the card (24h unless the viewer chose 7d) picks the block. */
 .hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1}
-.cards>.card.headline{align-self:start}   /* only as tall as its content, not stretched to the tallest card of the row */
+.cards:not(.free)>.card.headline{align-self:start}   /* only as tall as its content, not stretched to the tallest card of the row; in the free layout it fills its place (issue #1468) */
+.cards.free>.card.headline{justify-content:safe center}   /* a taller place centres the content; a shorter one scrolls from the top */
 .headline .hl-block{display:flex;flex-direction:column;align-items:center;gap:var(--sp1);text-align:center;overflow-wrap:anywhere}
 .headline:not([data-period="7d"]) .hl-block[data-window="7d"],.headline[data-period="7d"] .hl-block[data-window="24h"]{display:none}
 .headline .hl-chip{font-size:var(--fs-xs);color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 var(--sp2)}
