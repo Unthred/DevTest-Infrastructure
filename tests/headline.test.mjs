@@ -259,8 +259,9 @@ test('an older timeline entry (id without a time) is not written a second time b
   const { mkdtempSync } = await import('node:fs');
   const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376o-`);
   const at = Date.parse('2026-11-12T22:59:00Z');
-  appendTimeline(root, [{ id: 'verdict:1200:abc1234', at, kind: 'verdict', pr: 1200, head: 'abc1234', verdict: 'CHANGES' }]);
-  archiveVerdict(root, '1200:abc1234', { verdict: 'CHANGES', at });
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  appendTimeline(root, [{ id: `verdict:1200:${sha}`, at, kind: 'verdict', pr: 1200, head: sha, verdict: 'CHANGES' }]);
+  archiveVerdict(root, `1200:${sha}`, { verdict: 'CHANGES', at });
   const n = readTimeline(root).length;
   rmSync(root, { recursive: true, force: true });
   assert.equal(n, 1);

@@ -88,9 +88,10 @@ export function appendTimeline(root, entries) {
   const clean = []; const seen = new Set();
   for (const e of entries) { const s = sanitizeEntry(e); if (s && !seen.has(s.id)) { seen.add(s.id); clean.push(s); } }
   if (!clean.length) return 0;
-  // A verdict id carries its time, so a second verdict on one head is kept. Older entries lack it: match them by pr, head and time too.
+  // A verdict id carries its time, so a second verdict on one head is kept.
+  // Older entries lack it: match them by their own id (it holds the full head) plus time.
   const known = new Set();
-  for (const e of readTimeline(root)) { known.add(e.id); if (e.kind === 'verdict' && !e.detail) known.add(`verdict:${e.pr}:${e.head}:${e.at}`); }
+  for (const e of readTimeline(root)) { known.add(e.id); if (e.kind === 'verdict' && !e.detail) known.add(`${e.id}:${e.at}`); }
   const fresh = clean.filter(e => !known.has(e.id));
   if (!fresh.length) return 0;
   fs.mkdirSync(archiveDir(root), { recursive: true, mode: 0o700 });
