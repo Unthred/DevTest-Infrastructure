@@ -3,8 +3,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { stuckWorld } from './helpers/split-stuck-world.mjs';
+import { buildView } from '../supervisor/dashboard.mjs';
+import { withDecisionCards } from '../supervisor/decisioncards.mjs';
+import { REGISTER } from './helpers/split-stuck-world.mjs';
 import { LeaseHeld } from '../supervisor/core.mjs';
 import { bodyFault } from '../supervisor/splitstuck-draft.mjs';
 import { stuckCause, approveStuckSplit, rejectStuckSplit } from '../supervisor/splitstuck.mjs';
@@ -323,4 +327,29 @@ test('PR 1139 with its real data: a draft of 3 items, none sharing a file with a
   await bad.finishDraft({ items: [realItem('A', ['supervisor/team.mjs', 'tests/pass-speed.test.mjs']), realItem('B', ['tests/capacity-planner.test.mjs'])] });
   assert.equal(bad.team.s.stuckSplits[1139].status, 'failed');
   assert.match(bad.team.s.stuckSplits[1139].error, /supervisor\/team\.mjs, which open PR #1183/);
+});
+
+// The dashboard path: the saved record becomes one Needs you card with both buttons through the real view builder and decision cards.
+test('the dashboard view shows one split card with Approve split and Reject split for a proposed split', async t => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'splitview-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.chmodSync(root, 0o700);
+  const now = 1_800_000_000_000;
+  const config = {
+    schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    github_app: { app_id: 1, installation_id: 2, key_file: '/k/app.pem' },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 4 },
+    agents: { codex: { provider: 'codex', branch_prefix: 'codex/', issues: [] } },
+    board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }
+  };
+  const pull = { number: 11, title: 't', headRefName: PR.branch, headRefOid: HEAD, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE',
+    statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], labels: ['parked'], reviewDecision: '', closingIssuesReferences: [], url: 'https://github.com/o/r/pull/11' };
+  const record = { status: 'proposed', parked: true, reason: '4 fix rounds (limit 4) have not cleared CI', issue: 7, items: GOOD.items };
+  const state = { fixAttempts: { [`11:${HEAD}`]: 4 }, verdicts: {}, notified: {}, jobs: {}, stuckSplits: { 11: record } };
+  const cache = { tick: { at: now - 60000, status: 'ok', error: null, lastOkAt: now - 60000 }, pulls: [pull], issues: [] };
+  const view = await buildView({ config, root, jobs: [], events: [], state, register: REGISTER, cache, snapshots: [], now });
+  const items = withDecisionCards(view, config, { pulls: [pull] }).panels.needsYou.filter(a => a.ref?.n === 11);
+  assert.deepEqual(items.map(a => a.id), ['split-stuck-11']);
+  assert.deepEqual(items[0].card.controls.map(c => c.action), ['approve_split', 'reject_split', 'unpark'], 'the standing Unpark of a parked PR follows');
+  assert.match(items[0].tried, /one \(a\.mjs\)/);
 });

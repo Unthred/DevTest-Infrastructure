@@ -18,7 +18,8 @@ const config = fix => ({
 });
 
 const pullOf = (number, branch, head, labels = []) => ({
-  number, title: `t${number}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', labels, statusCheckRollup: RED
+  number, title: `t${number}`, headRefName: branch, headRefOid: head, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE',
+  labels, statusCheckRollup: RED
 });
 
 function fakeGitHub(calls, pulls, files) {
@@ -58,7 +59,8 @@ function fakeJobs(calls) {
 }
 
 // pr: { number, branch, head, files }, others: { number: files[] } (other open pull requests), fixRounds: rounds already drawn.
-export function stuckWorld(t, { pr, others = {}, fixRounds = 4, fix = 4, verdict = { verdict: 'CHANGES', reviewer: 'claude', at: 500, findings: BLOCKING } } = {}) {
+const CHANGES = { verdict: 'CHANGES', reviewer: 'claude', at: 500, findings: BLOCKING };
+export function stuckWorld(t, { pr, others = {}, fixRounds = 4, fix = 4, verdict = CHANGES } = {}) {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'splitstuck-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = { comments: [], labels: [], created: [], issues: [], worktrees: [] };

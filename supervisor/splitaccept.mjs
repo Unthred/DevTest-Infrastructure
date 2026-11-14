@@ -6,7 +6,8 @@ import { withPrerequisite } from './splitstuck-draft.mjs';
 
 function childBody(marker, child, split, index, parent) {
   if (!child.body) {
-    const head = `Part ${index + 1} of ${split.children.length} of #${parent}, split by Foreman after #${parent} ran out of context (accepted by the homeowner).`;
+    const part = `Part ${index + 1} of ${split.children.length} of #${parent}`;
+    const head = `${part}, split by Foreman after #${parent} ran out of context (accepted by the homeowner).`;
     return `${marker}\n${head}\n\n**Scope:** ${child.scope}\n\nRead #${parent} for the full requirements; deliver only this part.`;
   }
   const earlier = child.after == null ? null : split.children[child.after]?.issue;
