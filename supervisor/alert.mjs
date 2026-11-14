@@ -47,15 +47,26 @@ function deliveryError(result) {
   return `alert command failed: exit ${result.status ?? result.signal}`;
 }
 
-export function alertSender(root, config, { notify = UNRAID_NOTIFY, run = spawnSync, env = process.env, log = line => console.error(line) } = {}) {
-  return async text => {
+// The alert log line is written after delivery, so a failed write (no directory, full disk, permission denied) must not turn a
+// delivered alert into a failure: the caller would send it again on every tick. The write failure is printed instead.
+function recordAlert(root, row, log) {
+  try {
     const dir = path.join(root, 'team');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.appendFileSync(path.join(dir, 'alerts.jsonl'), JSON.stringify(row) + '\n', { mode: 0o600 });
+  } catch (error) {
+    const outcome = row.delivered ? 'alert delivered but not recorded' : 'alert not delivered and not recorded';
+    log(`ai-supervisor: ${outcome}: ${error.message}`);
+  }
+}
+
+export function alertSender(root, config, { notify = UNRAID_NOTIFY, run = spawnSync, env = process.env, log = line => console.error(line) } = {}) {
+  return async text => {
     const route = alertRoute(config.alerts, text, { notify, testRun: Boolean(env.NODE_TEST_CONTEXT) });
     const childEnv = { PATH: env.PATH, HOME: env.HOME };
     const error = route.refused ?? deliveryError(run(route.program, route.args, { input: route.input, encoding: 'utf8', timeout: 30000, env: childEnv }));
     const row = error ? { at: Date.now(), text, delivered: false, error } : { at: Date.now(), text, delivered: true };
-    fs.appendFileSync(path.join(dir, 'alerts.jsonl'), JSON.stringify(row) + '\n', { mode: 0o600 });
+    recordAlert(root, row, log);
     if (!error) return;
     log(`ai-supervisor: alert not delivered: ${error}`);
     throw new SupervisorError(error);

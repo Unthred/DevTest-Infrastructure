@@ -268,7 +268,9 @@ export const NEXT_INSTALL_WHY = {
 export const holdOf = (result, s) => (result === 'upgraded' ? { to: s?.pending?.to || null } : null);
 
 export class SelfUpgrade {
-  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }) {
+  constructor({ root, deps, clock = { now: () => Date.now() }, drainMaxMs = QUIET_MAX_WAIT_MS, minGapMs = MIN_INSTALL_GAP_MS, lock = null, lockWaitMs = 30000, lockSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+    log = line => console.error(line) }) {
+    this.log = log;
     this.lock = lock; this.lockWaitMs = lockWaitMs; this.lockSleep = lockSleep;   // issue #798: lock() returns an unlock function, or null while another process holds upgrade.lock
     this.root = root; this.d = deps; this.clock = clock; this.drainMaxMs = drainMaxMs; this.minGapMs = minGapMs;   // issue #136: the configurable drain bound; issue #695: minGapMs is the batching window between installs (0 = off)
     this.dir = path.join(root, 'team');
@@ -326,7 +328,7 @@ export class SelfUpgrade {
   async alert(key, text) {
     if (this.s.alerted[key]) return;
     this.s.alerted[key] = this.clock.now(); this.save();
-    try { await this.d.alert(text); } catch { /* delivery failure is kept in the alert log by the sender; the upgrade decision is unaffected */ }
+    try { await this.d.alert(text); } catch (error) { this.log(`ai-supervisor: upgrade alert not delivered: ${error.message}`); }   // the upgrade decision is unaffected
   }
 
   // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).
