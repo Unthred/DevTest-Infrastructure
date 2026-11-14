@@ -43,11 +43,13 @@ const DROP = KEEP.replace('  if (await runDueProbes(root)) reload(root);\n', '')
 const head = r => git(r.agent, 'rev-parse', 'HEAD');
 const check = (r, oldHead) => checkRebase({ repoPath: r.agent, base: 'origin/main', oldHead, newHead: head(r) });
 
-test('PR #222 case: the resolution keeps runDueProbes and drops its call; the call is reported lost', t => {
+// Issue #1422: main rewrote the same lines, so this is a hunk inside a conflict: it is listed for the review, it does not refuse the push.
+test('PR #222 case: the resolution keeps runDueProbes and drops its call; the call is listed as a conflict hunk', t => {
   const r = repo(t); const oldHead = rebaseWith(r, DROP);
   const c = check(r, oldHead);
   assert.deepEqual(c.missing, []);   // the commit list looks complete
-  assert.ok(c.lostChanges.some(x => x.file === 'cli.mjs' && x.commit === r.f1 && x.kind === 'missing' && x.text.includes('runDueProbes(root)) reload(root)')), JSON.stringify(c.lostChanges));
+  assert.deepEqual(c.lostChanges, []);
+  assert.ok(c.conflictHunks.some(x => x.file === 'cli.mjs' && x.commit === r.f1 && x.kind === 'missing' && x.text.includes('runDueProbes(root)) reload(root)')), JSON.stringify(c.conflictHunks));
 });
 
 test('a rebase that keeps every change reports nothing, including when main contains one of the PR lines', t => {
@@ -67,15 +69,11 @@ test('a PR line that main now also contains is not lost, even if the resolution 
   assert.deepEqual(check(r, oldHead).lostChanges, []);
 });
 
-test('the real job path: pushRebase refuses a lost change and leaves the remote head alone; a faithful rebase is pushed', t => {
+test('the real job path: a change lost inside a conflict is pushed and listed as a conflict hunk', t => {
   const r = repo(t); const oldHead = rebaseWith(r, DROP);
   const res = pushRebase({ worktree: r.agent, branch: 'feat', base: 'main', oldHead });
-  assert.equal(res.pushed, false); assert.equal(res.reason, 'lost-changes'); assert.ok(res.lostChanges.length >= 1);
-  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), oldHead);
-  // fix the resolution, amend, push
-  write(r.agent, 'cli.mjs', KEEP); git(r.agent, 'add', '-A'); git(r.agent, 'commit', '-q', '--amend', '--no-edit');
-  const ok = pushRebase({ worktree: r.agent, branch: 'feat', base: 'main', oldHead });
-  assert.equal(ok.pushed, true); assert.deepEqual(ok.lostChanges, []);
+  assert.equal(res.pushed, true); assert.deepEqual(res.lostChanges, []); assert.ok(res.conflictHunks.length >= 1);
+  assert.equal(git(r.dir, '--git-dir', r.remote, 'rev-parse', 'feat'), git(r.agent, 'rev-parse', 'HEAD'));
 });
 
 // ---- dispatcher side: the pushed head is not accepted as a clean rebase

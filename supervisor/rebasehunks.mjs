@@ -180,7 +180,7 @@ function compareCommit(oldHunks, newHunks, readMain, id) {
   });
 }
 
-// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ; extra: shas of new commits no old commit pairs with. Returns the findings, newest bounded to MAX_FINDINGS.
+// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ; extra: shas of new commits no old commit pairs with. Returns every finding: the bound is applied after the sort into hard and conflict, or a loss outside a conflict could be cut away behind conflict hunks.
 export function compareChangedPairs(run, { pairs, base, oldHead, extra = [] }) {
   if (!pairs.length) return [];
   const mergeBase = run(['merge-base', base, oldHead]).trim();
@@ -192,7 +192,7 @@ export function compareChangedPairs(run, { pairs, base, oldHead, extra = [] }) {
     const id = { commit: old.sha, subject: old.subject };
     out.push(...compareCommit(show(old.sha), [...show(now.sha), ...spare], readMain, id));
   }
-  return out.slice(0, MAX_FINDINGS);
+  return out;
 }
 
 // The shape kept in the job record and shown on the dashboard.
@@ -203,3 +203,84 @@ export const slimFinding = c => ({
   commit: String(c.commit || '').slice(0, 12),
   hunk: String(c.hunk || '').slice(0, 80),
 });
+
+// Issue #1422: a finding is "inside a conflict" when replaying the change onto the new base conflicts in that file. The resolution of
+// a real conflict has to differ from the old lines, so a text comparison cannot judge it; the review of the new head does, from these
+// hunks. Decided by a trial three way merge (the plumbing alreadyApplied uses), never by the agent's word. Anything that cannot be
+// read counts as no conflict, so the push is refused as before.
+export function conflictedFiles(run, { replayBase, theirs, base }) {
+  let out;
+  try {
+    out = run(['merge-tree', '--write-tree', '--name-only', `--merge-base=${replayBase}`, base, theirs]);
+  } catch (e) {
+    out = e.stdout;
+  }
+  if (typeof out !== 'string') return null;
+  const [tree, ...rest] = out.split('\n');
+  if (!/^[0-9a-f]{40}$/.test(tree)) return null;
+  const files = new Set();
+  for (const l of rest) {
+    if (l === '') break;
+    files.add(l);
+  }
+  return files;
+}
+
+// Splits findings into { hard, conflict }. `replayOf(finding)` is { replayBase, theirs, onto }: what the change is replayed from, what
+// carries it, and what it is replayed onto (the rebased predecessor, so only a conflict with the base's own changes counts).
+export function splitByConflict(run, findings, replayOf) {
+  const cache = new Map();
+  const hard = [];
+  const conflict = [];
+  for (const f of findings) {
+    const { replayBase, theirs, onto } = replayOf(f);
+    const key = `${replayBase}..${theirs}..${onto}`;
+    if (!cache.has(key)) cache.set(key, conflictedFiles(run, { replayBase, theirs, base: onto }));
+    (cache.get(key)?.has(f.file) ? conflict : hard).push(f);
+  }
+  return { hard, conflict };
+}
+
+// A branch that holds a merge commit of its base: the files that merge touched, and the merge base the branch's total change starts at.
+export function mergeTouched(run, base, oldHead) {
+  const merges = run(['rev-list', '--merges', `${base}..${oldHead}`]).split('\n').filter(Boolean);
+  if (!merges.length) return null;
+  const files = new Set();
+  for (const m of merges) {
+    for (const f of run(['diff', '--name-only', '--no-renames', `${m}^1`, m]).split('\n').filter(Boolean)) files.add(f);
+  }
+  return { files, mergeBase: run(['merge-base', base, oldHead]).trim() };
+}
+
+// Total change (old merge base to old head, against new base to new head) for the files a merge commit touched, compared like one commit.
+function compareTotalChange(run, { base, oldHead, newHead, touched }) {
+  // Filtered after the diff, not by path arguments: a merge of a large base touches too many files for one command line.
+  const inTouched = hunks => hunks.filter(h => touched.files.has(h.file));
+  const old = inTouched(parseHunks(run(['diff', ...DIFF, touched.mergeBase, oldHead])));
+  const now = inTouched(parseHunks(run(['diff', ...DIFF, base, newHead])));
+  const id = { commit: oldHead, subject: 'merge of the base: total change', total: true };
+  return compareCommit(old, now, mainReader(run, touched.mergeBase, base), id);
+}
+
+// The findings of a rebase as { lostChanges, conflictHunks }: the hard ones refuse the push, the conflict ones go to the reviewer.
+export function classifyChanges(run, { pairs, base, oldHead, newHead, extra = [] }) {
+  let findings = compareChangedPairs(run, { pairs, base, oldHead, extra });
+  const touched = mergeTouched(run, base, oldHead);
+  if (touched) {
+    findings = [...findings.filter(f => !touched.files.has(f.file)), ...compareTotalChange(run, { base, oldHead, newHead, touched })];
+  }
+  // A later commit that edits lines an earlier PR commit added would conflict with the bare base only because the base lacks that
+  // earlier commit. So each commit is replayed onto its paired new commit's parent, the rebased predecessor.
+  const parentOf = new Map(pairs.map(p => [p.old.sha, `${p.now.sha}^`]));
+  const replayOf = f => (f.total
+    ? { replayBase: touched.mergeBase, theirs: oldHead, onto: base }
+    : { replayBase: `${f.commit}^`, theirs: f.commit, onto: parentOf.get(f.commit) || base });
+  const { hard, conflict } = splitByConflict(run, findings, replayOf);
+  const clean = ({ total, ...rest }) => rest;
+  // Bounded per class, so a long conflict list never hides a hard refusal; the conflict total is kept for the reviewer.
+  return {
+    lostChanges: hard.slice(0, MAX_FINDINGS).map(clean),
+    conflictHunks: conflict.slice(0, MAX_FINDINGS).map(clean),
+    conflictTotal: conflict.length,
+  };
+}

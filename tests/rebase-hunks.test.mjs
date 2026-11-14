@@ -17,6 +17,8 @@ const cli = new URL('../supervisor/cli.mjs', import.meta.url).pathname;
 const lines = (...l) => l.join('\n') + '\n';
 
 // base -> feat (one commit "pr change") on the branch; main moves on with `main`; the agent resolves with `resolution`.
+// Issue #1422: a hunk lost in a file that conflicts with main is pushed and judged by the review, so a case that must still be refused
+// leaves `main` out: main then changes another file, the rebase is clean and the agent's edit of the result is the loss.
 function world(t, { file = 'f.txt', base, feat, main, resolution }) {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'rh-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -27,7 +29,9 @@ function world(t, { file = 'f.txt', base, feat, main, resolution }) {
   const put = (text, msg) => { fs.writeFileSync(path.join(seed, file), text); git(seed, 'add', '-A'); git(seed, 'commit', '-q', '-m', msg); };
   put(base, 'base'); git(seed, 'branch', '-M', 'main'); git(seed, 'push', '-q', 'origin', 'main');
   git(seed, 'checkout', '-q', '-b', 'feat'); put(feat, 'pr change'); git(seed, 'push', '-q', 'origin', 'feat');
-  git(seed, 'checkout', '-q', 'main'); put(main, 'main moves'); git(seed, 'push', '-q', 'origin', 'main');
+  git(seed, 'checkout', '-q', 'main');
+  if (main === undefined) { fs.writeFileSync(path.join(seed, 'other.txt'), 'main moves\n'); git(seed, 'add', '-A'); git(seed, 'commit', '-q', '-m', 'main moves'); } else put(main, 'main moves');
+  git(seed, 'push', '-q', 'origin', 'main');
   const agent = path.join(dir, 'agent');
   git(dir, 'clone', '-q', remote, agent);
   const { oldHead } = prepareRebase({ worktree: agent, branch: 'feat' });
@@ -66,8 +70,7 @@ test('a moved hunk is accepted: the PR line sits elsewhere in the result and the
 
 test('a missing hunk is refused with the commit, the file and the hunk, and the remote head stays', t => {
   const w = world(t, {
-    base: lines('a', 'b', 'c', 'd'), feat: lines('a', 'b', 'feature();', 'c', 'D'), main: lines('a', 'B', 'c', 'd'),
-    resolution: lines('a', 'B', 'c', 'D'),
+    base: lines('a', 'b', 'c', 'd'), feat: lines('a', 'b', 'feature();', 'c', 'D'), resolution: lines('a', 'b', 'c', 'D'),
   });
   const before = remoteHead(w);
   const p = push(w);
@@ -95,8 +98,8 @@ test('a change main already made is excluded, not guessed: the PR line main also
 
 test('an altered hunk is refused and called altered, not missing', t => {
   const w = world(t, {
-    base: lines('a', 'limit = 1', 'c'), feat: lines('a', 'limit = 10', 'c', 'more();'), main: lines('a', 'limit2 = 1', 'c'),
-    resolution: lines('a', 'limit2 = 1', 'limit = 11', 'c', 'more();'),
+    base: lines('a', 'limit = 1', 'c'), feat: lines('a', 'limit = 10', 'c', 'more();'),
+    resolution: lines('a', 'limit = 11', 'c', 'more();'),
   });
   const p = push(w);
   assert.equal(p.out.pushed, false);
@@ -110,8 +113,8 @@ test('a renumbered line is accepted when the old number is one main took; any ot
   const ok = world(t, { base, feat, main, resolution: lines('# Register', '## D-039 old', '## D-040 other', '## D-041 other', '## D-042 mine', '- Status: proposal') });
   assert.equal(push(ok).out.pushed, true);
   const noMain = world(t, {
-    base: lines('x = 1', 'k'), feat: lines('x = 1', 'limit = 10', 'k', 'more();'), main: lines('x = 1', 'other', 'k'),
-    resolution: lines('x = 1', 'other', 'limit = 11', 'k', 'more();'),
+    base: lines('x = 1', 'k'), feat: lines('x = 1', 'limit = 10', 'k', 'more();'),
+    resolution: lines('x = 1', 'limit = 11', 'k', 'more();'),
   });
   const bad = push(noMain);
   assert.equal(bad.out.pushed, false);
@@ -153,8 +156,7 @@ test('a dropped pure addition is refused even when its tokens appear on another 
   const w = world(t, {
     base: lines('cfg = {', '  a: 1,', '};', 'x', 'y'),
     feat: lines('cfg = {', '  a: 1,', '  strict: true,', '};', 'x', 'if (cfg.strict === true) run();', 'y'),
-    main: lines('cfg = {', '  a: 2,', '};', 'x', 'y'),
-    resolution: lines('cfg = {', '  a: 2,', '};', 'x', 'if (cfg.strict === true) run();', 'y'),
+    resolution: lines('cfg = {', '  a: 1,', '};', 'x', 'if (cfg.strict === true) run();', 'y'),
   });
   const p = push(w);
   assert.equal(p.out.pushed, false);
@@ -176,10 +178,10 @@ test('regression, PR 1192: the register entry D-040 renumbered D-042 after main 
   assert.equal(remoteHead(w), git(w.agent, 'rev-parse', 'HEAD'));
 });
 
-const gone = { base: lines('a', 'b', 'c', 'd'), feat: lines('a', 'b', 'feature();', 'c', 'D'), main: lines('a', 'B', 'c', 'd') };
+const gone = { base: lines('a', 'b', 'c', 'd'), feat: lines('a', 'b', 'feature();', 'c', 'D') };
 
 test('repair path with a fake agent: the first push is refused, the agent restores the hunk, the second push is accepted', t => {
-  const w = world(t, { ...gone, resolution: lines('a', 'B', 'c', 'D') });
+  const w = world(t, { ...gone, resolution: lines('a', 'b', 'c', 'D') });
   const first = push(w);
   assert.equal(first.code, 3);
   assert.equal(first.out.attempt, 1);
@@ -187,7 +189,7 @@ test('repair path with a fake agent: the first push is refused, the agent restor
   assert.match(first.out.message, /run rebase-push once more/);
   assert.equal(readRefusal(w.agent, w.oldHead).reason, 'lost-changes');
   // the fake agent restores the named hunk in a commit of its own: the prompt forbids amending
-  fs.writeFileSync(path.join(w.agent, w.file), lines('a', 'B', 'c', 'D', 'feature();'));
+  fs.writeFileSync(path.join(w.agent, w.file), lines('a', 'b', 'c', 'D', 'feature();'));
   git(w.agent, 'commit', '-q', '-am', 'restore feature');
   const second = push(w);
   assert.equal(second.code, 0);
@@ -196,9 +198,9 @@ test('repair path with a fake agent: the first push is refused, the agent restor
 });
 
 test('a second refusal ends the run with the existing stop (rebase-stop)', t => {
-  const w = world(t, { ...gone, resolution: lines('a', 'B', 'c', 'D') });
+  const w = world(t, { ...gone, resolution: lines('a', 'b', 'c', 'D') });
   assert.equal(push(w).out.stop, false);
-  resolve(w, lines('a', 'B', 'c', 'D', 'other();'));   // the fake agent restores the wrong thing
+  resolve(w, lines('a', 'b', 'c', 'D', 'other();'));   // the fake agent restores the wrong thing
   const second = push(w);
   assert.equal(second.code, 3);
   assert.equal(second.out.pushed, false);
