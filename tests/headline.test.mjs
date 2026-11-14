@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { headlineStats, WINDOWS, CARD_IDS } from '../supervisor/headline.mjs';
 import { compactIssues } from '../supervisor/dashdata.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, rmSync } from 'node:fs';
 import { renderRoute, matchRoute, queueSplit } from '../supervisor/dashrender.mjs';
 import { createTools } from '../foreman-mcp/tools.mjs';
 import { overviewView, NOW } from './helpers/lists-fixture.mjs';
@@ -204,3 +204,126 @@ test('buildView: PRs opened comes from the cached createdAt and cost includes th
   assert.equal(w.throughput.opened, 2);   // PR 9 from createdAt, merged PR 8 from its implement job
   assert.equal(w.cost.value, 6);
 });
+
+// Issue #1376: the first review counts the earliest verdict ever given, from the live state and the archived timeline together.
+const T = (iso, pr, verdict, extra = {}) => ({ id: `verdict:${pr}:${iso}`, at: Date.parse(iso), kind: 'verdict', pr, head: 'abc1234', verdict, reviewer: 'codex', ...extra });
+const NOW_1376 = Date.parse('2026-11-13T08:00:00Z');
+const pr1200 = { number: 1200, title: 'pr 1200', status: 'merged', mergedAt: Date.parse('2026-11-13T02:00:00Z'), fixRounds: 0, rebaseRounds: 0,
+  verdicts: [{ verdict: 'PASS', at: Date.parse('2026-11-13T01:20:00Z'), reviewer: 'codex', head: 'abc1234' }] };
+const archive1200 = [T('2026-11-12T22:59:00Z', 1200, 'CHANGES'), T('2026-11-13T00:46:00Z', 1200, 'CHANGES')];
+const round1200 = { id: 'd'.repeat(32), status: 'completed', kind: 'review', postcondition: { kind: 'description_edited', pr: 1200, baseHead: 'abc1234def5678' } };
+const stats1376 = (prs, timeline, jobs = [round1200]) => headlineStats({ prs, timeline, jobs, now: NOW_1376 }).windows['24h'].cards;
+
+test('first review: pull request 1200 (two archived CHANGES, then a live PASS on one head) is not approved first time and is a description only rejection', () => {
+  const c = stats1376([pr1200], archive1200)['first-pass'];
+  assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [0, 1, 1]);
+  assert.equal(c.items[0].detail, 'first review: CHANGES (description only)');
+});
+
+test('without the archived timeline the same pull request reads as approved first time (the old figure)', () => {
+  const c = stats1376([pr1200], [])['first-pass'];
+  assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [1, 1, 0]);
+});
+
+test('a CHANGES archived for a requirements change or a requested second review (no description round job) is not a description only rejection', () => {
+  const c = stats1376([pr1200], archive1200, [])['first-pass'];
+  assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [0, 1, 0]);
+  assert.equal(c.items[0].detail, 'first review: CHANGES');
+  const unfinished = { ...round1200, status: 'running' };
+  assert.equal(stats1376([pr1200], archive1200, [unfinished])['first-pass'].descriptionOnlyRejected, 0);
+});
+
+test('real path: two CHANGES on one head archived by the supervisor both stay in the timeline and count as rounds', async () => {
+  const { archiveVerdict, recordTimeline, readTimeline } = await import('../supervisor/history.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376r-`);
+  const key = '1200:abc1234def5678';
+  const v = (iso, verdict) => ({ verdict, at: Date.parse(iso), reviewer: 'codex' });
+  const first = v('2026-11-12T22:59:00Z', 'CHANGES'), second = v('2026-11-13T00:46:00Z', 'CHANGES'), last = v('2026-11-13T01:20:00Z', 'PASS');
+  recordTimeline(root, { state: { verdicts: { [key]: first } } });
+  archiveVerdict(root, key, first);
+  recordTimeline(root, { state: { verdicts: { [key]: second } } });
+  archiveVerdict(root, key, second);
+  recordTimeline(root, { state: { verdicts: { [key]: last } } });
+  const timeline = readTimeline(root);
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(timeline.filter(e => e.kind === 'verdict').length, 3);
+  const live = { ...pr1200, verdicts: [{ ...last, head: 'abc1234' }] };
+  const c = stats1376([live], timeline);
+  assert.equal(c.rounds.rounds, 3);
+  assert.deepEqual([c['first-pass'].approved, c['first-pass'].descriptionOnlyRejected], [0, 1]);
+});
+
+test('an older timeline entry (id without a time) is not written a second time beside the new id', async () => {
+  const { appendTimeline, archiveVerdict, readTimeline } = await import('../supervisor/history.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376o-`);
+  const at = Date.parse('2026-11-12T22:59:00Z');
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  appendTimeline(root, [{ id: `verdict:1200:${sha}`, at, kind: 'verdict', pr: 1200, head: sha, verdict: 'CHANGES' }]);
+  archiveVerdict(root, `1200:${sha}`, { verdict: 'CHANGES', at });
+  const n = readTimeline(root).length;
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(n, 1);
+});
+
+test('rounds per merged pull request count archived verdicts as review rounds', () => {
+  const c = stats1376([pr1200], archive1200).rounds;
+  assert.equal(c.rounds, 3);
+  assert.equal(stats1376([pr1200], [])['rounds'].rounds, 1);
+});
+
+test('a carried verdict is left out, whether live or archived as a copy of its original', () => {
+  const live = { ...pr1200, verdicts: [{ verdict: 'PASS', at: Date.parse('2026-11-13T01:20:00Z'), reviewer: 'codex', head: 'abc1234', carry: { at: 1 } }] };
+  const copy = T('2026-11-13T01:00:00Z', 1200, 'PASS', { job: 'a'.repeat(32) });
+  const copyOfIt = T('2026-11-13T01:10:00Z', 1200, 'PASS', { job: 'a'.repeat(32) });
+  const c = stats1376([{ ...pr1200, verdicts: [] }], [copy, copyOfIt]);
+  assert.equal(c.rounds.rounds, 1, 'two archived entries of one job are one review');
+  assert.equal(stats1376([live], [])['first-pass'].reviewed, 0);
+});
+
+test('a second opinion entry in the timeline is not a first review', () => {
+  const c = stats1376([{ ...pr1200, verdicts: [] }], [T('2026-11-13T00:46:00Z', 1200, 'CHANGES', { detail: 'second opinion' })])['first-pass'];
+  assert.equal(c.reviewed, 0);
+});
+
+test('boundary: an archived verdict exactly on the period edge is counted once; one on the opening edge is outside', () => {
+  const edge = [T('2026-11-13T08:00:00Z', 7, 'PASS'), T('2026-11-13T08:00:00Z', 7, 'PASS', { id: 'dup' })];
+  const p = { number: 7, title: 'p', status: 'open', verdicts: [] };
+  const c = stats1376([p], edge);
+  assert.equal(c['first-pass'].reviewed, 1);
+  assert.equal(c.rejects.changes, 0);
+  const opening = stats1376([p], [T('2026-11-12T08:00:00Z', 7, 'PASS')])['first-pass'];
+  assert.equal(opening.reviewed, 0);
+});
+
+test('a pull request whose only verdict is live, and one with no timeline entry, count as before', () => {
+  const only = { number: 8, title: 'p', status: 'open', verdicts: [{ verdict: 'CHANGES', at: Date.parse('2026-11-13T05:00:00Z'), head: 'abc1234' }] };
+  const c = stats1376([only], [T('2026-11-13T05:00:00Z', 8, 'CHANGES')])['first-pass'];
+  assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [0, 1, 0]);
+});
+
+test('a malformed timeline entry is skipped and the count still returns', () => {
+  const bad = [null, 'x', { kind: 'verdict', pr: 'nope', at: 'bad' }, { kind: 'verdict', pr: 1200, at: NaN }, ...archive1200];
+  assert.equal(stats1376([pr1200], bad)['first-pass'].descriptionOnlyRejected, 1);
+  assert.equal(headlineStats({ prs: [pr1200], timeline: 'garbage', now: NOW_1376 }).windows['24h'].cards['first-pass'].reviewed, 1);
+});
+
+test('the first review card shows the description only rejections beside the figure, and the real timeline file reader feeds it', async () => {
+  const { appendTimeline, readTimeline } = await import('../supervisor/history.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376-`);
+  appendTimeline(root, archive1200);
+  addMalformedLine(root);
+  const c = headlineStats({ prs: [pr1200], jobs: [round1200], timeline: readTimeline(root), now: NOW_1376 }).windows['24h'].cards['first-pass'];
+  assert.equal(c.descriptionOnlyRejected, 1);
+  const view = await overviewView();
+  view.headline = headlineStats({ prs: [pr1200], timeline: readTimeline(root), now: NOW_1376 });
+  rmSync(root, { recursive: true, force: true });
+  const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  assert.match(html, /approved first time/);
+});
+function addMalformedLine(root) {
+  // a malformed line in the archived timeline file itself
+  appendFileSync(`${root}/dashboard/archive/timeline.jsonl`, 'not json\n');
+}
