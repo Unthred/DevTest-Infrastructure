@@ -210,6 +210,7 @@ test('an unchanged claim about a file the diff changes is reported; about a file
   assert.match(found[0].reason, /team\.mjs is unchanged but the diff changes supervisor\/team\.mjs/);
   assert.equal(claims('The file `supervisor/team.mjs` is untouched.', diff).length, 1);
   assert.deepEqual(claims('supervisor/other.mjs is unchanged; team.mjs changes the thing.', diff), []);
+  assert.deepEqual(claims('| A file is unchanged | Met | `supervisor/team.mjs:2` |', diff), []);
 });
 
 test('PR 1427 totals are reported, both lines; an issue number, a line cite and a version are not totals', () => {

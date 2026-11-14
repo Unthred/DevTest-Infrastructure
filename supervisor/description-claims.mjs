@@ -62,7 +62,7 @@ export function unchangedClaimProblems({ body, diffFiles }) {
   const out = [];
   const changed = [...diffFiles.keys()];
   for (const line of String(body || '').split('\n')) {
-    for (const clause of line.split(/\.\s+|;|\bbut\b/i)) {
+    for (const clause of line.split(/\.\s+|;|\||\bbut\b/i)) {
       if (!UNCHANGED.test(clause)) continue;
       for (const name of clause.replace(/`/g, '').match(FILE_NAME) || []) {
         const path = changed.find(file => file === name || file.endsWith(`/${name}`));
