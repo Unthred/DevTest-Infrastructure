@@ -47,7 +47,7 @@ test('invariant: every Needs you rank and every id the source raises has a table
 test('every control the table offers is an existing action; none is a slice 2 or 3 action', () => {
   const known = new Set([...Object.keys(ACTIONS), ...Object.keys(INBOX_CONTROLS)]);
   for (const a of Object.keys(CONTROLS)) assert.ok(known.has(a), `${a} is not an existing action`);
-  for (const later of ['extra_fix_round', 'close_superseded', 'merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
+  for (const later of ['extra_fix_round', 'merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
 });
 test('the breaker entry offers resume_breaker with the halt cause carried as the item scope, and no longer says the control is to come', () => {
   assert.ok('resume_breaker' in CONTROLS);
@@ -62,7 +62,7 @@ test('longest type wins and unmapped ids have no type', () => {
   assert.equal(typeOf('noreviewer-refused-3'), 'noreviewer-refused'); assert.equal(typeOf('mystery-1'), null); assert.equal(typeOf('fixlimitation-1'), null);
 });
 test('each mapped type with items renders a reason, a clear condition and its controls', () => {
-  const want = { fixlimit: [], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'], reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
+  const want = { fixlimit: ['close_superseded'], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'], reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
     'selfcheck-job': ['stop_job'], job: ['resume_job', 'close_job'], 'stale-mark': ['reopen'] };
   for (const [k, item] of Object.entries(ITEMS)) {
     const card = decisionCard(item);
@@ -84,11 +84,11 @@ test('a card with no text still has a reason; the reason is never empty', () => 
 });
 test('park only with the GitHub App; unpark only when parked; the target is the item number', () => {
   const none = decisionCard(ITEMS.fixlimit, { appConfigured: false });
-  assert.deepEqual(none.controls, []);
+  assert.deepEqual(none.controls.map(c => c.action), ['close_superseded'], 'closing as superseded needs no GitHub App');
   const app = decisionCard(ITEMS.fixlimit, { appConfigured: true });
-  assert.deepEqual(app.controls.map(c => [c.action, c.target]), [['park', '7']]);
+  assert.deepEqual(app.controls.map(c => [c.action, c.target]), [['close_superseded', '7'], ['park', '7']]);
   const parked = decisionCard(ITEMS.fixlimit, { appConfigured: true, parked: new Set([7]) });
-  assert.deepEqual(parked.controls.map(c => c.action), ['unpark']);
+  assert.deepEqual(parked.controls.map(c => c.action), ['close_superseded', 'unpark']);
 });
 test('a type with no entry renders the explicit error card with no control', () => {
   const card = decisionCard({ id: 'mystery-1', text: 'x', ref: PR(1) });
@@ -104,7 +104,7 @@ test('withDecisionCards puts a card on every Needs you item and reads parked lab
   const view = { panels: { needsYou: [ITEMS.fixlimit, { id: 'mystery-1', text: 'x' }] } };
   const cfg = { github_app: { app_id: 1, installation_id: 2, key_file: '/k' } };
   withDecisionCards(view, cfg, { pulls: [{ number: 7, labels: ['parked'] }] });
-  assert.deepEqual(view.panels.needsYou[0].card.controls.map(c => c.action), ['unpark']);
+  assert.deepEqual(view.panels.needsYou[0].card.controls.map(c => c.action), ['close_superseded', 'unpark']);
   assert.ok(view.panels.needsYou[1].card.error);
   assert.deepEqual(withDecisionCards({ panels: {} }, cfg, {}), { panels: {} });
 });
@@ -209,4 +209,18 @@ test('end to end: a clicked park and a clicked clear_retry_cap are each applied 
   await w.team.processInbox({});
   const failed = allStatuses(s.inboxDir).filter(x => x.state === 'failed');
   assert.equal(failed.length, 1); assert.match(failed[0].reason, /nothing to clear/); assert.match(failed[0].result, /nothing was changed/);
+});
+
+// Issue #1337: the numbers field on the cards that can be closed as superseded.
+test('close_superseded is on the fix limit, churn, CI and stalled cards, each with a numbers field; other cards do not offer it', () => {
+  const items = { fixlimit: ITEMS.fixlimit, churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) }, ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) }, stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) } };
+  for (const [type, item] of Object.entries(items)) {
+    const card = decisionCard(item);
+    assert.equal(card.type, type);
+    const control = card.controls.find(c => c.action === 'close_superseded');
+    assert.deepEqual([control.target, control.input, control.label], ['7', 'superseded_by', 'Close as superseded'], type);
+    assert.match(decisionHtml({ ...item, card }), /<input class="decision-input" type="text" name="superseded_by" required maxlength="60"/, type);
+  }
+  for (const item of [ITEMS.retrycap, ITEMS.reviewlimit, ITEMS.job]) assert.ok(!decisionCard(item).controls.some(c => c.action === 'close_superseded'), item.id);
+  assert.ok(!decisionHtml({ ...ITEMS.fixlimit, card: decisionCard(ITEMS.retrycap) }).includes('name="superseded_by"'), 'a card without the control has no numbers field');
 });

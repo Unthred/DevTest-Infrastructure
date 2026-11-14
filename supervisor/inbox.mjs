@@ -19,6 +19,8 @@ export const INTERNAL_KINDS = ['host_value'];
 // number, or the 8-character job id the dashboard shows); the item carries no command, path or free-form argument.
 // Issue #1179: the release of an agent parked after an infrastructure fault.
 const RELEASE_WILL = 'Release this agent from its infrastructure-fault park, for a cause you judge benign. A real fault parks it again. Refused when it is not parked.';
+const SUPERSEDE_WILL = 'Close it with a comment naming the superseding items (superseded_by), after saving a pull request branch under saved/ (issue #1337). '
+  + 'An issue is closed as not planned. Refused when it is not open, a superseding item does not exist, or a job is running on it; nothing is merged or approved.';
 export const ACTIONS = {
   new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
   clear_retry_cap: { target: 'pr', noun: 'pull request', will: 'Clear the retry cap Foreman put on this pull request (a rebase, fix or review that failed twice for the same cause), so it is planned again. Refused when no cap is in place. Nothing is merged or approved.' },
@@ -30,12 +32,23 @@ export const ACTIONS = {
   unpark: { target: 'pr', noun: 'issue or pull request', will: 'Remove the parked label from this issue or pull request so the planner may take it again (issue #1115). Refused when it is not parked.' },
   release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
   resume_breaker: { target: 'breaker', noun: 'breaker scope', will: 'Resume this tripped circuit breaker scope exactly as `team breaker resume` does, recorded with who and why (issue #1332). Refused when the scope is not halted. Nothing is merged or approved.' },
+  close_superseded: { target: 'pr', noun: 'pull request or issue', will: SUPERSEDE_WILL },
 };
 // Issue #1332: the one breaker scope shape: @global, all, or a halt key (the breaker writes causes up to 120 characters). The decision table and
 // inbox validation import it; the MCP server cannot import from the supervisor, so foreman-mcp/inbox.mjs keeps a copy and a test compares them.
 export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
 export const BREAKER_SCOPE_MAX = 160;
 const BREAKER_SCOPE_REFUSAL = 'target must be @global, all or a halt key of letters, digits and _ . : - (at most 160 characters)';
+// Issue #1337: close_superseded names one to five issue or pull request numbers, separated by commas, in at most 60 characters. The MCP server
+// keeps a copy (foreman-mcp/inbox.mjs) and a test compares them.
+export const SUPERSEDED_BY = /^\d{1,9}(?:\s*,\s*\d{1,9}){0,4}$/;
+export const SUPERSEDED_BY_MAX = 60;
+const SUPERSEDED_BY_REFUSAL = 'superseded_by must be one to five issue or pull request numbers separated by commas';
+// Issue #1337: superseded_by belongs to close_superseded (a named action, never a control), where it is required.
+function supersededRefusal(raw) {
+  if (raw.action !== 'close_superseded') return raw.superseded_by === undefined ? null : 'superseded_by is only accepted with close_superseded';
+  return raw.kind === 'action' && SUPERSEDED_BY.test(raw.superseded_by) ? null : SUPERSEDED_BY_REFUSAL;
+}
 const targetMax = raw => (raw.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : 12);
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
@@ -50,6 +63,7 @@ export const PROMPT_EFFECTS = ['read_only', 'report_only'];
 const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind', 'title', 'body', 'why'], action: ['kind', 'title', 'action', 'target', 'reason'], host_value: ['kind', 'title', 'key', 'value', 'why'] };
 FIELDS.prompt.push('effect');
 FIELDS.issue_draft.push('after');   // issue #1259
+FIELDS.action.push('superseded_by');   // issue #1337: required for close_superseded, refused for every other action
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -97,10 +111,10 @@ export function validateItem(raw, { internal = false } = {}) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body';
-  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw), key: 60, value: 300 };
+  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw), key: 60, value: 300, superseded_by: SUPERSEDED_BY_MAX };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || (k === 'superseded_by' && raw.action !== 'close_superseded'))) continue;
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
@@ -124,6 +138,8 @@ export function validateItem(raw, { internal = false } = {}) {
     if (spec.target === 'latch' && raw.target !== 'latch') return { ok: false, reason: 'target must be latch' };   // issue #1160
     if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
     if (spec.target === 'breaker' && !BREAKER_SCOPE.test(raw.target)) return { ok: false, reason: BREAKER_SCOPE_REFUSAL };   // issue #1332
+    const bad = supersededRefusal(raw);
+    if (bad) return { ok: false, reason: bad };
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
   if (raw.kind === 'host_value') {
@@ -237,6 +253,7 @@ const effectNote = it => (PROMPT_EFFECTS.includes(it.effect)
   : ' It may change queue order or config, so new implement work waits for it.');
 
 const chainNote = (inboxDir, it) => (it.after ? ` It waits for the earlier drafts: ${afterLabels(inboxDir, it.after).join('; ')}; their issue numbers are written into its prerequisite line.` : '');
+const actionText = it => `${it.action} ${it.target}${it.superseded_by ? ` (superseded by ${it.superseded_by})` : ''}\nReason: ${it.reason}`;
 // Cards for the dashboard: pending items with exactly what will happen. Text is redacted again for display (defence in depth).
 export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {}) {
   return allStatuses(inboxDir).filter(s => s.state === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(s => {
@@ -246,7 +263,7 @@ export function pendingCards(inboxDir, { query = '', kind = '', state = '' } = {
     return { id: s.id, kind: it.kind, state: s.state, createdAt: s.createdAt ?? null, title: clip(it.title, LIMITS.title), why: it.why ? clip(it.why, 400) : null, hash: s.hash.slice(0, 12), body: it.body, prompt: it.prompt, reason: it.reason, target: it.target,
       waitsFor: it.after ? afterLabels(inboxDir, it.after) : undefined,
       will: it.kind === 'host_value' ? `Back up team.local.json, add this value to ${it.key}, check that the file still parses and the configuration is valid. Nothing else changes; no restart is needed.` : it.kind === 'action' ? `${ACTIONS[it.action].will} Target: ${ACTIONS[it.action].noun} ${it.target}.` : it.kind === 'prompt' ? promptWill(it) : 'Post this as a new GitHub issue from the homeowner account, once, with secrets redacted.' + chainNote(inboxDir, it),
-      text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? `${it.action} ${it.target}\nReason: ${it.reason}` : it.body, LIMITS.prompt) };
+      text: it.kind === 'host_value' ? `${it.key} += ${it.value}` : clip(it.kind === 'prompt' ? it.prompt : it.kind === 'action' ? actionText(it) : it.body, LIMITS.prompt) };
   }).filter(card => (!kind || card.kind === kind) && (!state || card.state === state) && matchesInboxSearch(card, query));
 }
 

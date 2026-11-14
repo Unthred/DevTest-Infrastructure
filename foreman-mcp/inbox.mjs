@@ -18,7 +18,10 @@ const ACTIONS = { new_review_attempt: NUMBER, clear_retry_cap: NUMBER, reopen: N
 // Issue #1332: a copy of BREAKER_SCOPE in supervisor/inbox.mjs (this module imports nothing from supervisor/); a test compares the two.
 export const BREAKER_SCOPE = /^(?:@global|all|[A-Za-z0-9_.:-]{1,160})$/;
 export const BREAKER_SCOPE_MAX = 160;
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, release_agent: /^[a-z][a-z0-9_-]{0,11}$/, resume_breaker: BREAKER_SCOPE };
+// Issue #1337: copies of SUPERSEDED_BY and SUPERSEDED_BY_MAX in supervisor/inbox.mjs; a test compares them.
+export const SUPERSEDED_BY = /^\d{1,9}(?:\s*,\s*\d{1,9}){0,4}$/;
+export const SUPERSEDED_BY_MAX = 60;
+const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, close_superseded: NUMBER, release_agent: /^[a-z][a-z0-9_-]{0,11}$/, resume_breaker: BREAKER_SCOPE };
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
@@ -26,6 +29,15 @@ const ATTRIBUTION = [/\bgenerated (?:with|by)\b[^\n]{0,60}\b(?:claude|codex|gpt|
 const OPTIONAL = ['why', 'effect', 'after'];
 const SUBMITTED_NOTE = 'Foreman validates the item, then the homeowner approves or rejects it on the dashboard. Read the outcome with foreman_proposal_status.';
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+
+// Issue #1332: only resume_breaker's target may be long; issue #1337: superseded_by has its own limit.
+const maxOf = (key, action) => (key === 'target' && action === 'resume_breaker' ? BREAKER_SCOPE_MAX : key === 'superseded_by' ? SUPERSEDED_BY_MAX : (LIMITS[key] ?? 40));
+// Issue #1337: superseded_by belongs to close_superseded only, where it is required.
+function supersededRefusal(item) {
+  if (item.action !== 'close_superseded') return item.superseded_by === undefined ? null : 'superseded_by is only accepted with close_superseded';
+  if (SUPERSEDED_BY.test(item.superseded_by)) return null;
+  return 'superseded_by must be one to five issue or pull request numbers separated by commas, at most 60 characters';
+}
 
 // Refuses early what Foreman would refuse later, so the overseer learns at once. Returns { ok, item } or { ok:false, error }.
 export function checkProposal(args) {
@@ -36,6 +48,7 @@ export function checkProposal(args) {
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
+  if (kind === 'action') allowed.push('superseded_by');   // issue #1337
   if (kind === 'issue_draft') allowed.push('after');   // issue #1259: earlier drafts this one is posted after
   if (kind === 'prompt') allowed.push('effect');   // issue #1238: optional, read_only or report_only
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
@@ -43,11 +56,11 @@ export function checkProposal(args) {
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after')) continue;
+    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || (k === 'superseded_by' && a.action !== 'close_superseded'))) continue;
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
-    const max = k === 'target' && a.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : (LIMITS[k] ?? 40);   // issue #1332: only this action's target may be long
+    const max = maxOf(k, a.action);
     if (v.length > max) return { ok: false, error: `${k} is longer than ${max} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
     if (redact(v) !== v) return { ok: false, error: `${k} contains secret-shaped text; remove it` };
@@ -62,6 +75,8 @@ export function checkProposal(args) {
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
+    const bad = supersededRefusal(item);
+    if (bad) return { ok: false, error: bad };
     if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name, or for resume_breaker @global, all or a halt key of at most 160 characters (clear_latch takes none)' };
   }
   return { ok: true, item };
