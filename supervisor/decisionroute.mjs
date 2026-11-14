@@ -35,7 +35,7 @@ export function decisionRoute({ root, source, cachedView, store, wake, now, guar
       return send(303, 'text/plain; charset=utf-8', 'too soon', { location: `/?notice=inbox-cooldown${back.slice(1)}`, 'retry-after': wait });
     }
     const prepared = await cachedView({ root, config: source(), now: t, configError: source.invalid, timeline: false, allTime: false });
-    const found = resolveClick(prepared.view, { card: form.get('card') || '', control: form.get('control') || '' });
+    const found = resolveClick(prepared.view, { card: form.get('card') || '', control: form.get('control') || '', supersededBy: form.get('superseded_by') || '' });
     const r = found.ok ? recordClick(source().inbox.dir, found, t) : found;
     if (!r.ok) {
       releaseCooldown(root, 'inbox', t);

@@ -1,6 +1,9 @@
 // Issue #1115: what an overseer `control` item (park, stop_job) and an approved `unpark` do. Each returns a plain outcome and never throws for a
 // normal refusal: { outcome: 'done' | 'refused', changed, text }. The caller records who, when, why and the result in the item's status.
 // Nothing here merges, approves or releases work except unpark, which only runs after the homeowner approved it on the dashboard.
+import { liveJobsFor } from './livejobs.mjs';
+import { resumeBreakerApproved } from './resumebreakeraction.mjs';
+import { closeSupersededApproved } from './closesupersededaction.mjs';
 import { addLabelAsApp } from './appidentity.mjs';
 import { refusalNote } from './pendingsteps.mjs';
 import { postIssueDraft } from './issue-drafts.mjs';
@@ -19,18 +22,11 @@ async function findItem(gh, n) {
   return issue ? { kind: 'issue', labels: issue.labels || [] } : null;
 }
 
-// Live (not ended) jobs working on an issue or pull request number, as short ids.
-async function liveJobsFor(n, { jobs, records }) {
-  const ids = Object.keys(records).filter(id => records[id].pr === n || records[id].issue === n);
-  const live = [];
-  for (const id of ids) { const job = await jobs.get(id).catch(() => null); if (job && !TERMINAL.has(job.status)) live.push(id.slice(0, 8)); }
-  return live;
-}
-
 // Issue #1155: when the refusal is because a homeowner step is outstanding, it names the step and its PR.
 const stepNote = deps => { const note = refusalNote(deps.pendingSteps, 'github_app'); return note ? `; ${note}` : ''; };
 
-export { resumeBreakerApproved } from './resumebreakeraction.mjs';   // issue #1332: the team imports it through here
+// Issues #1332 and #1337: the approved routine actions that have a module of their own; the team imports the one entry point from here.
+export const routineApproved = (team, item, status) => resumeBreakerApproved(team, item, status) ?? closeSupersededApproved(team, item);
 export async function park(n, deps) {
   const found = await findItem(deps.gh, n);
   if (!found) return refused(`no open issue or pull request #${n}`);
