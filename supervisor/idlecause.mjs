@@ -151,7 +151,7 @@ export function renderIdleReport(rep) {
 // Issue #406: passes by trigger. A recorded tick is one pass; `trigger` says what started it (a record from before wakes existed has none and
 // was scheduled). A pass "started something" when it planned at least one action; "did nothing" when its plan was empty. `unlabelled`
 // counts the records that carried no trigger so the figure says how much of it is measured per trigger and how much is inferred.
-export const PASS_TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time', 'ci'];
+export const PASS_TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time', 'ci', 'follow-up'];
 export function passStats(snapshots, from, to) {
   const by = Object.fromEntries(PASS_TRIGGERS.map(k => [k, { passes: 0, startedSomething: 0, didNothing: 0, noop: 0 }]));
   let unlabelled = 0, errors = 0;
