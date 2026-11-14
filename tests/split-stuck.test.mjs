@@ -343,7 +343,8 @@ test('the dashboard view shows one split card with Approve split and Reject spli
     board: { owner: 'o', number: 1, project_id: 'P', status_field_id: 'F', options: { in_progress: 'a', in_review: 'b', done: 'c' } }
   };
   const pull = { number: 11, title: 't', headRefName: PR.branch, headRefOid: HEAD, baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE',
-    statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], labels: ['parked'], reviewDecision: '', closingIssuesReferences: [], url: 'https://github.com/o/r/pull/11' };
+    statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], labels: ['parked'], reviewDecision: '', closingIssuesReferences: [],
+    url: 'https://github.com/o/r/pull/11' };
   const record = { status: 'proposed', parked: true, reason: '4 fix rounds (limit 4) have not cleared CI', issue: 7, items: GOOD.items };
   const state = { fixAttempts: { [`11:${HEAD}`]: 4 }, verdicts: {}, notified: {}, jobs: {}, stuckSplits: { 11: record } };
   const cache = { tick: { at: now - 60000, status: 'ok', error: null, lastOkAt: now - 60000 }, pulls: [pull], issues: [] };

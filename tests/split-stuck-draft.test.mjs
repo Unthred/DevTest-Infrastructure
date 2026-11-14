@@ -77,14 +77,16 @@ test('ordinary issue split text is unchanged by the move of acceptSplit into its
   const filed = [];
   const notices = [];
   const team = {
-    s: { unblock: { queued: {} }, splits: { 7: { status: 'proposed', agent: 'codex', children: [{ title: 'a', scope: 'part one' }, { title: 'b', scope: 'part two' }] } } },
+    s: { unblock: { queued: {} }, splits: { 7: { status: 'proposed', agent: 'codex', children: [
+      { title: 'a', scope: 'part one' }, { title: 'b', scope: 'part two' }] } } },
     gh: { findIssueByMarker: async () => null, createIssue: async (title, body) => filed.push(body) + 99 },
     save: () => {},
     clock: { now: () => 1 },
     postNotice: async (issue, key, text) => notices.push([issue, key, text])
   };
   await acceptSplit(team, 7);
-  const expected = ['<!-- devtest-split-child v1 parent=7 idx=0 -->', 'Part 1 of 2 of #7, split by Foreman after #7 ran out of context (accepted by the homeowner).',
+  const expected = ['<!-- devtest-split-child v1 parent=7 idx=0 -->',
+    'Part 1 of 2 of #7, split by Foreman after #7 ran out of context (accepted by the homeowner).',
     '', '**Scope:** part one', '', 'Read #7 for the full requirements; deliver only this part.'].join('\n');
   assert.equal(filed[0], expected);
   assert.match(notices[0][2], /This issue is not started again; close it when the children are done\./);
