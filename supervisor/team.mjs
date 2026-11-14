@@ -59,6 +59,7 @@ import { dispatchApproved, unparkApproved, depsOf, unparkedPulls, routineApprove
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
+import { WRITER_KINDS, openFreeBatch } from './batchissue.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { slimFinding } from './rebasehunks.mjs';
@@ -78,7 +79,6 @@ const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose 
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
 // Issue #368: the held reason shown when the configured writing model is Opus (no other writer is available for that job).
 const opusRefusal = (agent, model, kind) => `no permitted writer: ${agent}'s ${kind} model is ${model}, and Opus is never given implement or fix work; set a non-Opus ${kind} model in the models config`;
-const WRITER_KINDS = new Set(['implement', 'continue', 'fix', 'cifix', 'rebase', 'inbox']);   // inbox: an approved overseer prompt (issue #124) writes like an implement job
 // A reviewer is independent of the writers when, for each, the provider differs or both models are known and differ.
 export const independentOf = (reviewer, writers) => writers.every(w => w.provider !== reviewer.provider || (!!w.model && !!reviewer.model && w.model !== reviewer.model));
 const ACTIVE = new Set(['queued', 'running', 'paused_limit', 'paused_manual']);
@@ -2283,16 +2283,8 @@ export class Team {
   async batchFollowUps(id, j, texts, material) {
     let files = []; try { files = (await this.gh.listPullFiles?.(j.pr)) || []; } catch { /* area falls back to general */ }
     const area = areaOf(files), marker = batchMarker(area), entry = { job: id, pr: j.pr, head: j.head, items: texts };
-    // A batch that a PR or job already implements is frozen: editing its body would change that PR's requirements hash and withdraw
-    // its PASS. Its follow-ups go to the next batch of the area instead.
-    const prs = await this.gh.listPulls().catch(() => []), skip = [];
-    let open = null;
-    while (this.gh.findOpenIssueByMarker && (open = await this.gh.findOpenIssueByMarker(marker, skip))) {
-      const re = new RegExp(`/issue-${open.number}(\\D|$)`);
-      const taken = prs.some(p => re.test(p.headRefName || '')) || Object.values(this.s.jobs).some(x => re.test(x.branch || '') || (x.issue === open.number && WRITER_KINDS.has(x.kind)));
-      if (!taken) break;
-      skip.push(open.number); open = null;
-    }
+    const prs = await this.gh.listPulls().catch(() => []);
+    const open = await openFreeBatch(this.gh, marker, { prs, jobs: Object.values(this.s.jobs) });   // frozen batches are skipped (issue #1370: shared)
     if (open) {
       const { body } = appendToBatch(open.body, entry);
       if (body !== open.body) await this.gh.updateIssueBody(open.number, body);

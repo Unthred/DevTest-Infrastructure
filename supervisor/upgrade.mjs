@@ -6,6 +6,7 @@
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
 import { mcpNeedsInstall } from './mcpinstall.mjs'; import { cleanupFrom, rollbackNote, rollbackInstall } from './rollbackcleanup.mjs';
 import { dropStaleLatch } from './tickskips.mjs';
+import { flakyRecorder } from './flakytests.mjs';
 import { noteRefusal, attemptDue } from './upgrade-attempts.mjs';
 export { liveTickOutcome, classifySkips } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';
@@ -293,6 +294,7 @@ export class SelfUpgrade {
   async noteFlaky(target, first, stage) {
     this.s.flaky = { sha: target, at: this.clock.now(), stage, tests: (first.tests || []).slice(0, 5), excerpt: String(first.excerpt || '').slice(0, 1500) };
     this.save();
+    await this.d.recordFlaky?.({ flaky: first, stage });   // issue #1370: a failure here never changes the install decision
     this.record({ to: target, result: 'flaky_test', stage, reason: first.reason, tests: this.s.flaky.tests, excerpt: this.s.flaky.excerpt });
     await this.alert(`${target}:flaky`,
       `Supervisor upgrade to ${short(target)}: ${stage} tests failed in the full run and passed when each failed file ran alone ` +
@@ -732,7 +734,7 @@ export function realDeps({ root, config, gh, listActive, verdictFor, independenc
     catch (error) { return { ok: false, environmental: true, reason: `test slot unavailable: ${String(error?.message || error).slice(0, 160)}` }; }
   };
   return {
-    config,
+    config, recordFlaky: flakyRecorder({ root, gh }),
     installed: () => installedSha(root),
     fetchMain: () => { git('fetch', '--quiet', 'origin', 'main'); return git('rev-parse', 'origin/main'); },
     isAncestor: (a, b) => run('git', ['-C', repo, 'merge-base', '--is-ancestor', a, b]).status === 0,
