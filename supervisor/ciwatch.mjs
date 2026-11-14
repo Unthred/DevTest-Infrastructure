@@ -19,7 +19,27 @@ export const MAX_WATCHERS = 6;
 const dirOf = root => path.join(root, 'team', 'ci-watch');
 const recordFile = (root, pr, sha) => path.join(dirOf(root), `${Number(pr)}-${String(sha).replace(/[^0-9a-f]/gi, '')}.json`);
 const readRecord = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
-const alive = r => !!r && Number.isFinite(r.pid) && processStart(r.pid) === r.start;
+// A record whose start is null was written for a process that had already gone: treated as dead, never as a live watcher.
+const alive = r => !!r && Number.isFinite(r.pid) && r.start != null && processStart(r.pid) === r.start;
+
+// A head whose watch ran out stays marked (pr-sha.timeout) so a later tick does not watch it again; a head stuck pending for good would
+// otherwise be re-watched every 45 minutes without end. The scheduled pass covers it. The marker is dropped after a day.
+export const TIMEOUT_MARK_MS = 24 * 60 * 60 * 1000;
+const markFile = (root, pr, sha) => recordFile(root, pr, sha).replace(/\.json$/, '.timeout');
+const markTimeout = (root, pr, sha) => {
+  try {
+    fs.mkdirSync(dirOf(root), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(markFile(root, pr, sha), String(Date.now()), { mode: 0o600 });
+  } catch { /* the watch simply may restart */ }
+};
+function timedOut(root, pr, sha) {
+  const file = markFile(root, pr, sha);
+  try {
+    if (Date.now() - fs.statSync(file).mtimeMs < TIMEOUT_MARK_MS) return true;
+    fs.rmSync(file, { force: true });
+  } catch { /* no marker */ }
+  return false;
+}
 
 // Live watcher records; the record of a dead watcher is removed as it is found.
 function liveRecords(root) {
@@ -56,6 +76,7 @@ export function startCiWatchers({ root, pulls, start, max = MAX_WATCHERS }) {
   const live = liveRecords(root);
   for (const h of pendingHeads(pulls)) {
     if (live.has(path.basename(recordFile(root, h.pr, h.sha)))) { out.already.push(h.pr); continue; }
+    if (timedOut(root, h.pr, h.sha)) { out.unwatched.push(h.pr); continue; }
     if (live.size >= max) { out.unwatched.push(h.pr); continue; }
     try {
       const child = start(h);
@@ -92,7 +113,7 @@ export async function runWatch({ root, pr, sha, readHead, wake, now = Date.now, 
         const state = checksState(head.statusCheckRollup);
         if (state !== 'pending' && state !== 'none') { try { wake(); } catch { /* the schedule is the fallback */ } return 'finished'; }
       }
-      if (now() - began + pollMs > maxMs) return 'timeout';
+      if (now() - began + pollMs > maxMs) { markTimeout(root, pr, sha); return 'timeout'; }
       await sleep(pollMs);
     }
   } finally { fs.rmSync(file, { force: true }); }

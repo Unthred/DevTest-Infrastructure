@@ -188,3 +188,18 @@ test('the tick judges pending on the full view: heads done by the #331 rule or a
   while (!fs.existsSync(marker) && Date.now() < end) await new Promise(r => setTimeout(r, 100));
   assert.deepEqual(fs.readFileSync(marker, 'utf8').trim().split('\n'), ['1360'], 'only the pending head was watched');
 });
+
+// Review finding: after the 45 minute timeout the record went, and the next tick watched the same stuck head again, without end.
+test('a head whose watch timed out is not watched again by a later tick, and a dead record with no start frees its slot', async t => {
+  const g = world(t, (h) => ({ state: 'OPEN', headRefOid: h.sha, statusCheckRollup: pull(1, 'pending').statusCheckRollup }));
+  const stuck = [pull(1, 'pending')];
+  assert.deepEqual(g.tick(stuck).started, [1]);
+  assert.equal(await g.watchers[0].done, 'timeout');
+  for (let i = 0; i < 3; i++) { const o = g.tick(stuck); assert.deepEqual([o.started, o.unwatched], [[], [1]], "left to the scheduled pass"); }
+  assert.equal(g.watchers.length, 1, 'one watcher in all, not one per tick');
+  assert.deepEqual(g.tick([pull(1, 'pending', sha(77))]).started, [1], 'a new head is watched again');
+  fs.writeFileSync(path.join(g.root, 'team', 'ci-watch', `2-${sha(2)}.json`), JSON.stringify({ pr: 2, sha: sha(2), pid: process.pid, start: null }));
+  assert.deepEqual(g.tick([pull(2, 'pending')]).started, [2], 'a record without a process start is dead');
+  g.clock.now += MAX_WATCH_MS;
+  await Promise.all(g.watchers.map(w => w.done));
+});
