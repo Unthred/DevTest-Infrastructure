@@ -28,6 +28,23 @@ Plans differ hugely (15 percent of one is a day or two of implementing, 15 perce
 - **Choosing between agents.** The spare score (review choice) is remaining capacity relative to the projected need when every agent has a capacity; otherwise the old spare share (1 minus projected use). Takeover of an out agent's ready implement work goes to the eligible agent with the most remaining capacity relative to its need; if several implements fit the capacity and the slots, the taker may run more than one (`limits.overall` and admission still apply).
 - **Invalid figures.** A negative, missing or non-numeric usage figure gives no capacity decision; the fixed share rule applies and the reason names the problem.
 
+## Tier cut off when the week is short (issue #1417)
+
+Code: `supervisor/tierline.mjs` (pure), used by the planner in `supervisor/team.mjs`, the explanation in `supervisor/issueassign.mjs` and the views in `supervisor/budgetview.mjs`. Issues carry a priority tier (0 to 6, `Tier:` line, issue #1415). When an agent's weekly allowance will not last to its reset, it starts new implement work only for the higher priority tiers:
+
+| Rule | When | Tiers that wait |
+|---|---|---|
+| estimate | the estimate at reset is **above** 100 % and **more than** 24 h remain | 5 and 6 |
+| used share | the weekly used share is **at or above** 85 % and more than 24 h remain | 3 to 6 |
+
+- If both apply, the lower tier number wins (3 to 6 wait). Exactly 24 h to the reset lifts both; an estimate of exactly 100 % does not hold. An agent whose weekly figures are unknown holds nothing (issue #680).
+- The rule only decides whether to **start new implement work on an issue**. Review, fix, CI fix, rebase, merge and continuing a draft on an open pull request are never held by it: finishing what is open comes first.
+- A held issue is not parked and not skipped silently. Its explanation (`foreman_why_blocked`, the queue) reads, for example, "waits for allowance: tier 5 is not started while claude's week would run out before its reset (estimate at reset 240%); tiers 5 to 6 wait", and the agent's implement hold names it. The hold lifts by itself at the weekly reset or when the estimate (or used share) falls below the limit, because the cut off is worked out afresh every tick.
+- If every agent that could take the issue is holding its tier, the issue waits (kind `allowance-tier`); if any agent may start it, that agent takes it, including an issue in another agent's own list or the unblock queue (the owner counts as out for that one tier).
+- `foreman_budget` shows the cut off per agent (`tierLine`) and the thresholds in force (the configured `tier_line` merged over the defaults, so they show even when nothing is configured); the dashboard allowance text shows it in the agent's *Why* line while a cut off is in force.
+- Configuration, `budget.tier_line` (each key optional, validated at load and refused with a reason): `estimate_limit` (0 to 1, default 1), `estimate_from_tier` (whole tier 0 to 6, default 5), `used_limit` (0 to 1, default 0.85), `used_from_tier` (default 3), `min_hours` (0 to 168, default 24).
+- The existing `high_water` reviews-only mode (issue #680) is unchanged and still stops all new implement work at its own threshold; under the fixed share rule (no known capacity) `high_water` has the same 85 % default, so there the share rule adds nothing; it acts when a capacity is known, because the reserve then replaces `high_water`.
+
 ## Modes
 | Mode | When | May start |
 |---|---|---|
