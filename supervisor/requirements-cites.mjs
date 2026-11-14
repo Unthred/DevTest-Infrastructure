@@ -2,8 +2,8 @@
 // Plain data in, plain data out: the caller reads the diff, the files at the PR head and the issue text; nothing here calls GitHub.
 import { requirementsRows } from './requirements-table-rows.mjs';
 import { expectedRowProblems } from './requirements-issue-items.mjs';
+import { FILE_EXT as EXT, descriptionClaimProblems } from './description-claims.mjs';
 
-const EXT = 'mjs|js|json|md|sh|cs|razor|yml|yaml|txt|css|html|csproj';
 const PATH_CITE = new RegExp(`(?<![\\w./@{}-])((?:[\\w@-][\\w.@-]*/)+[\\w.@-]+\\.(?:${EXT}))(?![\\w/{}])((?::\\d+(?:-\\d+)?)*)`, 'g');
 const BARE_LINE = /^:(\d+)(?:-(\d+))?/;
 const TEST_FILE = /^tests\/.+\.test\.mjs$/;
@@ -133,6 +133,7 @@ export function requirementsCiteProblems({ body, diff, headFiles, issueBody }) {
     problems.push(...countProblems(row, counts));
   }
   problems.push(...expectedRowProblems(rows, issueBody));
+  problems.push(...descriptionClaimProblems({ body, diffFiles, issueBody }));
   return problems;
 }
 
