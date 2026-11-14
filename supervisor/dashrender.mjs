@@ -297,8 +297,12 @@ const allExpected = view => Object.entries(view.graphs.allowance).flatMap(([agen
 // ---- card shell
 function card({ id, title, span = 6, body, href, tools = '', cls = '', movable = true, expandable = false, type = 'info' }) {
   if (expandable) { type = 'chart'; cls = `${cls} chart-card`; }
-  const pin = PINNED.includes(id) || /\bhc-action\b/.test(cls);   // a card that needs action can never be hidden in layout mode
-  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}"${pin ? ' data-pin="1"' : ''} style="--span:${span}" id="c-${esc(id)}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
+  // data-pin is a live reason only (issue #1454): an Action-state health card or a breaker halt. The fixed cards carry no mark of their own;
+  // they can be removed while the app bar shows what they guard (grid.mjs removeVerdict).
+  const pin = /\bhc-action\b/.test(cls) || (PINNED.includes(id) && type === 'action');
+  const pinWhy = id === 'breaker' ? 'Work is halted, so this card stays until the halt is resumed.' : 'This card shows something that needs you now, so it stays while that lasts.';
+  const pinAttrs = pin ? ` data-pin="1" data-pin-why="${esc(pinWhy)}"` : '';
+  return `<section class="card ${cls}" data-card="${esc(id)}" data-type="${esc(type)}" data-span="${span}"${pinAttrs} style="--span:${span}" id="c-${esc(id)}" aria-labelledby="h-${esc(id)}"><header>${movable ? `<span class="tbtn" data-handle title="Drag to move" aria-hidden="true">${icon('drag')}</span>` : ''}<h2 id="h-${esc(id)}">${esc(title)}</h2>
 <span class="tools">${tools}<button class="tbtn" type="button" data-collapse aria-expanded="true" aria-label="Collapse ${esc(title)}" title="Collapse or expand (or double-click the header)" hidden>${icon('down')}</button>${expandable ? `<button class="tbtn" type="button" data-expand aria-label="Expand ${esc(title)}" title="Expand">${icon('expand')}</button>` : ''}${movable ? `<button class="tbtn" type="button" data-move="-1" aria-label="Move ${esc(title)} earlier" title="Move earlier">${icon('up')}</button><button class="tbtn" type="button" data-move="1" aria-label="Move ${esc(title)} later" title="Move later">${icon('down')}</button>` : ''}${href ? `<a class="tbtn" href="${esc(href)}" aria-label="Details: ${esc(title)}" title="Details">${icon('link')}</a>` : ''}</span></header>${body}</section>`;
 }
 const grid = (layout, cards, cls = '') => `<div class="cards ${cls}" data-layout="${esc(layout)}">${cards}</div>`;
@@ -463,6 +467,15 @@ export function pageDataStat(view) {
   const why = d.failed ? `The last rebuild failed (${d.failed}); this is the last good copy.` : d.behindWrite ? 'This copy was prepared before the latest change and does not show it yet; a new copy is built on the next request.' : d.stale ? (d.refreshing ? 'This copy is older than expected and is being rebuilt.' : 'This copy is older than expected; a new copy is built on the next request.') : 'Pages are served from a copy prepared in the background.';
   return `<div class="stat" data-bar="page-data" data-bar-name="Page data" data-page-data="${d.stale ? 'stale' : 'ok'}" title="${esc(why)}"><span class="k">Page data</span>${d.stale ? badge('warning', `Stale · ${age} old`) : `<span>${esc(age)} old</span>`}</div>`;
 }
+// Issue #1454: the Needs you count and the breaker state as app bar items, so the cards that show them can be removed from the Overview.
+function needsYouStat(view) {
+  const n = (view.panels?.needsYou || []).length;
+  return `<div class="stat" data-bar="needs-you" data-bar-name="Needs you" data-count="${n}"><span class="k">Needs you</span>${n ? badge('action', String(n)) : '<span>0</span>'}</div>`;
+}
+function breakerStat(view) {
+  const halted = Boolean(view.breaker?.halt);
+  return `<div class="stat" data-bar="breaker" data-bar-name="Breaker" data-halted="${halted}"><span class="k">Breaker</span>${halted ? badge('action', 'Work halted') : '<span>No halt</span>'}</div>`;
+}
 function statusBar(view, route, head = '', crumbs = '') {
   const now = view.generatedAt, t = view.tick;
   const tickBadge = !t ? badge('action', 'No tick yet') : badge(t.status === 'ok' ? 'ok' : t.status === 'error' ? 'action' : 'info', `Tick ${t.status}`);
@@ -471,6 +484,7 @@ function statusBar(view, route, head = '', crumbs = '') {
   return `<header class="statusbar" role="banner"><div class="brand" data-bar="brand">${icon('pulse')} <span class="brand-name">DevTest team</span></div>${head}
 ${['paused', 'running'].includes(view.health.state) ? '' : `<div class="stat" data-bar="health" data-bar-name="Health" title="Overall health">${pill(L.health, badge(view.health.severity, view.health.label, 'big'), 'Overall health: open what explains it')}</div>`}
 ${agentBarHtml({ esc, lt, dur, utc }, view)}
+${needsYouStat(view)}${breakerStat(view)}
 <div class="stat" data-bar="last-tick" data-bar-name="Last tick"><span class="k">Last tick</span>${pill(L.tick, tickBadge, 'Open the last tick and its error')}<span>${t ? esc(ago(t.at, now)) : ''}</span></div>
 <div class="stat" data-bar="next-tick" data-bar-name="Next tick"><span class="k">Next</span>${nextTickHtml(view, now) || '<span class="muted">none</span>'}</div>
 ${pageDataStat(view)}

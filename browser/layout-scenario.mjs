@@ -65,7 +65,7 @@ async function scenario(p, file) {
   const inEdit = await geo(page), pitch = inEdit.pitch;
   const jump = Math.max(...ids.filter(i => before.cards[i].shown).map(i => Math.max(Math.abs(inEdit.cards[i].x - before.cards[i].x), Math.abs(inEdit.cards[i].y - before.cards[i].y), Math.abs(inEdit.cards[i].w - before.cards[i].w))));
   check(`${L}: entering layout mode keeps every card where it was (max shift ${jump.toFixed(0)} px, grid cell ${pitch.toFixed(0)} px)`, jump <= 26, jump);
-  check(`${L}: pinned cards have no Hide button`, (await Promise.all(pinned.map(i => card(i).locator('.lay-hide').count()))).every(n => n === 0), pinned.join(','));
+  check(`${L}: a pinned card still has Hide`, (await Promise.all(pinned.map(i => card(i).locator('.lay-hide').count()))).every(n => n === 1), pinned.join(','));
   check(`${L}: other cards do`, (await card(first).locator('.lay-hide').count()) === 1);
   check(`${L}: no overlap in layout mode`, overlapAny(inEdit.cards) === '', overlapAny(inEdit.cards));
   await page.screenshot({ path: path.join(out, `${name}-${p}-edit.png`), fullPage: false });
