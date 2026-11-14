@@ -8,8 +8,12 @@
 //               cannot be lost however long the pass runs. If it is free, consume the flag, run the pass, release, then re-check the flag.
 //   follow-up-> a flag found after release starts exactly one more pass, on the installed code (an install may have happened meanwhile).
 // A scheduled fire that finds the lock held sets the same flag (uncounted: it replaces a fire, so it is bounded by the schedule itself).
-// Event requests are counted in a rolling hour and capped; past the cap a request is dropped, the drop is recorded for the dashboard and
-// the schedule is the fallback. Nothing in this file can stop a scheduled pass: every caller treats a failure here as "no wake".
+// Counting rule (issue #1357): the cap limits the extra passes Foreman starts, not the events that ask for one. Only a request that sets
+// the flag when none was set is counted, because only that can start a pass. A request that finds the flag already set merges into the
+// pass that is owed: it is taken, adds its reason, is listed as merged and is not counted. Past the cap a flag-setting request is dropped
+// (job end, install, inbox), the drop is recorded with its reason for the dashboard and the schedule is the fallback. An approve request
+// (a person pressing Approve cannot loop) is never dropped and never counted; it still merges into the one flag.
+// Nothing in this file can stop a scheduled pass: every caller treats a failure here as "no wake".
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -33,8 +37,12 @@ export function readWake(root) {
   try {
     const s = JSON.parse(fs.readFileSync(wakeFile(root), 'utf8'));
     const reasons = Array.isArray(s.requested?.reasons) ? s.requested.reasons.filter(r => NAMES.has(r)) : [];
-    return { requested: reasons.length ? { reasons, at: Number.isFinite(s.requested.at) ? s.requested.at : 0 } : null, accepted: clean(s.accepted), capped: clean(s.capped) };
-  } catch { return { requested: null, accepted: [], capped: [] }; }
+    const drops = Array.isArray(s.cappedWhy) ? s.cappedWhy.filter(d => Number.isFinite(d?.at) && NAMES.has(d.reason)) : [];
+    return {
+      requested: reasons.length ? { reasons, at: Number.isFinite(s.requested.at) ? s.requested.at : 0 } : null,
+      accepted: clean(s.accepted), capped: clean(s.capped), merged: clean(s.merged), cappedWhy: drops,
+    };
+  } catch { return { requested: null, accepted: [], capped: [], merged: [], cappedWhy: [] }; }
 }
 function writeWake(root, s) {
   fs.mkdirSync(path.dirname(wakeFile(root)), { recursive: true, mode: 0o700 });
@@ -102,15 +110,28 @@ function withFileLock(root, fn) {
 export const mergeReasons = (a, b) => [...new Set([...(a || []), ...(b || [])])];
 export const labelOf = reasons => PRIORITY.find(r => (reasons || []).includes(r)) || 'schedule';
 
-// An event asks for a pass. Counted and capped. `spawnPass(reason)` starts a detached runner; its failure never propagates (the flag stays
-// set, so the next scheduled pass, or the holder of a running pass, still runs it).
+// An event asks for a pass. Counted and capped only when it sets the flag (see the counting rule at the top). `spawnPass(reason)` starts
+// a detached runner; its failure never propagates (the flag stays set, so the next scheduled pass, or the holder of a running pass, still runs it).
+const recent = (list, now) => list.filter(t => now - t < HOUR);
+// Pure decision: the next wake state and whether the request was taken.
+function decideRequest(s, { reason, now, cap }) {
+  const accepted = recent(s.accepted, now), capped = recent(s.capped, now), merged = recent(s.merged, now);
+  const cappedWhy = s.cappedWhy.filter(d => now - d.at < HOUR);
+  const flag = { reasons: mergeReasons(s.requested?.reasons, [reason]), at: s.requested?.at || now };
+  const keep = { accepted, capped, merged, cappedWhy };
+  if (s.requested) return { next: { ...keep, requested: flag, merged: [...merged, now] }, taken: true };
+  if (reason === 'approve') return { next: { ...keep, requested: flag }, taken: true };
+  if (accepted.length >= cap) {
+    return { next: { ...keep, requested: null, capped: [...capped, now], cappedWhy: [...cappedWhy, { at: now, reason }] }, taken: false };
+  }
+  return { next: { ...keep, requested: flag, accepted: [...accepted, now] }, taken: true };
+}
 export function requestWake({ root, reason, now = Date.now(), cap = WAKE_MAX_PER_HOUR, spawnPass }) {
   if (!EVENT_TRIGGERS.includes(reason)) throw new Error('unknown wake reason');
   const outcome = withFileLock(root, () => {
-    const s = readWake(root), accepted = s.accepted.filter(t => now - t < HOUR), capped = s.capped.filter(t => now - t < HOUR);
-    if (accepted.length >= cap) { writeWake(root, { requested: s.requested, accepted, capped: [...capped, now] }); return { requested: false, capped: true, why: 'wake cap reached; the scheduled pass is the fallback' }; }
-    writeWake(root, { requested: { reasons: mergeReasons(s.requested?.reasons, [reason]), at: s.requested?.at || now }, accepted: [...accepted, now], capped });
-    return { requested: true, reason };
+    const { next, taken } = decideRequest(readWake(root), { reason, now, cap });
+    writeWake(root, next);
+    return taken ? { requested: true, reason } : { requested: false, capped: true, why: 'wake cap reached; the scheduled pass is the fallback' };
   });
   if (outcome.requested) { try { spawnPass(reason); } catch { /* the flag is set; the next pass runs it */ } }
   return outcome;
@@ -127,8 +148,13 @@ export const pendingRequest = root => readWake(root).requested;
 
 // What the dashboard and the idle report show: the rolling-hour count, the cap and whether it was hit.
 export function wakeStatus(root, now = Date.now(), cap = WAKE_MAX_PER_HOUR) {
-  const s = readWake(root), accepted = s.accepted.filter(t => now - t < HOUR).length, capped = s.capped.filter(t => now - t < HOUR);
-  return { cap, acceptedLastHour: accepted, droppedLastHour: capped.length, capHit: capped.length > 0, lastDropAt: capped.length ? Math.max(...capped) : null };
+  const s = readWake(root), accepted = recent(s.accepted, now).length, capped = recent(s.capped, now);
+  const drops = s.cappedWhy.filter(d => now - d.at < HOUR);
+  const droppedByReason = Object.fromEntries(EVENT_TRIGGERS.map(r => [r, drops.filter(d => d.reason === r).length]));
+  return {
+    cap, acceptedLastHour: accepted, mergedLastHour: recent(s.merged, now).length, droppedLastHour: capped.length, droppedByReason,
+    capHit: capped.length > 0, lastDropAt: capped.length ? Math.max(...capped) : null,
+  };
 }
 
 // The program every wake runs: the installed code, never the code of the process that asks (a worker started before an install ends after
