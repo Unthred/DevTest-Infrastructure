@@ -8,6 +8,7 @@ import path from 'node:path';
 import { readUpgrades, readSelfUpgrade, readInstalled, scrub } from './suphealth.mjs';
 import { readVersion, readTeamState } from './dashdata.mjs';
 import { redact } from './redact.mjs';
+import { flakyList, readFlaky } from './flakytests.mjs';
 
 export const INSTALLS_KEPT = 40;
 export const BREAKER_KEPT = 100;
@@ -63,6 +64,7 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
     } : null,
     refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: SHA.test(f.from || '') ? f.from : null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
     processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),
+    unreliableTests: flakyList(readFlaky(root), now),   // issue #1370
     recent: records,
   };
 }
