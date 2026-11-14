@@ -20,10 +20,10 @@ import { spawn } from 'node:child_process';
 import { processStart } from './core.mjs';
 import { append as appendChange } from './api/eventlog.mjs';
 
-export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time'];
-export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve', 'known-time'];
+export const TRIGGERS = ['schedule', 'job-end', 'install', 'inbox', 'approve', 'known-time', 'ci'];
+export const EVENT_TRIGGERS = ['job-end', 'install', 'inbox', 'approve', 'known-time', 'ci'];
 // Priority when several requests merge into one pass: the label recorded for it. An install pass verifies new code, so it comes first.
-const PRIORITY = ['install', 'approve', 'inbox', 'job-end', 'known-time', 'schedule'];
+const PRIORITY = ['install', 'approve', 'inbox', 'ci', 'job-end', 'known-time', 'schedule'];
 export const WAKE_MAX_PER_HOUR = 40;
 // A pass lock held this long is treated as a hung pass: a scheduled run then goes ahead without it (the tick lock and the install lock
 // still serialise the parts that must not overlap), so a hung wake pass can never stop the schedule.
