@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
 import { batchMarker } from './followups.mjs';
+import { openFreeBatch } from './batchissue.mjs';
 
 const DAY = 86400000;
 export const REPEAT_COUNT = 3;
@@ -26,9 +27,13 @@ export const keyOf = (file, name) => crypto.createHash('sha256').update(`${file}
 // The test file is not on the installer's stdout line, only in the excerpt's "location:" line that follows the failing test.
 export function fileFromExcerpt(excerpt, name) {
   const text = String(excerpt || ''), at = text.indexOf(`- ${name}`);
-  const m = /location: '?([^\s:']+\.test\.mjs)/.exec(at < 0 ? text : text.slice(at));
+  if (at < 0) return null;   // the excerpt is cut: a location found elsewhere belongs to another test
+  const m = /location: '?([^\s:']+\.test\.mjs)/.exec(text.slice(at));
   return m ? m[1].replace(/^.*\/(tests\/)/, '$1') : null;
 }
+
+// The installer's own placeholders (tools/bootstrap-install.sh report_failed_tests) are not test names.
+const PLACEHOLDER = /^(unknown \(no failing test found in the output\)|and \d+ more)$/;
 
 export const emptyState = () => ({ tests: {} });
 
@@ -44,7 +49,7 @@ const seenInWindow = (r, now) => r.seen.filter(t => now - t < REPEAT_WINDOW_MS).
 // Merges one flaky report. Returns the new state, the keys seen for the first time and the names skipped (with the reason).
 export function applyReport(stateIn, { tests, excerpt, stage, files }, now) {
   const state = prune(stateIn, now), fresh = [], skipped = [];
-  const names = (Array.isArray(tests) ? tests : []).map(n => String(n ?? '').trim()).filter(Boolean);
+  const names = (Array.isArray(tests) ? tests : []).map(n => String(n ?? '').trim()).filter(n => n && !PLACEHOLDER.test(n));
   if (!names.length) return { state, fresh, skipped: ['the flaky result named no test'] };
   for (const raw of names) {
     const name = clean(raw, NAME_MAX), file = clean(files?.[raw] || fileFromExcerpt(excerpt, raw) || 'unknown', NAME_MAX), key = keyOf(file, name);
@@ -74,7 +79,13 @@ export function flakyFaults(state, now) {
     action: r.followup ? `Have issue #${r.followup} implemented so the test is repaired.` : 'Ask for the test to be repaired.' }));
 }
 
-export const readFlaky = root => { try { return JSON.parse(fs.readFileSync(path.join(root, 'team', STATE_FILE), 'utf8')) || emptyState(); } catch { return emptyState(); } };
+const validRecord = r => r && typeof r === 'object' && Number.isFinite(r.last) && Array.isArray(r.seen) && typeof r.name === 'string';
+export const readFlaky = root => {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(root, 'team', STATE_FILE), 'utf8'));
+    return { tests: Object.fromEntries(Object.entries(raw?.tests || {}).filter(([, r]) => validRecord(r))) };
+  } catch { return emptyState(); }
+};
 function writeFlaky(root, state) {
   const dir = path.join(root, 'team'), file = path.join(dir, STATE_FILE), tmp = `${file}.${process.pid}.tmp`;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -89,25 +100,22 @@ const newBody = entry => `${batchMarker(TESTS_AREA)}\nTests that failed in an in
 
 // Adds one entry to the open follow-up issue of the tests area (the batch marker the review follow-ups use), or opens it.
 // An issue that a pull request already implements is frozen: its body is not changed.
-export async function addToFollowUp(gh, record) {
+export async function addToFollowUp(gh, record, jobs = []) {
   let prs = [];
   try { prs = (await gh.listPulls?.()) || []; } catch { /* no pull request list: no batch is treated as frozen */ }
-  const skip = [];
   const entry = entryText(record);
-  let open = null;
-  while (gh.findOpenIssueByMarker && (open = await gh.findOpenIssueByMarker(batchMarker(TESTS_AREA), skip))) {
-    const re = new RegExp(`/issue-${open.number}(\\D|$)`);
-    if (!prs.some(p => re.test(p.headRefName || ''))) break;
-    skip.push(open.number); open = null;
-  }
+  const open = await openFreeBatch(gh, batchMarker(TESTS_AREA), { prs, jobs });
   if (!open) return gh.createIssue(`Review follow-ups: ${TESTS_AREA}`, newBody(entry));
   if (!open.body.includes(testMarker(record.key))) await gh.updateIssueBody(open.number, `${open.body.replace(/\s+$/, '')}\n\n${entry}\n`);
   return open.number;
 }
 
+// The jobs Foreman keeps in its state file decide whether a batch is frozen. Unreadable: no job is known.
+const readJobs = root => { try { return Object.values(JSON.parse(fs.readFileSync(path.join(root, 'team', 'state.json'), 'utf8')).jobs || {}); } catch { return []; } };
+
 // The upgrade step's recorder. Never throws: a failure to write the follow-up must not change the install decision.
 export function flakyRecorder({ root, gh, clock = { now: () => Date.now() }, log = line => console.error(line) }) {
-  return async function recordFlaky({ flaky, stage }) {
+  async function record({ flaky, stage }) {
     const now = clock.now();
     const merged = applyReport(readFlaky(root), { ...flaky, stage }, now);
     for (const why of merged.skipped) log(`flaky tests: nothing recorded: ${why}`);
@@ -115,11 +123,14 @@ export function flakyRecorder({ root, gh, clock = { now: () => Date.now() }, log
     try { writeFlaky(root, state); } catch (error) { log(`flaky tests: state not saved: ${redact(error.message, 120)}`); return state; }
     for (const r of Object.values(state.tests).filter(x => x.last === now && x.followup == null)) {
       try {
-        const issue = await addToFollowUp(gh, r);
+        const issue = await addToFollowUp(gh, r, readJobs(root));
         state = { tests: { ...state.tests, [r.key]: { ...state.tests[r.key], followup: Number.isSafeInteger(issue) ? issue : issue?.number ?? null } } };
         writeFlaky(root, state);
       } catch (error) { log(`flaky tests: follow-up entry for "${r.name}" not written: ${redact(error.message, 120)}`); }
     }
     return state;
+  }
+  return async function recordFlaky(report) {
+    try { return await record(report); } catch (error) { log(`flaky tests: not recorded: ${redact(error.message, 120)}`); return null; }
   };
 }

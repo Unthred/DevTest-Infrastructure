@@ -5,7 +5,8 @@
 // upgrader guard, review/CI eligibility, quiet wait, pre-checks, upgrade, dry-run health check. The "next live tick" health
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
 import { mcpNeedsInstall } from './mcpinstall.mjs'; import { cleanupFrom, rollbackNote, rollbackInstall } from './rollbackcleanup.mjs';
-import { dropStaleLatch } from './tickskips.mjs'; import { flakyRecorder } from './flakytests.mjs';
+import { dropStaleLatch } from './tickskips.mjs';
+import { flakyRecorder } from './flakytests.mjs';
 import { noteRefusal, attemptDue } from './upgrade-attempts.mjs';
 export { liveTickOutcome, classifySkips } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';

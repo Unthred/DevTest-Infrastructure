@@ -7,6 +7,8 @@ import path from 'node:path';
 import { applyReport, flakyFaults, flakyList, flakyRecorder, readFlaky, fileFromExcerpt, defang } from '../supervisor/flakytests.mjs';
 import { parseDependsOn } from '../supervisor/dependencies.mjs';
 import { installs } from '../supervisor/installs.mjs';
+import { parseTestFailure } from '../supervisor/upgrade.mjs';
+import { classify } from '../supervisor/api/attention.mjs';
 
 const NAME = 'install: keeps launcher.env at 0640 and sets the other modes when the caller runs under umask 077';
 const T0 = Date.parse('2026-11-13T14:40:00Z'), DAY = 86400000;
@@ -134,4 +136,49 @@ test('the install state served to the dashboard and the MCP lists the unreliable
   assert.equal(served.unreliableTests.length, 1);
   assert.deepEqual([served.unreliableTests[0].name, served.unreliableTests[0].count, served.unreliableTests[0].followUpIssue], [NAME, 1, 77]);
   assert.equal(fileFromExcerpt(EXCERPT, NAME), 'tests/install-modes.test.mjs');
+});
+
+test('invalid: the installer placeholders "unknown (…)" and "and N more" are not recorded as tests', async t => {
+  const g = fakeGh(t), clock = { now: () => T0 }, { root, record } = recorder(t, g, clock);
+  const unknown = parseTestFailure('flaky tests: unknown (no failing test found in the output)\n--- excerpt ---\n', 'flaky tests');
+  await record({ flaky: unknown, stage: 'install' });
+  await record({ flaky: { tests: ['a', 'b', 'and 2 more'], excerpt: '' }, stage: 'install' });
+  assert.deepEqual(Object.values(readFlaky(root).tests).map(r => r.name).sort(), ['a', 'b']);
+  assert.match(clock.lines[0], /named no test/);
+});
+
+test('a test whose own line is missing from the cut excerpt is filed under unknown, not under another test\'s file', () => {
+  const excerpt = `not ok 1 - a\n  location: '/w/tests/one.test.mjs:1:1'`;
+  assert.equal(fileFromExcerpt(excerpt, 'a'), 'tests/one.test.mjs');
+  assert.equal(fileFromExcerpt(excerpt, 'b'), null);
+  const files = Object.values(applyReport({ tests: {} }, { tests: ['a', 'b', 'c'], excerpt, stage: 'install' }, T0).state.tests).map(r => `${r.name}=${r.file}`).sort();
+  assert.deepEqual(files, ['a=tests/one.test.mjs', 'b=unknown', 'c=unknown']);
+});
+
+test('a follow-up issue that a running writer job without a pull request implements is not edited', async t => {
+  const g = fakeGh(t), clock = { now: () => T0 }, { root, record } = recorder(t, g, clock);
+  await record({ flaky: { tests: [NAME], excerpt: '' }, stage: 'install' });
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ jobs: { j1: { kind: 'implement', issue: 77, branch: 'claude/other' } } }));
+  await record({ flaky: { tests: ['timing: waits'], excerpt: '' }, stage: 'install' });
+  assert.equal(g.calls.updated.length, 0);
+  assert.equal(g.calls.created.length, 2);
+});
+
+test('a malformed state file never makes the recorder throw or the readers fail', async t => {
+  const g = fakeGh(t), clock = { now: () => T0 }, { root, record } = recorder(t, g, clock);
+  fs.mkdirSync(path.join(root, 'team'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team', 'flaky-tests.json'), JSON.stringify({ tests: { a: null, b: 5 } }));
+  assert.deepEqual(flakyFaults(readFlaky(root), T0), []);
+  await record({ flaky: { tests: [NAME], excerpt: '' }, stage: 'install' });
+  assert.equal(Object.keys(readFlaky(root).tests).length, 1);
+  const bad = { listPulls: async () => { throw new Error('x'); }, findOpenIssueByMarker: async () => { throw new Error('boom'); } };
+  const r2 = flakyRecorder({ root, gh: bad, clock, log: () => {} });
+  await assert.doesNotReject(r2({ flaky: { tests: ['z'], excerpt: '' }, stage: 'install' }));
+});
+
+test('the attention table names a flaky test item instead of leaving it unclassified', () => {
+  const [item] = (() => { const r = applyReport({ tests: {} }, { tests: [NAME], excerpt: '', stage: 'install' }, T0).state; r.tests[Object.keys(r.tests)[0]].raised = true; return flakyFaults(r, T0); })();
+  const c = classify(item, new Set());
+  assert.deepEqual([c.kind, c.attention, c.reason_code], ['install', 'fault', 'flaky_test']);
 });
