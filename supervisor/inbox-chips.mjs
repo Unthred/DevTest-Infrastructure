@@ -21,7 +21,9 @@ export function filterForm(f, esc) {
 <button class="btn" type="submit">Search</button></form>`;
 }
 
-export function emptyResult(parts, esc) {
+export function emptyResult(parts, esc, nothingRunning = false) {
+  // Issue #1466
+  if (nothingRunning) return '<div class="empty"><b>Nothing is running now</b><span>No job and no Inbox item is being carried out.</span></div>';
   if (!parts.length) return '<div class="empty"><b>No Inbox items</b><span>No overseer proposals are waiting.</span></div>';
   return `<div class="empty"><b>No Inbox items match</b><span>Filters on: ${parts.map(esc).join(', ')}.</span><a class="btn" data-clear-filters href="/inbox?state=all">Clear filters</a></div>`;
 }

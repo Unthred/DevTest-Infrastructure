@@ -89,11 +89,12 @@ test('only the Cards pane is visible without script', () => {
 });
 
 // ---- the real /inbox route
-async function serve(t) {
+async function serve(t, jobs = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iv1219-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
   fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: Date.now() - 60000, status: 'ok', lastOkAt: Date.now() - 60000 }, fetchedAt: Date.now() - 60000, pulls: [], issues: [] }));
+  for (const job of jobs) fs.writeFileSync(path.join(root, 'jobs', `${job.id}.json`), JSON.stringify(job));
   const inboxDir = path.join(root, 'inbox');
   buildInbox(inboxDir);
   const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
@@ -217,4 +218,135 @@ test('lowerWaitingChip lowers the waiting chip by one and stops at zero', async 
   lowerWaitingChip(doc);
   assert.equal(n.textContent, '0');
   assert.doesNotThrow(() => lowerWaitingChip({ querySelector: () => null }));
+});
+
+// Issue #1466: the Running button lists the jobs running now. Real data of 14 Nov 2026, 16:15 UTC.
+const { runningJobRecords, runningView } = await import('../supervisor/inbox-running.mjs');
+const { inboxPage } = await import('../supervisor/inbox-page.mjs');
+const { placeholderIssue } = await import('../supervisor/inbox.mjs');
+const AT = Date.UTC(2026, 10, 14, 16, 15);
+const REVIEW_NAME = 'Review follow-ups: foreman-mcp (#1433)';
+const ABOUT_NAME = 'About box in the web UI shows the version and a collapsible plain words list of what is new Aboutpanel';
+const jobRow = (o = {}) => ({
+  id: 'abcd1234', fullId: 'abcd1234'.padEnd(32, '0'), name: 'A job', agent: 'claude', kind: 'implement', model: 'sonnet', status: 'running',
+  attempts: 1, startedAt: AT - 600000, elapsedMs: 600000, ref: 1, hasTranscript: true, ...o,
+});
+const reviewJob = jobRow({
+  id: 'aaaa1111', fullId: 'a'.repeat(32), name: REVIEW_NAME, kind: 'review', model: 'opus', attempts: 0,
+  startedAt: Date.UTC(2026, 10, 14, 16, 13), ref: 1457,
+});
+const implementJob = jobRow({
+  id: 'bbbb2222', fullId: 'b'.repeat(32), name: ABOUT_NAME, kind: 'implement', startedAt: Date.UTC(2026, 10, 14, 16, 3), ref: 1449,
+});
+const fixJob = jobRow({ id: 'cccc3333', fullId: 'c'.repeat(32), name: 'Fix PR #1443', kind: 'fix', startedAt: Date.UTC(2026, 10, 14, 13, 5), ref: 1443 });
+const aboutCard = rec({ id: 'd'.repeat(32), kind: 'issue_draft', state: 'done', title: ABOUT_NAME, number: 525, reference: 'C525, issue #1449', issue: 1449 });
+const pageHelpers = { card: ({ body }) => body, decided: () => '', esc, form: fakeForm, grid: (_id, html) => html, tag: () => '' };
+const pageOf = (jobs, inboxItems, q = 'state=running') => {
+  const view = { generatedAt: AT, jobs, panels: { inbox: inboxItems, approvals: [] } };
+  return inboxPage(view, new URLSearchParams(q), pageHelpers).body;
+};
+const tableRows = html => (html.match(/<tbody>[^]*?<\/tbody>/)?.[0].match(/<tr [^]*?<\/tr>/g)) || [];
+const runningChip = html => Number(html.match(/data-chip="state:running"[^>]*>Running <span class="qf-n">(\d+)/)[1]);
+
+test('runningJobRecords lists running, queued and paused jobs, newest start first, and nothing else', () => {
+  const queued = jobRow({ id: 'eeee5555', fullId: 'e'.repeat(32), status: 'queued', startedAt: AT - 5000 });
+  const paused = jobRow({ id: 'ffff6666', fullId: 'f'.repeat(32), status: 'paused_limit', startedAt: AT - 9000 });
+  const done = jobRow({ status: 'completed' });
+  const out = runningJobRecords([fixJob, done, implementJob, paused, reviewJob, queued], []);
+  assert.deepEqual(out.map(r => r.id), ['e', 'f', 'a', 'b', 'c'].map(c => c.repeat(32)));
+  assert.deepEqual(out.map(r => r.state), ['running', 'paused', 'running', 'running', 'running']);
+  assert.ok(out.every(r => r.kind === 'job' && r.job.href.startsWith('/jobs/')));
+  assert.deepEqual(runningJobRecords([], []), []);
+  assert.deepEqual(runningJobRecords(undefined, []), []);
+});
+test('a job on an issue posted from an Inbox card carries the card reference; a job with no card, or a card that matches nothing, shows none', () => {
+  const [review, implement, fix] = runningJobRecords([reviewJob, implementJob, fixJob], [aboutCard]);
+  assert.equal(implement.reference, 'C525, issue #1449');
+  assert.equal(review.reference, '');
+  assert.equal(review.pr, 1457);
+  assert.equal(fix.reference, '');
+  assert.equal(fix.pr, 1443);
+  assert.equal(implement.issue, 1449);
+  assert.equal(runningJobRecords([implementJob], [{ ...aboutCard, issue: 77 }])[0].reference, '', 'a card for another issue is not linked');
+  assert.equal(runningJobRecords([reviewJob], [{ ...aboutCard, issue: 1457 }])[0].reference, '', 'a review job works on a pull request, not on an issue');
+});
+test('an Inbox prompt whose own job runs appears once, as the job row with the item reference; a draft being posted with no job still appears', () => {
+  const prompt = rec({ id: '0'.repeat(32), kind: 'prompt', state: 'running', reference: 'C530', title: 'Check the logs' });
+  const posting = rec({ id: '1'.repeat(32), kind: 'issue_draft', state: 'posting', reference: 'C531', title: 'Draft being posted' });
+  const own = jobRow({ id: 'ab12cd34', fullId: 'ab12cd34'.padEnd(32, '0'), name: 'Check the logs', kind: 'inbox', ref: placeholderIssue(prompt.id) });
+  const view = runningView([own], [prompt, posting, aboutCard]);
+  assert.deepEqual(view.rows.map(r => r.id), [own.fullId, posting.id]);
+  assert.equal(view.rows[0].reference, 'C530');
+  assert.equal(view.rows[0].job.role, 'inbox');
+  assert.equal(view.jobsRunning, 1);
+});
+test('a job row with no name or an unknown kind still draws with its id', () => {
+  const [r] = runningJobRecords([jobRow({ name: '', kind: undefined, model: null, agent: undefined, ref: null, startedAt: undefined })], []);
+  assert.match(r.title, /abcd1234/);
+  const html = pageOf([jobRow({ name: '', kind: 'mystery', ref: null })], []);
+  assert.match(html, /Job abcd1234/);
+  assert.equal(tableRows(html).length, 1);
+});
+test('the Running view draws three job rows in the Table, Compact list and Cards, newest first, and the count reads 3', () => {
+  const html = pageOf([fixJob, reviewJob, implementJob], [aboutCard]);
+  assert.equal(runningChip(html), 3);
+  assert.match(html, /3 jobs running now/);
+  const rows = tableRows(html);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map(r => /data-job="(.)/.exec(r)[1]), ['a', 'b', 'c']);
+  assert.match(rows[0], /Job<\/span><\/td>|Job<\/span>/);
+  assert.match(rows[0], /running/);
+  assert.match(rows[0], /claude · opus · reviewer · review/);
+  assert.match(rows[1], /C525, issue #1449/);
+  assert.match(rows[1], /claude · sonnet · implementer · implement · attempt 1 · elapsed 12 min/);
+  assert.match(rows[2], /attempt 1 · elapsed 3 h/);
+  assert.match(rows[0], /<a class="iv-watch" href="\/jobs\/a{32}">Watch live<\/a>/);
+  assert.equal((html.match(/<li class="iv-crow"/g) || []).length, 3);
+  assert.equal((html.match(/<li class="inbox-item inbox-job"/g) || []).length, 3);
+  assert.match(html, /<a class="iv-joblink" href="\/jobs\/b{32}">/);
+});
+test('job rows appear only under Running; the other buttons, their counts and All are unchanged', () => {
+  const jobs = [fixJob, reviewJob, implementJob];
+  for (const q of ['state=all', 'state=done', 'state=waiting', 'state=failed']) {
+    const jobRowsShown = tableRows(pageOf(jobs, [aboutCard], q)).filter(r => r.includes('data-job='));
+    assert.equal(jobRowsShown.length, 0, q);
+  }
+  const withJobs = pageOf(jobs, [aboutCard], 'state=all'), without = pageOf([], [aboutCard], 'state=all');
+  const chipRe = /data-chip="(state|kind):(\w+)"[^>]*>[^<]*<span class="qf-n">(\d+)/g;
+  const chips = html => [...html.matchAll(chipRe)].map(m => m.slice(1).join(':')).filter(c => !c.includes('running'));
+  assert.deepEqual(chips(withJobs), chips(without));
+  assert.equal(tableRows(withJobs).length, 1);
+  assert.match(withJobs, /3 jobs running now/, 'the line shows whatever filter is on');
+});
+test('with nothing running the line says 0 jobs and the Running view says Nothing is running now; a draft being posted still shows', () => {
+  const none = pageOf([], [aboutCard]);
+  assert.match(none, /0 jobs running now/);
+  assert.match(none, /Nothing is running now/);
+  assert.equal(runningChip(none), 0);
+  assert.match(pageOf([], [aboutCard], 'state=all'), /0 jobs running now/);
+  const posting = rec({ id: '1'.repeat(32), kind: 'issue_draft', state: 'posting', reference: 'C531', title: 'Draft being posted' });
+  const html = pageOf([], [posting]);
+  assert.doesNotMatch(html, /Nothing is running now/);
+  assert.equal(runningChip(html), 1);
+  assert.match(html, /1 job running now|0 jobs running now/);
+  assert.match(pageOf([jobRow()], []), /1 job running now/);
+});
+test('a paused job shows the paused chip and is not counted as running now; a job without a transcript has no Watch live link', () => {
+  const html = pageOf([jobRow({ status: 'paused_manual', hasTranscript: false })], []);
+  assert.match(html, /<span aria-hidden="true">⏸<\/span> paused/);
+  assert.doesNotMatch(html, /Watch live/);
+  assert.match(html, /0 jobs running now/);
+  assert.equal(runningChip(html), 1);
+});
+test('the real /inbox page, from job records on disk, shows the Running rows and the line', async t => {
+  const review = { id: 'a'.repeat(32), status: 'running', kind: 'review', provider: 'claude', model: 'opus', pr: 1457, issue: 1457, attempts: 0 };
+  const s = await serve(t, [{ ...review, createdAt: Date.now() - 120000 }]);
+  const running = await s.get('/inbox?state=running');
+  assert.equal(running.status, 200);
+  assert.match(running.body, /1 job running now/);
+  assert.match(running.body, /data-job="a{32}"/);
+  assert.match(running.body, /claude · opus · reviewer · review/);
+  const all = await s.get('/inbox');
+  assert.match(all.body, /running now/);
+  assert.doesNotMatch(all.body, /data-job=/);
 });

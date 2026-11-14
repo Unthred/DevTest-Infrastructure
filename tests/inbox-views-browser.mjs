@@ -15,6 +15,8 @@ import { listenOnSocket } from '../browser/static-server.mjs';
 import { handler } from '../supervisor/dashserver.mjs';
 import { stageProject } from './stage-project.mjs';
 import { buildInbox } from './helpers/inbox-views-fixture.mjs';
+import * as inbox from '../supervisor/inbox.mjs';
+import { transcriptFile } from '../supervisor/transcript.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), outDir = path.resolve(process.argv[2] || '');
 if (!process.argv[2]) { console.error('usage: node tests/inbox-views-browser.mjs <output-dir>'); process.exit(2); }
@@ -27,6 +29,28 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ivbrowser-'));
 for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
 fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: Date.now() - 60000, status: 'ok', lastOkAt: Date.now() - 60000 }, fetchedAt: Date.now() - 60000, pulls: [], issues: [] }));
 buildInbox(path.join(root, 'inbox'), Date.now(), { layout: true });
+// Issue #1466: the three jobs running at 16:15 UTC on 14 Nov 2026, as job records the real dashboard reads (the review 2 minutes old, the
+// implement job 12 minutes old, the fix job 3 h 10 min old), and the Inbox card the implement job's issue was posted from.
+const jobAt = (ms, o) => {
+  const record = { status: 'running', provider: 'claude', createdAt: Date.now() - ms, updatedAt: Date.now(), ...o };
+  fs.writeFileSync(path.join(root, 'jobs', `${o.id}.json`), JSON.stringify(record));
+};
+jobAt(2 * 60000, { id: 'a'.repeat(32), kind: 'review', model: 'opus', issue: 1457, pr: 1457, attempts: 0 });
+jobAt(12 * 60000, { id: 'b'.repeat(32), kind: 'implement', model: 'sonnet', issue: 1449, attempts: 1 });
+jobAt(190 * 60000, { id: 'c'.repeat(32), kind: 'fix', model: 'sonnet', issue: 1443, pr: 1443, attempts: 1 });
+for (const c of 'abc') {   // a transcript exists, so Watch live shows
+  const file = transcriptFile(root, c.repeat(32));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '');
+}
+{
+  const dir = path.join(root, 'inbox'), id = crypto.randomBytes(16).toString('hex');
+  const draft = { kind: 'issue_draft', title: 'About box in the web UI shows the version Aboutpanel', body: 'Draft.' };
+  fs.writeFileSync(path.join(dir, 'items', `${id}.json`), JSON.stringify(draft));
+  inbox.scan(dir, Date.now() - 86400000);
+  inbox.decide(dir, id, 'approve', Date.now() - 80000000);
+  inbox.finish(dir, id, { state: 'done', issue: 1449, result: 'posted as issue #1449' }, Date.now() - 70000000);
+}
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir: path.join(root, 'inbox') },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
 const HOST = '127.0.0.1', PORT = 8080;

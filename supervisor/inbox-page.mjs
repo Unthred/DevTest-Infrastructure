@@ -4,6 +4,8 @@ import { decisionForms } from './dashui/inbox-views.mjs';
 import { inboxAllRecords } from '../foreman-mcp/inbox-search-records.mjs';
 import { applyFilters, countButtons, describeFilters, parseFilters } from './inbox-filter.mjs';
 import { chipRows, emptyResult, filterForm } from './inbox-chips.mjs';
+import { runningView } from './inbox-running.mjs';
+import { jobCard, runningLine } from './inbox-job-row.mjs';
 
 const highlighted = (text, query, esc) => highlightInboxText(text, query)
   .map(part => (part.matched ? `<mark>${esc(part.text)}</mark>` : esc(part.text)))
@@ -33,15 +35,19 @@ export function inboxSummary(view, esc) {
 
 export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) {
   const records = inboxAllRecords({ inbox: view.panels.inboxSearch || view.panels.inbox || [], approvals: view.panels.approvals || [] });
+  const running = runningView(view.jobs, records);   // issue #1466: the Running button counts the rows its view shows
   const counts = countButtons(records);
+  counts.states.running = running.rows.length;
   const current = parseFilters(query, counts);
-  const visible = applyFilters(records, current);
+  const visible = current.state === 'running' ? applyFilters(running.rows, { ...current, state: 'all' }) : applyFilters(records, current);
   const highlight = text => highlighted(text, current.search, esc);
-  const cardsHtml = `<ul class="panel-list">${visible.map(item => inboxCard(item, current.search, { esc, tag, form })).join('')}</ul>`;
+  const cardOf = item => (item.kind === 'job' ? jobCard(item, view.generatedAt, { esc, highlight }) : inboxCard(item, current.search, { esc, tag, form }));
+  const cardsHtml = `<ul class="panel-list">${visible.map(cardOf).join('')}</ul>`;
   const result = visible.length
     ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml, form })}`
-    : emptyResult(describeFilters(current), esc);
-  const body = chipRows(current, counts, esc) + filterForm(current, esc) + result + decided(view) + '<script type="module" src="/static/inbox-filter.mjs"></script>';
+    : emptyResult(describeFilters(current), esc, current.state === 'running' && !current.kind && !current.search);
+  const script = '<script type="module" src="/static/inbox-filter.mjs"></script>';
+  const body = runningLine(running.jobsRunning, esc) + chipRows(current, counts, esc) + filterForm(current, esc) + result + decided(view) + script;
   return {
     title: 'Inbox',
     body: grid('inbox', card({ id: 'inbox', title: 'Inbox', span: 12, movable: false, body })),

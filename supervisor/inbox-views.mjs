@@ -1,6 +1,7 @@
 // Issue #1219: the view switch above the Inbox list and the three renderings of the same items: Cards (the existing card), Table and
 // Compact list. The page server-renders all three from one ordered list of items and the browser script (dashui/inbox-views-ui.mjs)
 // shows one, so the filtered items and their order are the same in every view. Without the script the Cards view shows.
+import { factsHtml, jobTitleLink } from './inbox-job-row.mjs';
 import { COLUMNS, VIEWS, VIEW_LABELS, decisionForms, kindLabel, rowOf, stateMark, stateSeverity } from './dashui/inbox-views.mjs';
 
 // The scripts the Inbox page loads; dashserver adds them to its static files with one Object.assign.
@@ -13,7 +14,11 @@ export const INBOX_VIEWS_STATIC = {
 
 // Issue #1414: the card's reference ("C142", or "C142, issue #1411" once posted) leads the title in every view.
 const refHtml = (row, highlight) => (row.reference ? `<span class="inbox-ref">${highlight(row.reference)}</span> ` : '');
-const titleHtml = (row, esc, highlight) => `<span class="iv-title">${refHtml(row, highlight)}${highlight(row.title)}</span>`;
+// Issue #1466: a job row's title links to the job page and the one secondary line of facts sits under it.
+const titleText = (row, esc, highlight) => (row.job ? jobTitleLink(row.job, highlight(row.title), esc) : highlight(row.title));
+const titleHtml = (row, esc, highlight) => `<span class="iv-title">${refHtml(row, highlight)}${titleText(row, esc, highlight)}</span>`;
+const factsLine = (row, esc) => (row.job ? factsHtml(row.job, esc) : '');
+const rowKey = row => (row.job ? `data-job="${row.id}"` : `data-inbox="${row.id}"`);
 
 // Issue #1416: the Kind and State chips are the Now card's badges; a decision card already clicked says "decided" in place of the bare "waiting", with the sentence under the title.
 const chip = (sev, mark, word, esc) => `<span class="badge sev-${sev}"><span aria-hidden="true">${mark}</span> ${esc(word)}</span>`;
@@ -26,7 +31,7 @@ const stateChip = (row, esc) => {
 const decidedLine = (row, esc) => (row.decided ? `<span class="iv-decided">${esc(row.decided)}</span>` : '');
 
 const cell = (row, key, esc, highlight) => {
-  if (key === 'title') return titleHtml(row, esc, highlight) + decidedLine(row, esc);
+  if (key === 'title') return titleHtml(row, esc, highlight) + decidedLine(row, esc) + factsLine(row, esc);
   if (key === 'kind') return kindChip(row, esc);
   if (key === 'state') return stateChip(row, esc);
   if (key === 'result') return row.result ? `<span class="iv-result">${highlight(row.result)}</span>` : '<span class="iv-none">–</span>';
@@ -50,7 +55,7 @@ export function tableRow(row, { esc, highlight, form, noResult = false }) {
     return `<td data-col="${c.key}" data-label="${esc(c.label)}"${created}${sort}${empty}>${cell(row, c.key, esc, highlight)}</td>`;
   }).join('');
   const actions = `<td data-col="actions" data-label="Actions">${actionsHtml(row, form)}</td>`;
-  return `<tr data-id="${esc(row.id)}" data-inbox="${esc(row.id)}" data-state="${esc(row.state)}">${cells}${actions}</tr>`;
+  return `<tr data-id="${esc(row.id)}" ${rowKey({ ...row, id: esc(row.id) })} data-state="${esc(row.state)}">${cells}${actions}</tr>`;
 }
 
 export function compactRow(row, { esc, highlight, form }) {
@@ -58,10 +63,11 @@ export function compactRow(row, { esc, highlight, form }) {
   const prompt = row.prompt ? `<p class="iv-more-prompt"><b>Prompt</b> <span>${highlight(row.prompt)}</span></p>` : '';
   const chips = `<span class="iv-chips">${stateChip(row, esc)} ${kindChip(row, esc)}</span>`;
   const meta = `<span class="iv-meta"><span class="iv-age" data-created="${row.created ?? ''}">${esc(row.age)}</span> · <span class="iv-source">${esc(row.source)}</span></span>`;
-  const summary = `${chips}<span class="iv-body">${titleHtml(row, esc, highlight)}${decidedLine(row, esc)}</span>${meta}`;
+  const summary = `${chips}<span class="iv-body">${titleHtml(row, esc, highlight)}${decidedLine(row, esc)}${factsLine(row, esc)}</span>${meta}`;
   const actions = actionsHtml(row, form);
-  return `<li class="iv-crow" data-id="${esc(row.id)}" data-inbox="${esc(row.id)}" data-state="${esc(row.state)}"><details><summary>${summary}</summary>`
-    + `<div class="iv-more">${result + prompt || '<p class="sub">No result yet.</p>'}</div></details>${actions}</li>`;
+  const none = `<p class="sub">${row.job ? 'The job has not finished.' : 'No result yet.'}</p>`;
+  return `<li class="iv-crow" data-id="${esc(row.id)}" ${rowKey({ ...row, id: esc(row.id) })} data-state="${esc(row.state)}">`
+    + `<details><summary>${summary}</summary><div class="iv-more">${result + prompt || none}</div></details>${actions}</li>`;
 }
 
 const viewButton = (v, esc) => `<button type="button" class="btn iv-view" data-view="${v}" aria-pressed="${v === 'cards'}">${esc(VIEW_LABELS[v])}</button>`;

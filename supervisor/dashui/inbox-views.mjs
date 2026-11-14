@@ -13,11 +13,16 @@ export const COLUMNS = [
 export const COLUMN_KEYS = COLUMNS.map(c => c.key);
 export const STORE_KEY = 'dash.inbox.views';
 
-const STATE_MARK = { pending: ['◔', 'waiting'], done: ['✓', 'done'], failed: ['✗', 'failed'], rejected: ['✗', 'rejected'], refused: ['✗', 'refused'] };
+const STATE_MARK = {
+  running: ['▶', 'running'], paused: ['⏸', 'paused'], pending: ['◔', 'waiting'], done: ['✓', 'done'],
+  failed: ['✗', 'failed'], rejected: ['✗', 'rejected'], refused: ['✗', 'refused'],
+};
 export const stateMark = state => STATE_MARK[state] || ['•', String(state || 'unknown')];
 
 // Issue #1416: the chips use the Now card's own badge colours (.badge .sev-*); the word is always shown, colour is never the only signal.
-const STATE_SEV = { pending: 'warning', done: 'ok', failed: 'action', rejected: 'action', refused: 'action', approved: 'info', decided: 'info' };
+const STATE_SEV = {
+  pending: 'warning', done: 'ok', failed: 'action', rejected: 'action', refused: 'action', approved: 'info', decided: 'info', running: 'info', paused: 'warning',
+};
 export const stateSeverity = state => STATE_SEV[state] || 'info';
 export const kindLabel = kind => { const t = String(kind || 'unknown').replace(/_/g, ' '); return t[0].toUpperCase() + t.slice(1); };
 const clock = ms => (Number.isFinite(ms) ? new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
@@ -48,6 +53,7 @@ export const firstLine = text => String(text ?? '').split(/\r?\n/).map(l => l.tr
 export function sourceOf(rec) {
   if (rec.pr) return `PR #${rec.pr}`;
   if (rec.issue) return `Issue #${rec.issue}`;
+  if (rec.kind === 'job') return 'Job';
   if (rec.decision === true) return 'Decision';   // a decision card; a string is the homeowner's answer on an inbox item (issue #1416)
   return 'Overseer';
 }
@@ -77,7 +83,8 @@ export function rowOf(rec, now) {
   const created = Number.isFinite(rec.createdAt) ? rec.createdAt : null;
   return {
     id: rec.id, reference: String(rec.reference || ''), decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'), decided: decidedOf(rec),
-    created, age: ageText(created, now), source: sourceOf(rec), result: firstLine(resultOf(rec)), full: resultOf(rec), prompt: promptOf(rec),
+    created, age: ageText(created, now), source: sourceOf(rec), job: rec.kind === 'job' ? { ...rec.job, elapsed: ageText(created, now) } : null,
+    result: firstLine(resultOf(rec)), full: resultOf(rec), prompt: promptOf(rec),
   };
 }
 
