@@ -51,7 +51,7 @@ try {
     await check('long work list has the first fixture item', issues.getByRole('link', { name: '#2000 Long fixture issue 1' }).waitFor());
     await check('long work list links to its next page', page.getByLabel('issues pages').getByRole('link', { name: 'Next' }).waitFor());
   } else if (variant === 'best') {
-    const card = id => page.locator(`#hl-${id} .hl-row[data-window="24h"] .hl-best`);
+    const card = id => page.locator(`#hl-${id} .hl-block[data-window="24h"] .hl-best`);
     await check('approval card shows the record line', card('first-pass').filter({ hasText: 'Best 24 hours 84.9% (45 of 53), 6 to 7 Nov' }).waitFor());
     await check('merged card shows the most merged line', card('merge-rate').filter({ hasText: 'Most merged in 24 hours 106, 6 to 7 Nov' }).waitFor());
     await check('the record is not called beaten', page.getByText('Record beaten').count().then(count => {
@@ -63,8 +63,8 @@ try {
     }));
     await check('the approval card is still there', page.locator('#hl-first-pass').waitFor());
   } else if (variant === 'best-beaten') {
-    await check('approval card says the record is beaten', page.locator('#hl-first-pass .hl-row[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
-    await check('merged card says the record is beaten', page.locator('#hl-merge-rate .hl-row[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
+    await check('approval card says the record is beaten', page.locator('#hl-first-pass .hl-block[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
+    await check('merged card says the record is beaten', page.locator('#hl-merge-rate .hl-block[data-window="24h"] .hl-best').filter({ hasText: 'Record beaten' }).waitFor());
   } else if (variant === 'empty') {
     await check('empty overview has no-needs state', page.getByText('Nothing needs you').waitFor());
     await check('empty overview has no-plan state', page.getByText('Nothing planned').waitFor());
