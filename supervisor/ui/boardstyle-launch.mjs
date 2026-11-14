@@ -19,6 +19,7 @@ export const PAD = Object.freeze({
   riseBase: 6,          // the lift of the arc to the nearest box; the farthest box gets the highest lift the board leaves room for
   riseMax: 36,
   apexShare: 0.2,       // the arc has risen by the time this share of it is flown, then it falls
+  climbShare: 0.1,      // the share of the time a ball that started at the foot of its lane spends climbing to the launch pad
   settleShare: 0.12,    // the share of the time the ball spends settling from the pad into its place in the box
   landBaseMs: 1700,
   landGrowthMs: 1300,
@@ -63,7 +64,9 @@ function riseFor(pad, from, geometry) {
 }
 
 // The land: one arc from the start to the pad, flown with the speed easing in at lift off and out at landing, then a short settle into the box.
-export function planLand({ box, from, to, geometry }) {
+export function planLand({ box, lane, from: start, to, geometry }) {
+  const from = lane ? { x: lane.x + lane.w / 2, y: LAYOUT.laneTop + LAYOUT.ballRadius } : start;
+  const climbs = Math.hypot(start.x - from.x, start.y - from.y) > 1;
   const pad = padPoint(box);
   const reach = Math.hypot(pad.x - from.x, pad.y - from.y) / Math.hypot(geometry.width, geometry.height);
   const rise = riseFor(pad, from, geometry);
@@ -71,10 +74,14 @@ export function planLand({ box, from, to, geometry }) {
     const s = smooth(index / PAD.arcSteps);
     return onBoard({ x: from.x + (pad.x - from.x) * s, y: arcY(from, pad, rise, s) }, geometry);
   });
-  const flightShare = 1 - PAD.settleShare;
-  const offsets = [...arc.map((_, index) => (index / PAD.arcSteps) * flightShare), 1];
+  // A job the board never saw running starts at the foot of its lane: it climbs to the launch pad first, then lifts off from there.
+  const climbShare = climbs ? PAD.climbShare : 0;
+  const flightShare = 1 - PAD.settleShare - climbShare;
+  const flight = arc.map((_, index) => climbShare + (index / PAD.arcSteps) * flightShare);
   const durationMs = clamp(Math.round(PAD.landBaseMs + PAD.landGrowthMs * reach), MOTION.landMinMs, MOTION.landMaxMs);
-  return { points: [...arc, onBoard(to, geometry)], offsets, durationMs, trail: arc };
+  return {
+    points: [...(climbs ? [onBoard(start, geometry)] : []), ...arc, onBoard(to, geometry)],
+    offsets: [...(climbs ? [0] : []), ...flight, 1], durationMs, trail: arc };
 }
 
 // A hop from the hopper to the foot of the lane.

@@ -216,3 +216,16 @@ test('valid: the common code carries the offsets and the trail of a land into th
   assert.equal(land.offsets.length, land.points.length);
   assert.ok(land.trail.length > 2);
 });
+
+test('boundary: a job the board never saw running starts at the foot of its lane and still lifts off from the head', () => {
+  const geometry = geometryOf(realBoard());
+  const input = landOf(geometry, 'claude/opus', 'changes_asked', '6ff7be3f');
+  const foot = { x: input.from.x, y: LAYOUT.laneTop + 190 };
+  const flight = launch.plan({ ...input, from: foot });
+  assert.deepEqual(flight.points[0], foot);
+  assert.deepEqual(flight.trail[0], input.from);
+  assert.equal(flight.points.length, flight.offsets.length);
+  assert.ok(flight.offsets.every((offset, index) => index === 0 || offset > flight.offsets[index - 1]));
+  assert.ok(peak(flight.trail) < input.from.y);
+  assert.deepEqual(launch.plan({ ...input, from: foot }), flight);
+});
