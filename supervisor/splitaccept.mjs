@@ -18,7 +18,7 @@ function childBody(marker, child, split, index, parent) {
 function acceptedText(split) {
   const filed = split.children.map(c => `#${c.issue}`).join(', ');
   const rest = split.stuckPr
-    ? 'The PR stays parked, with its branch kept, until the close as superseded item lands and closes it.'
+    ? 'The PR stays parked, with its branch kept, until every item has merged, when Foreman closes it as superseded.'
     : 'This issue is not started again; close it when the children are done.';
   return `**Split accepted.** Filed ${filed} and queued them for \`${split.agent}\`. ${rest}`;
 }

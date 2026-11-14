@@ -23,9 +23,15 @@ function cardFor(rec, name) {
       tried: `${parked} Proposed items: ${list(items)}. Nothing is filed until you approve.`,
       action: 'Approve split files these items and links them to the PR. Reject split files nothing and leaves the PR parked.' };
   }
+  if (rec.status === 'filed' && rec.closeError) {
+    const step = rec.closeError.homeownerStep ? ` Homeowner step: ${rec.closeError.homeownerStep}.` : '';
+    return { entry: 'split-closefail', text: `${name} is parked; every split item has merged but the close as superseded failed`,
+      tried: `${parked} Items: ${list(items)}. ${rec.closeError.text}. The PR is still open and its branch is kept.`,
+      action: `${step.trim() || 'Foreman retries the close on the next tick.'} Unpark only returns the PR to the planner.` };
+  }
   if (rec.status === 'filed') {
     return { entry: 'split-wait', text: `${name} is parked; its ${items.length} split items are filed`,
-      tried: `${parked} Items: ${list(items)}. The PR stays parked, with its branch kept, until the close as superseded item lands.`,
+      tried: `${parked} Items: ${list(items)}. The PR stays parked, with its branch kept, until every item has merged, when Foreman closes it as superseded.`,
       action: 'Nothing to decide now; the items are queued. Unpark only returns the PR to the planner.' };
   }
   if (rec.status === 'planning') {

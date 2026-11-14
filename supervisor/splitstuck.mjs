@@ -11,6 +11,7 @@ import { park, depsOf } from './controlactions.mjs';
 import { descriptionRoundFor } from './descround.mjs';
 import { sameCauseCap, capped } from './robust.mjs';
 import { checkStuckDraft, itemBody, bodyFault, DRAFT_FILE } from './splitstuck-draft.mjs';
+import { closeSuperseded } from './closesupersededaction.mjs';
 import { STANDING_OPTIONS } from './splitstuck-view.mjs';
 
 const HEAD = /^[0-9a-f]{40}$/;
@@ -164,6 +165,54 @@ export async function stuckSplitPass(team, report, guard = (_, fn) => fn()) {
   for (const [number, rec] of Object.entries(records(team))) {
     const pr = open.find(p => p.number === Number(number));
     if (rec.status === 'planning' && pr) await guard(`split stuck ${number}`, () => advancePlanning(team, pr, rec, report));
+    if (rec.status === 'filed' && pr) await guard(`split close ${number}`, () => closeWhenMerged(team, pr, rec, report));
+  }
+}
+
+// Issue #1340: once every filed item has merged, the parked pull request is closed by the close as superseded action (issue #1337), which
+// saves the branch first. There is no other close path here. Nothing is closed while any item is open or was closed without a merge.
+const isMerged = issue => String(issue?.state).toUpperCase() === 'CLOSED'
+  && String(issue?.stateReason ?? 'COMPLETED').toUpperCase().replace(/[\s-]/g, '_') === 'COMPLETED';
+
+async function allMerged(team, filed) {
+  for (const n of filed) if (!isMerged(await team.gh.getIssue(n))) return false;
+  return true;
+}
+
+// The Contents write wording is only for a refusal of the saved copy step; the close step and the checks name their own cause.
+const PERMISSION = /resource not accessible by integration|\b403\b/i;
+export const CONTENTS_STEP = 'grant the GitHub App Contents write permission so the branch can be saved under saved/; '
+  + 'Foreman retries on the next tick and closes nothing until the copy is saved';
+
+export function closeFault(step, error) {
+  const cause = redact(String(error?.message || error), 200);
+  if (step === 'save' && PERMISSION.test(cause)) {
+    return { step, text: `writing the saved copy of the branch was refused (${cause})`, homeownerStep: CONTENTS_STEP };
+  }
+  return { step, text: step === 'save' ? `writing the saved copy of the branch failed (${cause})` : `the close as superseded action failed (${cause})` };
+}
+
+async function closeWhenMerged(team, pr, rec, report) {
+  if (!rec.filed?.length || !(await allMerged(team, rec.filed))) return;
+  let step = 'close';
+  const saveBranch = async (...args) => {
+    step = 'save';
+    const saved = await team.gh.saveBranch(...args);
+    step = 'close';
+    return saved;
+  };
+  const acting = Object.create(team, { gh: { value: { ...team.gh, saveBranch } } });
+  try {
+    const result = await closeSuperseded(acting, { target: pr.number, superseded_by: rec.filed.join(', '), reason: 'every item of its split has merged' });
+    Object.assign(rec, { status: 'closed', closedAt: team.clock.now() });
+    delete rec.closeError;
+    team.save();
+    (report.actions ||= []).push({ type: 'split-close', issue: pr.number, result });
+  } catch (error) {
+    const fault = closeFault(step, error);
+    if (rec.closeError?.text === fault.text) return;
+    rec.closeError = fault;
+    team.save();
   }
 }
 
@@ -231,7 +280,7 @@ export async function approveStuckSplit(team, n) {
   const issues = sp.status === 'accepted' ? sp.children.map(c => c.issue) : await team.acceptSplit(n);
   Object.assign(rec, { status: 'filed', filed: issues, filedAt: team.clock.now() });
   team.save();
-  return `PR #${n}: filed ${issues.map(x => `#${x}`).join(', ')}; the PR stays parked until the close as superseded item lands`;
+  return `PR #${n}: filed ${issues.map(x => `#${x}`).join(', ')}; the PR stays parked until every item has merged`;
 }
 
 export async function rejectStuckSplit(team, n) {

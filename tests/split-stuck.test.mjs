@@ -259,10 +259,10 @@ test('a filed split shows its items, says the PR stays parked until the close it
   assert.match(card.id, /^split-wait-11$/);
   assert.match(card.tried, /#2000 one/);
   assert.match(card.tried, /#2001 two/);
-  assert.match(card.tried, /stays parked.*until the close as superseded item lands/);
+  assert.match(card.tried, /stays parked.*until every item has merged/);
   assert.doesNotMatch(card.action + card.tried, /#1157|Close as superseded action/);
   assert.deepEqual(controls(card), ['unpark']);
-  assert.match(decisionCard(card, {}).clears, /close as superseded item closes/);
+  assert.match(decisionCard(card, {}).clears, /every split item has merged/);
 });
 
 test('rejection files nothing, leaves the PR parked with its standing options and cannot be approved afterwards', async t => {
