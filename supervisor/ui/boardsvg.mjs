@@ -1,7 +1,7 @@
 // Issue #1312: draws the board as SVG from the geometry of boardlayout.mjs. Elements are built with textContent only, so no text from the
 // model is read as markup. It keeps no state: board.mjs passes the model, the time and what is open.
 import { LAYOUT, boardGeometry, hopperBalls, boxBalls, runningBalls, allowanceView, isOut, jobClass, agentClass, ballName, boxLabel } from './boardlayout.mjs';
-import { PEG } from './boardmotion.mjs';
+import * as pegStyle from './boardstyle-peg.mjs';
 import { percent, dateTime, duration } from './format.mjs';
 
 // The SVG namespace is an identifier, not a request; it is joined so the no-external-address check of tests/ui-static.test.mjs stays strict.
@@ -124,18 +124,18 @@ function drawBoxes(root, geometry, data) {
   }
 }
 
-// Returns the SVG element, or null when the board is not drawn (narrow or zero width).
-export function drawBoard(data, width, now, view) {
+// Returns the SVG element, or null when the board is not drawn (narrow or zero width). The style draws the scenery of the middle area;
+// everything that carries meaning is drawn here, the same in every style.
+export function drawBoard(data, width, now, view, style = pegStyle) {
   const geometry = boardGeometry(data, width);
   if (!geometry.drawn) return null;
   const root = svg('svg', { class: 'board-svg', viewBox: `0 0 ${geometry.width} ${geometry.height}`,
-    role: 'group', 'aria-label': 'Live board', preserveAspectRatio: 'xMinYMin meet' });
+    role: 'group', 'aria-label': 'Live board', 'data-style': style.name, preserveAspectRatio: 'xMinYMin meet' });
   const hatch = svg('pattern', { id: 'hatch', width: 6, height: 6,
     patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svg('rect', { width: 3, height: 6, class: 'hatch-bar' }));
-  const peg = svg('pattern', { id: 'peg', width: PEG.pitch, height: PEG.pitch, patternUnits: 'userSpaceOnUse' },
-    ...PEG.spots.map(([cx, cy]) => svg('circle', { cx, cy, r: PEG.radius, class: 'peg-dot' })));
-  root.append(svg('defs', {}, hatch, peg));
-  root.append(svg('rect', { class: 'pegs', x: geometry.pegs.x, y: geometry.pegs.y, width: geometry.pegs.w, height: geometry.pegs.h, rx: 8 }));
+  const scenery = style.draw(geometry, svg);
+  root.append(svg('defs', {}, hatch, ...scenery.defs));
+  root.append(...scenery.nodes);
   drawLanes(root, geometry, data, view);
   drawHopper(root, geometry, data);
   drawRunning(root, geometry, data, now);

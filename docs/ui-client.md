@@ -58,6 +58,10 @@ Shown when the page address ends in `#/board`; with no such ending the main area
 | `boardsvg.mjs` | draws the SVG (no library) from the geometry |
 | `boardlists.mjs` | the same content as HTML lists, the error line and the side panel |
 | `boardmotion.mjs` | pure: compares two liveboard replies into launch, land and return events, plans every travel path, carries the laps a returning ball shows |
+| `boardstyles.mjs` | pure: the ordered list of style names (`peg`, `marble`, `launch`) and the choice rule |
+| `boardswitch.mjs` | loads the style modules when the screen opens, keeps the choice in the browser, draws the switch |
+| `boardstyle-peg.mjs` | the first style: draws the pegs and plans the bounce path of a land |
+| `boardtiming.mjs` | the timings and the job id hash every style uses |
 | `boardtravel.mjs` | holds the travels under way and puts each back on its ball after every redraw with the Web Animations API |
 | `board.css` | the board styles; job and agent colours are named once at the top |
 
@@ -73,7 +77,21 @@ Shown when the page address ends in `#/board`; with no such ending the main area
 Part 2 of the live board. Travel starts only from the comparison `board.mjs` makes when the change stream says `liveboard` changed (`changed()`); opening the screen, Retry and a resize never start one, and no timer does.
 
 - **Events** (`diffBoard`): *launch* (a job is running that was not), *land* (a job is in `landed` that was not there before; it leaves the top of its lane if it was running, the foot if it was unseen), *return* (an item whose ball landed in Changes asked, Failed or Out of allowance is waiting again; its laps go from the landed figure to one more). An empty first reply gives no events.
-- **Paths.** Launch: hopper place to the lane, 0.9 s, and the remaining hopper balls close up. Land: from the lane over the pegs into the box, 1.5 to 3 s, five pegs touched; the path is a function of the job id, the lane and the box (a hash of the id, no random numbers, no physics). Return: along the bottom back to the hopper, 1.8 s. The pegs are the ones `boardsvg.mjs` draws (`PEG`).
+- **Paths.** Launch: hopper place to the lane, 0.9 s, and the remaining hopper balls close up. Land: from the lane over the pegs into the box, 1.5 to 3 s, five pegs touched; the path is a function of the job id, the lane and the box (a hash of the id, no random numbers, no physics). Return: along the bottom back to the hopper, 1.8 s. The pegs are the ones the peg style draws (`PEG` in `boardstyle-peg.mjs`); since issue #1315 the style plans the path.
 - **Rules.** More than 12 events in one change are shown at once and the line "N things changed" is shown. Reduced motion (`prefers-reduced-motion`) and widths below 640 px: nothing travels. A moving ball is a normal ball and can be clicked; a newer change for the same ball (it ran, landed or moved on) ends its travel at its new place.
 - **Laps.** A waiting entry of the model carries no laps, so a return remembers the figure it raised for as long as the item waits. After a reload, a waiting ball shows none until it runs.
 - **Tests.** `tests/ui-boardmotion.test.mjs` (pure module); `node tests/ui-boardmotion-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-boardmotion-scenario.mjs` at 1280 wide.
+
+## Board styles (issue #1315)
+
+Part 3 of the live board: more than one look for the middle of the board, and the switch between them. The board looks and moves as before in the peg style; a style changes only the scenery in the middle and the route a ball takes through it. Balls, hopper, lanes, boxes, allowance, side panel and lists are drawn by `boardsvg.mjs` and `boardlists.mjs` and are the same in every style.
+
+- **The three names**, in the order of the switch: `peg` (Peg board, present), `marble` (Marble run) and `launch` (Launch pad). The last two are their own items; until their files exist they do not load and are left out.
+- **Adding a style adds files and edits none.** Add `supervisor/ui/boardstyle-<name>.mjs` directly in the UI folder (the file route serves no subfolder) with `<name>` one of the listed names. It exports `name`, `label`, `draw(geometry, svg)` and `plan(step)`, and imports from `boardlayout.mjs` and `boardtiming.mjs` only. A new name in `STYLE_NAMES` (`boardstyles.mjs`) is the one line that lists it.
+  - `draw(geometry, svg)` returns `{ defs, nodes }`: what goes in `<defs>` and what is drawn under the lanes, from the layout table. `svg(tag, attributes, ...children)` builds an element.
+  - `plan({ kind, jobId, lane, box, from, to, geometry })` returns `{ points, durationMs }` (a land may add `touches`). `kind` is `launch`, `land` or `return`; `from` and `to` are the points the common code found; `lane` and `box` are entries of the layout table (`null` where none applies). It must be a function of its inputs: the job id gives the variety, and no random numbers or clock are read. A land ends inside its box and lasts 1.5 to 3 seconds; every point is on the board.
+  - `tests/boardstyle-rules.mjs` states these rules for every lane and box pair; a style's test calls `checkStyleRules(style)`, as `tests/ui-boardstyles.test.mjs` does for peg.
+- **Loading.** When the screen opens it tries each listed style; peg is imported directly and is always present. A style that does not load or is not shaped like a style is left out of the switch, with one console line (`Board style <name> left out: …`) and no error on the page.
+- **The switch.** A labelled radio group ("Board style") above the board: the chosen button is the one tab stop and the arrow keys move the choice. It is shown only when more than one style loaded and never below 640 px (where the board is not drawn). The choice is kept in the browser (`localStorage`, key `devtest.board-style`); when storage is blocked the switch still works for that visit. The chosen style is the saved one if it loaded, otherwise peg.
+- **Using it.** The board redraws at once with every ball in its place; no travel plays because of a switch, and a travel in progress ends with its ball at the destination. Reduced motion and the 640 px rule are unchanged in every style. The only event is the click or key; there is no timer.
+- **Tests.** `tests/ui-boardstyles.test.mjs` (list, choice rule, loading, storage, peg against the shared rules); `node tests/ui-boardstyles-browser.mjs <dir>` (Tower, pinned Chromium) runs `browser/ui-boardstyles-scenario.mjs` at 1280 and 390 wide, serving a fixture second style (`tests/boardstyle-marble-fixture.mjs`).

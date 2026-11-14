@@ -1,8 +1,8 @@
 // Issue #1313: the pure module of ball travel: the comparison of two liveboard replies and the planned paths.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MOTION, PEG, diffBoard, splitEvents, planLand, planChange, pegPoints, hashOf, offsetsOf, carryLaps, withLaps, targetKey }
-  from '../supervisor/ui/boardmotion.mjs';
+import { MOTION, diffBoard, splitEvents, planChange, hashOf, offsetsOf, carryLaps, withLaps, targetKey } from '../supervisor/ui/boardmotion.mjs';
+import { PEG, planLand, pegPoints } from '../supervisor/ui/boardstyle-peg.mjs';
 import { LAYOUT, boardGeometry } from '../supervisor/ui/boardlayout.mjs';
 import { Travels } from '../supervisor/ui/boardtravel.mjs';
 
