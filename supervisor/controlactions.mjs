@@ -4,6 +4,9 @@
 import { liveJobsFor } from './livejobs.mjs';
 import { resumeBreakerApproved } from './resumebreakeraction.mjs';
 import { closeSupersededApproved } from './closesupersededaction.mjs';
+import { extraFixApproved } from './extrafixround.mjs';
+// The team reads the extra fix round grant through here, next to the approved action that opens it.
+export { openGrant, spendGrant, withGrantedModel } from './extrafixround.mjs';
 import { addLabelAsApp } from './appidentity.mjs';
 import { refusalNote } from './pendingsteps.mjs';
 import { postIssueDraft } from './issue-drafts.mjs';
@@ -25,8 +28,9 @@ async function findItem(gh, n) {
 // Issue #1155: when the refusal is because a homeowner step is outstanding, it names the step and its PR.
 const stepNote = deps => { const note = refusalNote(deps.pendingSteps, 'github_app'); return note ? `; ${note}` : ''; };
 
-// Issues #1332 and #1337: the approved routine actions that have a module of their own; the team imports the one entry point from here.
-export const routineApproved = (team, item, status) => resumeBreakerApproved(team, item, status) ?? closeSupersededApproved(team, item);
+// Issues #1332, #1337 and #1339: the approved routine actions that have a module of their own; the team imports the one entry point from here.
+export const routineApproved = (team, item, status, authorOf) => (
+  resumeBreakerApproved(team, item, status) ?? closeSupersededApproved(team, item) ?? extraFixApproved(team, item, authorOf));
 export async function park(n, deps) {
   const found = await findItem(deps.gh, n);
   if (!found) return refused(`no open issue or pull request #${n}`);

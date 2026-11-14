@@ -21,6 +21,12 @@ export const INTERNAL_KINDS = ['host_value'];
 const RELEASE_WILL = 'Release this agent from its infrastructure-fault park, for a cause you judge benign. A real fault parks it again. Refused when it is not parked.';
 const SUPERSEDE_WILL = 'Close it with a comment naming the superseding items (superseded_by), after saving a pull request branch under saved/ (issue #1337). '
   + 'An issue is closed as not planned. Refused when it is not open, a superseding item does not exist, or a job is running on it; nothing is merged or approved.';
+// Issue #1339: one more fix job on the current head of a stopped pull request. The model is optional and at most 30 characters; the MCP server
+// keeps a copy of the limit (foreman-mcp/inbox.mjs) and a test compares them.
+const EXTRA_FIX_WILL = 'Allow exactly one more fix or CI fix job on the current head of this pull request, past the fix limit and the churn stop, '
+  + 'written by the agent that owns the branch (D-011); then the limits apply again. Refused unless the head has a CHANGES verdict or red CI, '
+  + 'while a fix job has not ended, or when this head already had its round. Nothing is merged or approved.';
+export const EXTRA_FIX_MODEL_MAX = 30;
 export const ACTIONS = {
   new_review_attempt: { target: 'pr', noun: 'pull request', will: "Give one more review attempt at the same head of this pull request (use it when attempts were spent by Foreman's own faults). Nothing is merged or approved; the new review decides." },
   clear_retry_cap: { target: 'pr', noun: 'pull request', will: 'Clear the retry cap Foreman put on this pull request (a rebase, fix or review that failed twice for the same cause), so it is planned again. Refused when no cap is in place. Nothing is merged or approved.' },
@@ -35,6 +41,7 @@ export const ACTIONS = {
   release_agent: { target: 'agent', noun: 'agent', will: RELEASE_WILL },
   resume_breaker: { target: 'breaker', noun: 'breaker scope', will: 'Resume this tripped circuit breaker scope exactly as `team breaker resume` does, recorded with who and why (issue #1332). Refused when the scope is not halted. Nothing is merged or approved.' },
   close_superseded: { target: 'pr', noun: 'pull request or issue', will: SUPERSEDE_WILL },
+  extra_fix_round: { target: 'pr', noun: 'pull request', will: EXTRA_FIX_WILL },
 };
 // Issue #1332: the one breaker scope shape: @global, all, or a halt key (the breaker writes causes up to 120 characters). The decision table and
 // inbox validation import it; the MCP server cannot import from the supervisor, so foreman-mcp/inbox.mjs keeps a copy and a test compares them.
@@ -51,6 +58,9 @@ function supersededRefusal(raw) {
   if (raw.action !== 'close_superseded') return raw.superseded_by === undefined ? null : 'superseded_by is only accepted with close_superseded';
   return raw.kind === 'action' && SUPERSEDED_BY.test(raw.superseded_by) ? null : SUPERSEDED_BY_REFUSAL;
 }
+// Issue #1339: model belongs to extra_fix_round only, where it is optional.
+const mayBeAbsent = (k, action) => ['why', 'effect', 'after', 'model'].includes(k) || (k === 'superseded_by' && action !== 'close_superseded');
+const modelRefusal = raw => (raw.model === undefined || raw.action === 'extra_fix_round' ? null : 'model is only accepted with extra_fix_round');
 const targetMax = raw => (raw.action === 'resume_breaker' ? BREAKER_SCOPE_MAX : 12);
 // Issue #1115: the holding direction. A `control` item runs without a click (it only holds work back or stops a job; it never releases, merges
 // or approves anything). Two fixed names, one target each.
@@ -66,6 +76,7 @@ const FIELDS = { prompt: ['kind', 'title', 'prompt', 'why'], issue_draft: ['kind
 FIELDS.prompt.push('effect');
 FIELDS.issue_draft.push('after');   // issue #1259
 FIELDS.action.push('superseded_by');   // issue #1337: required for close_superseded, refused for every other action
+FIELDS.action.push('model');   // issue #1339: optional, extra_fix_round only
 FIELDS.control = FIELDS.action;
 const LIVE = ['pending', 'approved', 'running', 'posting'];   // states that are not final
 // Issue #943: once an item is final its item file is no longer needed (the hash is only checked while it is live), so it is removed at once; the
@@ -113,10 +124,11 @@ export function validateItem(raw, { internal = false } = {}) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body';
-  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw), key: 60, value: 300, superseded_by: SUPERSEDED_BY_MAX };
+  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw),
+    key: 60, value: 300, superseded_by: SUPERSEDED_BY_MAX, model: EXTRA_FIX_MODEL_MAX };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || (k === 'superseded_by' && raw.action !== 'close_superseded'))) continue;
+    if (v === undefined && mayBeAbsent(k, raw.action)) continue;
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, reason: bad }; continue; }   // issue #1259
     if (typeof v !== 'string' || !v.trim()) return { ok: false, reason: `${k} must be a non-empty string` };
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, reason: `effect must be one of ${PROMPT_EFFECTS.join(', ')}` };
@@ -140,7 +152,7 @@ export function validateItem(raw, { internal = false } = {}) {
     if (spec.target === 'latch' && raw.target !== 'latch') return { ok: false, reason: 'target must be latch' };   // issue #1160
     if (spec.target === 'agent' && !TARGET_RE.agent.test(raw.target)) return { ok: false, reason: 'target must be an agent name' };   // issue #1179
     if (spec.target === 'breaker' && !BREAKER_SCOPE.test(raw.target)) return { ok: false, reason: BREAKER_SCOPE_REFUSAL };   // issue #1332
-    const bad = supersededRefusal(raw);
+    const bad = supersededRefusal(raw) || modelRefusal(raw);
     if (bad) return { ok: false, reason: bad };
     if (!TARGET_RE[spec.target].test(raw.target)) return { ok: false, reason: `target must be ${spec.target === 'job' ? 'the 8-character job id' : spec.target === 'pr' ? 'a pull request number' : 'an issue number'}` };
   }
