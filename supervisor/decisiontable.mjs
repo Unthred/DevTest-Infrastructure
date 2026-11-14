@@ -42,7 +42,11 @@ const T = {
   'split-parked': { clears: 'clears when you unpark the pull request or decide another way forward; the split is not offered again', actions: [] },
   'split-plan': { clears: 'clears when the planning job ends and the split is proposed or refused', actions: [] },
   fixlimit: { clears: 'clears when a new head is reviewed PASS; no more fix jobs start', actions: STOPPED_PR, later: LATER_FIX },
-  churn: { clears: 'clears when the current head is no longer a CHANGES verdict (a new head reviewed PASS); no more fix jobs start', actions: STOPPED_PR, later: LATER_FIX },
+  churn: {
+    clears: 'clears when the current head is no longer a CHANGES verdict (a new head reviewed PASS); no more fix jobs start',
+    actions: STOPPED_PR,
+    later: LATER_FIX,
+  },
   retrycap: { clears: 'clears when you clear the retry cap or the head changes; Foreman starts no more of that job until then', actions: ['clear_retry_cap', 'park'] },
   reviewlimit: { clears: 'clears when a review records a verdict, or a new head starts a fresh review', actions: ['new_review_attempt', 'park'] },
   reviewrefused: { clears: 'clears when a review at this head records a valid verdict, or a new head is pushed', actions: ['new_review_attempt', 'park'] },

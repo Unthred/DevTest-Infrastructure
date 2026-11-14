@@ -236,7 +236,12 @@ test('close_superseded is on the fix limit, churn, CI and stalled cards, each wi
 
 // Issue #1339: the extra fix round control is on the fix limit, churn, CI and stalled cards and nowhere else; it takes no input field.
 test('extra_fix_round is on the fix limit, churn, CI and stalled cards at the routine tier, with no model field', () => {
-  const items = { fixlimit: ITEMS.fixlimit, churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) }, ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) }, stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) } };
+  const items = {
+    fixlimit: ITEMS.fixlimit,
+    churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) },
+    ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) },
+    stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) },
+  };
   for (const [type, item] of Object.entries(items)) {
     const card = decisionCard(item);
     assert.equal(card.type, type);
