@@ -23,11 +23,13 @@ export function overlayHostHold(team, actions) {
   return actions;
 }
 
-// The why-fields of a Next card entry (dashboard panels.next): the host's reason first, then a reassignment, then the reason this agent was chosen (a review's, or the choice core's for any other job; issue #1346).
+// The why-fields of a Next card entry (dashboard panels.next): the host's reason first, then a reassignment, then the planner's
+// choice reason for any job type. A missing reason deliberately produces no empty line on the card.
 export function nextWhyFields(a, redact) {
   if (a.heldBy) return { ...(a.reassignedFrom ? { reassignedFrom: a.reassignedFrom } : {}), why: redact(a.heldBy, 300) };
   if (a.reassignedFrom) return { reassignedFrom: a.reassignedFrom, why: redact(a.reassignReason, 300) };
-  return a.why ? { why: redact(a.why, 700) } : {};
+  const why = typeof a.why === 'string' ? a.why : '';
+  return why ? { why: redact(why, 700) } : {};
 }
 
 // "; held: <reason>" for an agent whose next job the host is holding, otherwise an empty string.
