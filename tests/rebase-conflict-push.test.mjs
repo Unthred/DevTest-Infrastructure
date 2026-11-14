@@ -131,6 +131,24 @@ test('a hunk dropped from a file with no conflict is refused', t => {
   assert.deepEqual(res.conflictHunks, []);
 });
 
+test('a later commit that edits an earlier commit\'s lines in a file main did not touch: a dropped hunk there is refused', t => {
+  const lines = (a, b) => Array.from({ length: 20 }, (_, i) => (i === 4 ? a : i === 14 ? b : `line ${i + 1}`)).join('\n') + '\n';
+  const r = scratch(t, {
+    base: { 'a.txt': 'one\n', 'f.txt': lines('line 5', 'line 15') },
+    mainEdit: { 'a.txt': 'one main\n' },
+    featCommits: [
+      { msg: 'first fix', files: { 'f.txt': lines('first fix', 'line 15') } },
+      { msg: 'second fix', files: { 'a.txt': 'one pr\n', 'f.txt': lines('second fix', 'second fix 15') } },
+    ],
+  });
+  // The resolution fixes a.txt but drops the second commit's change to line 15 of f.txt, which main never touched.
+  const oldHead = rebase(r, { 'a.txt': 'one main pr\n' }, { 'f.txt': lines('second fix', 'line 15') });
+  const res = push(r, oldHead);
+  assert.equal(res.pushed, false, JSON.stringify(res));
+  assert.equal(res.reason, 'lost-changes');
+  assert.ok(res.lostChanges.some(h => h.file === 'f.txt'), JSON.stringify(res));
+});
+
 test('a whole commit dropped is refused as missing', t => {
   const r = scratch(t, {
     base: { 'a.txt': 'one\n' },

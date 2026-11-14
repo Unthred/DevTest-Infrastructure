@@ -226,15 +226,16 @@ export function conflictedFiles(run, { replayBase, theirs, base }) {
   return files;
 }
 
-// Splits findings into { hard, conflict }. `replayOf(finding)` is { replayBase, theirs }: what the change is replayed from, and what carries it.
-export function splitByConflict(run, base, findings, replayOf) {
+// Splits findings into { hard, conflict }. `replayOf(finding)` is { replayBase, theirs, onto }: what the change is replayed from, what
+// carries it, and what it is replayed onto (the rebased predecessor, so only a conflict with the base's own changes counts).
+export function splitByConflict(run, findings, replayOf) {
   const cache = new Map();
   const hard = [];
   const conflict = [];
   for (const f of findings) {
-    const { replayBase, theirs } = replayOf(f);
-    const key = `${replayBase}..${theirs}`;
-    if (!cache.has(key)) cache.set(key, conflictedFiles(run, { replayBase, theirs, base }));
+    const { replayBase, theirs, onto } = replayOf(f);
+    const key = `${replayBase}..${theirs}..${onto}`;
+    if (!cache.has(key)) cache.set(key, conflictedFiles(run, { replayBase, theirs, base: onto }));
     (cache.get(key)?.has(f.file) ? conflict : hard).push(f);
   }
   return { hard, conflict };
@@ -267,8 +268,13 @@ export function classifyChanges(run, { pairs, base, oldHead, newHead, extra = []
   if (touched) {
     findings = [...findings.filter(f => !touched.files.has(f.file)), ...compareTotalChange(run, { base, oldHead, newHead, touched })];
   }
-  const replayOf = f => (f.total ? { replayBase: touched.mergeBase, theirs: oldHead } : { replayBase: `${f.commit}^`, theirs: f.commit });
-  const { hard, conflict } = splitByConflict(run, base, findings, replayOf);
+  // A later commit that edits lines an earlier PR commit added would conflict with the bare base only because the base lacks that
+  // earlier commit. So each commit is replayed onto its paired new commit's parent, the rebased predecessor.
+  const parentOf = new Map(pairs.map(p => [p.old.sha, `${p.now.sha}^`]));
+  const replayOf = f => (f.total
+    ? { replayBase: touched.mergeBase, theirs: oldHead, onto: base }
+    : { replayBase: `${f.commit}^`, theirs: f.commit, onto: parentOf.get(f.commit) || base });
+  const { hard, conflict } = splitByConflict(run, findings, replayOf);
   const clean = ({ total, ...rest }) => rest;
   return { lostChanges: hard.map(clean), conflictHunks: conflict.map(clean) };
 }
