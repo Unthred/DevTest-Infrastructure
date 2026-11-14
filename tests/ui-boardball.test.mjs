@@ -212,3 +212,17 @@ test('the four family colours are different from one another', () => {
   const colours = FAMILIES.map(family => variable(board, `family-${family.id}`));
   assert.equal(new Set(colours).size, 4);
 });
+
+test('the letter is at least 4.5 to 1 against a held disc and a running-long disc in both themes', () => {
+  const darkBoard = board.slice(board.indexOf('[data-theme="dark"]'));
+  const letter = variable(board, 'on-ball');
+  for (const name of ['held-disc', 'long-disc']) {
+    for (const css of [board, darkBoard]) {
+      const fill = variable(css, name);
+      assert.ok(fill, name);
+      assert.ok(contrast(letter, fill) >= 4.5, `${name} ${fill} ${contrast(letter, fill).toFixed(2)}`);
+    }
+  }
+  assert.match(board, /\.ball\.held \.ball-fill\.disc \{ fill: var\(--held-disc\); opacity: 1; \}/);
+  assert.match(board, /\.ball\.long \.ball-fill\.disc \{ fill: var\(--long-disc\); \}/);
+});

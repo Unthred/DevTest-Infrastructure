@@ -5,8 +5,9 @@
   --family-new: #2f6fd0; --family-fixing: #b8501f; --family-review: #9b59b6; --family-housekeeping: #5f6e7a; --on-ball: #ffffff;
   --agent-0: #d9480f; --agent-1: #0b7285; --agent-2: #862e9c; --agent-3: #5c940d; --agent-4: #c2255c; --agent-5: #364fc7;
   --held-fill: #9aa3af; --long-fill: #8f5200; --peg: #c3c9d2;
+  --held-disc: #6b7280; --long-disc: #8f5200;
 }
-[data-theme="dark"] { --held-fill: #5b6570; --peg: #38404b; --long-fill: #b46a00; }
+[data-theme="dark"] { --held-fill: #5b6570; --peg: #38404b; --long-fill: #b46a00; --held-disc: #5b6570; --long-disc: #9a5a00; }
 
 .board-screen { padding: var(--pad); max-width: 1500px; margin: 0 auto; }
 .board-screen h1 { margin: 0 0 var(--gap); font-size: 18px; }
@@ -54,6 +55,9 @@
 .board-svg .ball.held .ball-fill, .board-svg .ball.held .ball-fill.icon { fill: var(--held-fill); opacity: .6; }
 .board-svg .ball.long .ball-ring { stroke: var(--fault); stroke-width: 3; }
 .board-svg .ball.long .ball-fill, .board-svg .ball.long .ball-fill.icon { fill: var(--long-fill); }
+/* A disc carries a white letter, so its held and long fills are opaque and at least 4.5 to 1 against the letter (issue #1317). */
+.board-svg .ball.held .ball-fill.disc { fill: var(--held-disc); opacity: 1; }
+.board-svg .ball.long .ball-fill.disc { fill: var(--long-disc); }
 .board-svg .ball.no-estimate .ball-ring { stroke-dasharray: 3 2; stroke: var(--text); }
 .board-svg .tip { display: none; pointer-events: none; }
 .board-svg .tip rect { fill: var(--text); }
