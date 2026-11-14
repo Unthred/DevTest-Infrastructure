@@ -19,6 +19,8 @@ const minutes = (createdAt, now) => {
 export function inboxCard(record, now) {
   return {
     id: record.shortId || String(record.id).slice(0, 8),
+    number: record.number ?? null,
+    reference: record.reference ?? null,
     kind: record.kind,
     title: record.title ?? null,
     state: record.state,

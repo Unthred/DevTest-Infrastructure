@@ -8,13 +8,15 @@
     "item": {
       "type": "object",
       "required": [
-        "id", "full_id", "kind", "state", "attention", "title", "why", "will_text", "body_text", "proposed_by", "created_at", "decided_at",
+        "id", "full_id", "number", "reference", "kind", "state", "attention", "title", "why", "will_text", "body_text", "proposed_by", "created_at", "decided_at",
         "undo_until", "result_text", "reason_code", "reason_text", "target", "job_id", "parked", "actions"
       ],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
         "full_id": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "number": { "type": ["integer", "null"], "minimum": 1 },
+        "reference": { "type": ["string", "null"] },
         "kind": { "type": "string" },
         "state": { "enum": ["waiting_for_approval", "approved", "running", "done", "failed", "refused", "rejected", "unknown"] },
         "attention": { "enum": ["homeowner", "fault", "none"] },

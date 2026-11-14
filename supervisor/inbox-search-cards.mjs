@@ -1,8 +1,11 @@
 import { allStatuses, pendingCards } from './inbox.mjs';
 import { redactLong } from './redact.mjs';
+import { referenceText } from '../foreman-mcp/inbox-reference.mjs';
 
 const storedCard = status => ({
   id: status.id,
+  number: status.number ?? null,
+  reference: referenceText(status.number, status.issue),
   kind: status.kind ?? 'unknown',
   state: status.state ?? 'unknown',
   createdAt: status.createdAt ?? null,

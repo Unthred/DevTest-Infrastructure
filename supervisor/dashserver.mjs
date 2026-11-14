@@ -55,6 +55,7 @@ import { limitResetsRoute } from './resetswrite.mjs';
 import { withLimitResets } from './resetsentries.mjs';
 import { JOBS_STATIC } from './jobs-page.mjs';
 import { INBOX_VIEWS_STATIC } from './inbox-views.mjs';
+import { inboxItemBody } from './inbox-item-page.mjs';
 
 export const DEFAULT_PORT = 8731;
 // Issue #406: ask for a pass now. Only when the team loop is enabled; never throws, never blocks the answer to the homeowner.
@@ -359,8 +360,7 @@ export function handler({ root, config, host, port, now = () => Date.now(), supe
         if (hits.length !== 1) return refuseWith(send, hits.length ? 409 : 404, hits.length ? 'Ambiguous inbox id' : 'No such inbox item', hits.length ? 'More than one inbox item starts with that id; use the full id.' : 'No inbox item has that id. It may have been cleared after fourteen days.');
         const s = hits[0];
         if (s.state === 'pending') return send(302, 'text/plain; charset=utf-8', 'found', { location: `/inbox#att-inbox-${s.id}` });
-        const issue = Number.isSafeInteger(s.issue) && s.issue > 0 && s.issue < 900000000 ? s.issue : null;
-        return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, `<p><code>${esc(s.id)}</code></p><ul><li>Kind: ${esc(s.kind || 'unknown')}</li><li>State: ${esc(s.state || 'unknown')}</li>${s.title ? `<li>Title: ${esc(String(s.title).slice(0, 200))}</li>` : ''}${issue ? `<li>GitHub issue: <a href="/work/issue/${issue}">#${issue}</a></li>` : ''}${s.reason ? `<li>Reason: ${esc(String(s.reason).slice(0, 300))}</li>` : ''}</ul>`);
+        return page(send, 200, `Inbox item ${esc(s.id.slice(0, 8))}`, inboxItemBody(s, esc));
       }
       if (path === '/api/approvals/events') return approvalsStream({ req, res, headers: HEADERS, active: activeStreams, read: async () => (await cachedView({ root, config: source(), now: now(), configError: source.invalid, timeline: false, allTime: false })).view.panels?.approvals });
       if ((m = /^\/api\/jobs\/([a-f0-9]{32})\/(events|transcript\.json)$/.exec(path))) {

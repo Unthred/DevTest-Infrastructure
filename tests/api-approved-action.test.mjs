@@ -17,7 +17,7 @@ const inbox = t => {
   t.after(() => fs.rmSync(d, { recursive: true, force: true }));
   return d;
 };
-const written = dir => ['items', 'status'].flatMap(sub => (fs.existsSync(path.join(dir, sub)) ? fs.readdirSync(path.join(dir, sub)) : []));
+const written = dir => ['items', 'status'].flatMap(sub => (fs.existsSync(path.join(dir, sub)) ? fs.readdirSync(path.join(dir, sub)).filter(n => /^[a-f0-9]{32}\./.test(n)) : []));   // issue #1414: not the number counter or a reservation
 
 test('valid: the item loads with a matching hash and is listed among approved actions', t => {
   const dir = inbox(t), r = call(dir);

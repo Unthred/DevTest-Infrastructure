@@ -11,8 +11,12 @@ export const INBOX_VIEWS_STATIC = {
   '/static/table-columns.mjs': js('table-columns.mjs'),
 };
 
+// Issue #1414: the card's reference ("C142", or "C142, issue #1411" once posted) leads the title in every view.
+const refHtml = (row, highlight) => (row.reference ? `<span class="inbox-ref">${highlight(row.reference)}</span> ` : '');
+const titleHtml = (row, esc, highlight) => `<span class="iv-title">${refHtml(row, highlight)}${highlight(row.title)}</span>`;
+
 const cell = (row, key, esc, highlight) => {
-  if (key === 'title') return `<span class="iv-title">${highlight(row.title)}</span>`;
+  if (key === 'title') return titleHtml(row, esc, highlight);
   if (key === 'result') return row.result ? `<span class="iv-result">${highlight(row.result)}</span>` : '<span class="iv-none">–</span>';
   return esc(row[key]);
 };
@@ -38,7 +42,7 @@ export function compactRow(row, { esc, highlight, form }) {
   const result = row.full ? `<p class="iv-more-result"><b>Result</b> <span>${highlight(row.full)}</span></p>` : '';
   const prompt = row.prompt ? `<p class="iv-more-prompt"><b>Prompt</b> <span>${highlight(row.prompt)}</span></p>` : '';
   const markHtml = `<span class="iv-mark" title="${esc(word)}" aria-label="${esc(word)}">${mark}</span>`;
-  const summary = `${markHtml}<span class="iv-title">${highlight(row.title)}</span><span class="iv-kind">${esc(row.kind)}</span>`
+  const summary = `${markHtml}${titleHtml(row, esc, highlight)}<span class="iv-kind">${esc(row.kind)}</span>`
     + `<span class="iv-age" data-created="${row.created ?? ''}">${esc(row.age)}</span>`;
   const actions = actionsHtml(row, form);
   return `<li class="iv-crow" data-id="${esc(row.id)}" data-inbox="${esc(row.id)}" data-state="${esc(row.state)}"><details><summary>${summary}</summary>`

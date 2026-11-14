@@ -130,12 +130,12 @@ test('foreman_propose writes exactly one file in items/ with a server-chosen nam
   return (async () => {
     const r = await tools.call('foreman_propose', { ...GOOD, why: 'because' });
     assert.equal(r.isError, false); const { id, state } = JSON.parse(r.text); assert.match(id, /^[a-f0-9]{32}$/); assert.equal(state, 'submitted');
-    assert.deepEqual(fs.readdirSync(path.join(dir, 'items')), [`${id}.json`]); assert.deepEqual(fs.readdirSync(path.join(dir, 'status')), []);
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'items')).sort(), ['.n1', `${id}.json`]); assert.deepEqual(fs.readdirSync(path.join(dir, 'status')), []);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'items', `${id}.json`), 'utf8')), { ...GOOD, why: 'because' });
     for (const bad of [{ ...GOOD, id: '../../x' }, { ...GOOD, path: '/etc/x' }, { ...GOOD, state: 'approved' }, { ...GOOD, kind: 'x' }, { ...GOOD, prompt: TOKEN }, { ...GOOD, prompt: 'x'.repeat(9000) }, { kind: 'prompt', title: 't' }]) {
       const e = await tools.call('foreman_propose', bad); assert.equal(e.isError, true, JSON.stringify(bad).slice(0, 60));
     }
-    assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 1, 'refused proposals write nothing');
+    assert.equal(fs.readdirSync(path.join(dir, 'items')).length, 2, 'refused proposals write nothing: still only the first item and its marker');
     assert.equal(checkProposal({ ...GOOD, prompt: TOKEN }).ok, false);
   })();
 });
@@ -203,7 +203,7 @@ test('80 proposals submitted and decided leave the inbox able to accept more (is
     inbox.scan(dir, now + round + inbox.UNDO_MS + 5);
   }
   assert.equal((await propose(dir)).isError, false);
-  assert.ok(fs.readdirSync(path.join(dir, 'items')).length <= 1);
+  assert.ok(fs.readdirSync(path.join(dir, 'items')).filter(n => !n.startsWith('.n')).length <= 1);
 });
 test('scan: a configured maxPending caps pickup and is published for the MCP server; refusals group into one Needs you line (issue #943)', t => {
   const dir = makeInbox(t), now = 1e12;
@@ -232,7 +232,7 @@ test('under the launcher permission flags the MCP process can write items/ and n
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'foreman_propose', arguments: GOOD } }) + '\n'); child.stdin.end();
   await new Promise(r => child.on('close', r));
   const reply = JSON.parse(out.trim().split('\n')[0]); assert.equal(reply.result.isError, false, out);
-  assert.equal(fs.readdirSync(path.join(dir, 'items')).filter(n => n !== 'ok.json').length, 1); assert.deepEqual(fs.readdirSync(path.join(dir, 'status')), []);
+  assert.equal(fs.readdirSync(path.join(dir,'items')).filter(n=>!/^(ok|\.n)/.test(n)).length,1); assert.deepEqual(fs.readdirSync(path.join(dir,'status')),[]);
 });
 
 // ---- the dashboard: the card, the write protection, and approval only through it

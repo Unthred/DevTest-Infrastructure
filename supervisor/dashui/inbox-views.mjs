@@ -51,7 +51,7 @@ export function decisionForms(item, form) {
 export function rowOf(rec, now) {
   const created = Number.isFinite(rec.createdAt) ? rec.createdAt : null;
   return {
-    id: rec.id, decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'),
+    id: rec.id, reference: String(rec.reference || ''), decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'),
     created, age: ageText(created, now), source: sourceOf(rec), result: firstLine(resultOf(rec)), full: resultOf(rec), prompt: promptOf(rec),
   };
 }
