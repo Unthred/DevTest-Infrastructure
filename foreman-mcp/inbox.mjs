@@ -24,7 +24,14 @@ export const SUPERSEDED_BY_MAX = 60;
 // Issue #1339: a copy of EXTRA_FIX_MODEL_MAX in supervisor/inbox.mjs; a test compares them.
 export const EXTRA_FIX_MODEL_MAX = 30;
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,11}$/;
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, close_superseded: NUMBER, extra_fix_round: NUMBER, release_agent: AGENT_NAME, resume_breaker: BREAKER_SCOPE };
+const ALL_ACTIONS = {
+  ...ACTIONS,
+  unpark: ACTIONS.reopen,
+  close_superseded: NUMBER,
+  extra_fix_round: NUMBER,
+  release_agent: AGENT_NAME,
+  resume_breaker: BREAKER_SCOPE,
+};
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)

@@ -19,7 +19,8 @@ export const CONTROLS = {
   resume_breaker: { label: 'Resume breaker', target: 'scope', does: 'Resumes this halted breaker cause exactly as `team breaker resume` does, recorded with who and why. Refused when it is no longer halted.' },
   extra_fix_round: { label: 'Extra fix round', target: 'pull',
     does: 'Allows exactly one more fix job on the current head, past the fix limit and the churn stop, written by the agent that owns the branch; '
-      + 'the limits apply again after it. Refused without a CHANGES verdict or red CI on the head, while a fix job has not ended, or when this head already had its round.' },
+      + 'the limits apply again after it. Refused without a CHANGES verdict or red CI on the head, '
+      + 'while a fix job has not ended, or when this head already had its round.' },
   close_superseded: { label: 'Close as superseded', target: 'any', input: 'superseded_by', does: 'Saves a pull request branch under saved/, then closes this pull request or issue with a comment naming the numbers you enter. Refused when it is not open, a number does not exist, or a job is running on it.' },
   park: { label: 'Park', target: 'any', does: 'Holds this work back from the planner until you unpark it.' },
 };

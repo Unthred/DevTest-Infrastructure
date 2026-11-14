@@ -124,8 +124,8 @@ export function validateItem(raw, { internal = false } = {}) {
   const allowed = FIELDS[raw.kind], extra = Object.keys(raw).filter(k => !allowed.includes(k));
   if (extra.length) return { ok: false, reason: `unknown field${extra.length > 1 ? 's' : ''}: ${extra.slice(0, 3).map(k => String(k).replace(/[^\w-]/g, '?').slice(0, 20)).join(', ')}` };
   const bodyKey = raw.kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body';
-  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30, target: targetMax(raw),
-    key: 60, value: 300, superseded_by: SUPERSEDED_BY_MAX, model: EXTRA_FIX_MODEL_MAX };
+  const max = { title: LIMITS.title, [bodyKey]: bodyKey === 'reason' ? LIMITS.reasonChars : LIMITS[bodyKey], why: LIMITS.title * 2, action: 30,
+    target: targetMax(raw), key: 60, value: 300, superseded_by: SUPERSEDED_BY_MAX, model: EXTRA_FIX_MODEL_MAX };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = raw[k];
     if (v === undefined && mayBeAbsent(k, raw.action)) continue;

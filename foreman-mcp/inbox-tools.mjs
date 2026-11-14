@@ -35,9 +35,13 @@ const PROPOSAL_SCHEMA = {
     target: { type: 'string', maxLength: 160, description: 'kind action: PR or issue number, or 8-character job id (any other action: at most 40 characters); omit for clear_latch; for resume_breaker @global, all or a halt key such as fix:blocked:postcondition_not_met (up to 160 characters)' },
     reason: { type: 'string', maxLength: 300, description: 'kind action: why' },
     superseded_by: { type: 'string', maxLength: 60, pattern: '^\\d{1,9}(?:\\s*,\\s*\\d{1,9}){0,4}$', description: 'kind action close_superseded (required there, refused for any other action): one to five issue or pull request numbers separated by commas, for example "1157, 1156"; the target is closed with a comment naming them, and a pull request branch is saved under saved/ first' },
-    model: { type: 'string', maxLength: 30, description: 'kind action extra_fix_round, optional (refused for any other action): a model of the agent that owns '
+    model: {
+      type: 'string',
+      maxLength: 30,
+      description: 'kind action extra_fix_round, optional (refused for any other action): a model of the agent that owns '
       + 'the branch, never Opus and never one of its review models; another agent is refused (D-011). Omit it to take the default: a model different '
-      + 'from the last fix round where the writer rules leave one' },
+      + 'from the last fix round where the writer rules leave one',
+    },
     prompt: { type: 'string', maxLength: 8000, description: 'kind prompt: the task text' },
     body: { type: 'string', maxLength: 8000, description: 'kind issue_draft: the issue body' },
     why: { type: 'string', maxLength: 400, description: 'optional: why this is proposed' },

@@ -62,7 +62,8 @@ test('longest type wins and unmapped ids have no type', () => {
   assert.equal(typeOf('noreviewer-refused-3'), 'noreviewer-refused'); assert.equal(typeOf('mystery-1'), null); assert.equal(typeOf('fixlimitation-1'), null);
 });
 test('each mapped type with items renders a reason, a clear condition and its controls', () => {
-  const want = { fixlimit: ['extra_fix_round', 'close_superseded'], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'], reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
+  const want = { fixlimit: ['extra_fix_round', 'close_superseded'], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'],
+    reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
     'selfcheck-job': ['stop_job'], job: ['resume_job', 'close_job'], 'stale-mark': ['reopen'] };
   for (const [k, item] of Object.entries(ITEMS)) {
     const card = decisionCard(item);
@@ -216,7 +217,12 @@ test('end to end: a clicked park and a clicked clear_retry_cap are each applied 
 
 // Issue #1337: the numbers field on the cards that can be closed as superseded.
 test('close_superseded is on the fix limit, churn, CI and stalled cards, each with a numbers field; other cards do not offer it', () => {
-  const items = { fixlimit: ITEMS.fixlimit, churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) }, ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) }, stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) } };
+  const items = {
+    fixlimit: ITEMS.fixlimit,
+    churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) },
+    ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) },
+    stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) },
+  };
   for (const [type, item] of Object.entries(items)) {
     const card = decisionCard(item);
     assert.equal(card.type, type);
@@ -238,5 +244,7 @@ test('extra_fix_round is on the fix limit, churn, CI and stalled cards at the ro
     assert.deepEqual([control.target, control.input ?? null, control.label], ['7', null, 'Extra fix round'], type);
     assert.doesNotMatch(card.later ?? '', /extra fix round/i, type);
   }
-  for (const item of [ITEMS.retrycap, ITEMS.reviewlimit, ITEMS.job]) assert.ok(!decisionCard(item).controls.some(c => c.action === 'extra_fix_round'), item.id);
+  for (const item of [ITEMS.retrycap, ITEMS.reviewlimit, ITEMS.job]) {
+    assert.ok(!decisionCard(item).controls.some(c => c.action === 'extra_fix_round'), item.id);
+  }
 });
