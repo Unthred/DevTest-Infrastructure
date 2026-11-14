@@ -10,6 +10,7 @@ import { validateBudgetConfig, HOUR } from '../supervisor/budget.mjs';
 import { tierCutoff, tierHold, tierLineText, validateTierLine, DEFAULT_TIER_LINE } from '../supervisor/tierline.mjs';
 import { collectAssignments } from '../supervisor/issueassign.mjs';
 import { budgetView } from '../supervisor/budgetview.mjs';
+import { createTools } from '../foreman-mcp/tools.mjs';
 
 const fig = (used, hoursLeft, projected) => ({ known: true, used, hoursLeft, projected });
 const HELD_AT = (used, hoursLeft, projected) => tierCutoff(fig(used, hoursLeft, projected), DEFAULT_TIER_LINE).firstHeld;
@@ -34,7 +35,7 @@ test('tierHold names the tier, the agent and the reason, and only holds tiers at
   const cut = tierCutoff(fig(0.67, 117.6, 2.4));
   assert.equal(tierHold(cut, 4, 'claude'), null);
   assert.equal(tierHold(cut, 0, 'claude'), null);
-  assert.match(tierHold(cut, 5, 'claude'), /^waits for allowance: tier 5 is not started while claude's the week would run out before its reset/);
+  assert.match(tierHold(cut, 5, 'claude'), /^waits for allowance: tier 5 is not started while claude's week would run out before its reset/);
   assert.match(tierLineText(cut), /tiers 5 to 6 wait/);
   assert.match(tierLineText(tierCutoff(fig(0.1, 100, 0.2))), /none/);
 });
@@ -64,7 +65,7 @@ const config = () => ({ schema_version: 1, enabled: true, repository: 'o/r', rep
 const issue = (n, tier, extra = {}) => ({ number: n, title: `Issue ${n}`, state: 'OPEN', body: `Tier: ${tier}`, labels: [], ...extra });
 const REGISTER = '## D-020 — x\n- Status: homeowner-approved\n';
 
-function world(t, { claudeUsed = 0.67, codexUsed = null, issues, pulls = [], codexOut = false, recent = true }) {
+function world(t, { claudeUsed = 0.67, codexUsed = null, issues, pulls = [], codexOut = false, recent = true, listed = [] }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tierline-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const gh = { pulls, issues, listPulls: async () => gh.pulls, getPull: async n => gh.pulls.find(p => p.number === n) || null, listIssues: async () => gh.issues,
@@ -77,7 +78,9 @@ function world(t, { claudeUsed = 0.67, codexUsed = null, issues, pulls = [], cod
   const allowance = { claude: al('claude', claudeUsed), ...(codexUsed === null ? {} : { codex: al('codex', codexUsed) }) };
   const usage = { allowance, jobs: [], snapshots: recent ? [{ allowance: { claude: earlier } }] : [] };
   const limitedOf = a => (a === 'codex' && codexOut ? { out: true, reason: 'codex out', until: RESET } : { out: false });
-  const team = new Team({ config: config(), root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock, usage, limitedOf, timeZone: 'Europe/London', alert: async () => {} });
+  const cfg = config();
+  cfg.agents.claude.issues = listed;
+  const team = new Team({ config: cfg, root: stateRoot(path.join(dir, 'state')), gh, jobs, git, register: REGISTER, clock, usage, limitedOf, timeZone: 'Europe/London', alert: async () => {} });
   return { team, gh };
 }
 const implementing = plan => plan.filter(a => a.type === 'implement').map(a => `${a.agent}:${a.issue}`);
@@ -91,7 +94,7 @@ test('real data, 14 Nov 2026: claude 67% used, 4.9 days left, estimate 240%: tie
   const rows = collectAssignments(w.team, { cache: { issues: w.gh.issues, pulls: [] }, plan, states: {}, activeJobs: [] });
   const waits = rows.find(r => r.number === 1353).wait;
   assert.equal(waits.kind, 'allowance-tier');
-  assert.match(waits.text, /waits for allowance: tier 5 is not started while claude's the week would run out before its reset/);
+  assert.match(waits.text, /waits for allowance: tier 5 is not started while claude's week would run out before its reset/);
   assert.equal(rows.find(r => r.number === 1407).wait.kind, 'next');
 });
 
@@ -120,7 +123,7 @@ test('work on an open pull request is not held by the rule: a fix on a claude PR
   const w = world(t, { issues: [issue(1353, 5)], pulls: [pr], codexOut: true });
   const plan = await w.team.plan();
   assert.ok(!implementing(plan).length);
-  assert.ok(plan.every(a => !a.tierHold), 'no planned action carries a tier hold');
+  assert.ok(plan.some(a => a.agent === 'claude' && ['fix', 'cifix'].includes(a.type)), `a fix is planned: ${JSON.stringify(plan.map(a => a.type))}`);
 });
 
 test('the hold lifts when the estimate falls: 20% used at the window average (67% at reset) starts the tier 5 issue', async t => {
@@ -135,4 +138,24 @@ test('foreman_budget view carries the cut off in force for each agent', async t 
   const view = budgetView(w.team);
   assert.match(view.claude.tierLine, /tier cut off: tiers 5 to 6 wait/);
   assert.equal(view.claude.tierCutoff.firstHeld, 5);
+});
+
+test('an issue in the holding agent\'s own list goes to another agent with room, and every agent holding keeps it waiting', async t => {
+  const w = world(t, { issues: [issue(1353, 5)], listed: [1353], codexUsed: 0.2 });
+  const plan = await w.team.plan();
+  assert.deepEqual(implementing(plan), ['codex:1353']);
+  assert.equal(plan.find(a => a.type === 'implement').reassignedFrom, 'claude');
+  const held = world(t, { issues: [issue(1353, 5)], listed: [1353], codexOut: true });
+  assert.deepEqual(implementing(await held.team.plan()), []);
+});
+
+test('foreman_budget shows the thresholds in force with the defaults when no tier_line is configured, and the cut off per agent', async t => {
+  const w = world(t, { issues: [issue(1353, 5)], codexOut: true });
+  await w.team.plan();
+  const view = { budget: { claude: { ...w.team.modes.claude, tierLine: budgetView(w.team).claude.tierLine } } };
+  const tools = createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}),
+    getPath: async () => ({ effective: { budget: { enabled: true } } }) });
+  const out = JSON.parse((await tools.call('foreman_budget')).text);
+  assert.deepEqual(out.thresholds.tierLine, DEFAULT_TIER_LINE);
+  assert.equal(out.agents.claude.tierLine.firstHeldTier, 5);
 });

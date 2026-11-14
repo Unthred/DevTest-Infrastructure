@@ -11,6 +11,7 @@ import { hostActivity } from './source.mjs';
 import { dependencySkips } from './dependencyview.mjs';
 import { withReasons, plannedFor, resumeChecksFor } from './planview.mjs';
 import { issueViews, faultViews } from './assignmentview.mjs';
+import { tierLineSettings } from '../supervisor/tierline.mjs';
 import { budgetBrief, readingBrief } from './budgetfigures.mjs';
 
 const PLAN_NOTE = 'A live "team tick --dry-run" is not offered: it needs the state root, which this account cannot read.';
@@ -205,7 +206,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
           tierLine: { text: b.tierLine ?? null, firstHeldTier: b.tierCutoff?.firstHeld ?? null, reason: b.tierCutoff?.reason ?? null },
         }])),
         thresholds: cfg?.effective?.budget ? { enabled: cfg.effective.budget.enabled ?? null, highWater: cfg.effective.budget.high_water ?? null, highWaterMinHours: cfg.effective.budget.high_water_min_hours ?? null, exhaustedAt: cfg.effective.budget.exhausted_at ?? null, recentHours: cfg.effective.budget.recent_hours ?? null, canTakeOver: cfg.effective.budget.can_take_over ?? null,
-          tierLine: cfg.effective.budget.tier_line ?? null } : null,
+          tierLine: tierLineSettings(cfg.effective.budget) } : null,
         note: 'Figures are the provider\'s own allowance readings; job costs are usage equivalents, not charges.' })); } },
     { name: 'foreman_tests', description: 'Test-slot use: slots in use and free, the runs holding a slot, the queue with how long each waits, and the last 7 days of refused runs (no headroom or no free slot in time), timed-out runs, memory-killed runs and orphaned processes (survived SIGKILL), with the reason. Read-only.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { if (!getPath) throw new Error('test-slot figures are not available on this server'); return getPath('/api/tests.json'); } },

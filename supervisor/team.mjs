@@ -3,7 +3,7 @@
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
 import { orderByTier } from './tier.mjs';
-import { tierCutoff, tierLineHeld, tierLineSettings } from './tierline.mjs';
+import { tierCutoff, ownerTierHold, tierLineHeld, tierLineSettings } from './tierline.mjs';
 import { sweepJobTmp } from './jobtmp.mjs';
 import { saveState } from './statesave.mjs';
 import { readHostPressure, recordHostPressure, pressureText } from './hostpressure.mjs';
@@ -1279,13 +1279,12 @@ export class Team {
     // another agent) reviews it and D-011 holds. Ownership returns once the owner has allowance again and no work has started.
     if (!B || B.mode !== 'normal' || !B.known || !mayTakeOver(this.c, agent) || this.limitedOf(agent).out) return null;   // an agent at a usage limit takes nothing over either
     for (const [other] of mayTakeFrom(this.rankRows(), agent) ? this.agents() : []) {
-      const ob = this.ownerOut(other);
-      if (other === agent || !ob) continue;
+      if (other === agent) continue;
       for (const n of this.issuesOf(other)) {
-        const issue = this.implementable(n, prs, issueByNo, busy);
-        if (!issue || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue) || tierLineHeld(this, agent, issue)) continue;
+        const issue = this.implementable(n, prs, issueByNo, busy), why = issue && (this.ownerOut(other)?.why ?? ownerTierHold(this, other, issue));
+        if (!why || this.taken?.has(`issue:${n}`) || this.overlapHold(agent, n, issue) || tierLineHeld(this, agent, issue)) continue;
         if (!allow('implement')) return null;
-        return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${ob.why}` };
+        return { type: 'implement', issue: n, title: issue.title, key: String(n), reassignedFrom: other, reassignReason: `reassigned for allowance: ${other} ${why}` };
       }
     }
     return null;

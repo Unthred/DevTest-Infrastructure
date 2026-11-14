@@ -30,8 +30,8 @@ export function tierCutoff({ known, used, projected, hoursLeft }, cfg = DEFAULT_
   const none = { firstHeld: null, reason: null };
   if (!known || !Number.isFinite(used) || !Number.isFinite(projected) || !Number.isFinite(hoursLeft) || hoursLeft <= cfg.min_hours) return none;
   const holds = [];
-  if (projected > cfg.estimate_limit) holds.push({ from: cfg.estimate_from_tier, why: `the week would run out before its reset (estimate at reset ${pct(projected)})` });
-  if (used >= cfg.used_limit) holds.push({ from: cfg.used_from_tier, why: `the week is ${pct(used)} used with more than ${cfg.min_hours}h to its reset` });
+  if (projected > cfg.estimate_limit) holds.push({ from: cfg.estimate_from_tier, why: `week would run out before its reset (estimate at reset ${pct(projected)})` });
+  if (used >= cfg.used_limit) holds.push({ from: cfg.used_from_tier, why: `week is ${pct(used)} used with more than ${cfg.min_hours}h to its reset` });
   if (!holds.length) return none;
   const first = holds.reduce((a, b) => (b.from < a.from ? b : a));
   return { firstHeld: first.from, reason: first.why };
@@ -56,4 +56,10 @@ export function tierLineHeld(team, agent, issue) {
   const why = tierHold(mode.tierCutoff, readTier(issue).tier, agent);
   if (why) team.hold(agent, 'implement', `#${issue.number} ${why}`);
   return Boolean(why);
+}
+
+// Issue #1417: the hold text when the issue's owner, in normal mode, may not start its tier, or null. The owner then counts as out for that one issue,
+// so another agent with room may take it (an issue in the owner's own list or the unblock queue is otherwise left to the owner).
+export function ownerTierHold(team, owner, issue) {
+  return tierHold(team.modes?.[owner]?.tierCutoff, readTier(issue).tier, owner);
 }
