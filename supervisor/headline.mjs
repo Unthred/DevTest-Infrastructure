@@ -1,4 +1,5 @@
 import { formatCost } from './money.mjs';
+import { withArchivedVerdicts, descriptionOnlyFirst } from './headline-verdicts.mjs';
 // Issue #866: the headline progress numbers at the top of the dashboard ("are we getting through the work?").
 // Pure: it reads Foreman's own records (the dashboard view's issues, pull requests and jobs, and the circuit breaker's waste record) and
 // returns, for each of the last 24 hours and the last 7 days, eight figures, the same figure for the period before (for the trend) and the
@@ -27,6 +28,8 @@ const realVerdicts = p => (Array.isArray(p.verdicts) ? p.verdicts : []).filter(v
 const reviewsOf = p => (Array.isArray(p.verdicts) ? realVerdicts(p).length : (fin(p.reviewRounds) ? p.reviewRounds : 0)) + (fin(p.secondOpinionRounds) ? p.secondOpinionRounds : 0);
 const roundsOf = p => reviewsOf(p) + (fin(p.fixRounds) ? p.fixRounds : 0) + (fin(p.rebaseRounds) ? p.rebaseRounds : 0);
 
+const firstDetail = (first, next) => `first review: ${first.verdict}${descriptionOnlyFirst(first, next) ? ' (description only)' : ''}`;
+
 // One card's figures for one period [from, to].
 function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   const issueMs = issues.map(i => ({ ...i, c: ms(i.createdAt), x: ms(i.closedAt) }));
@@ -34,8 +37,9 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   const openAtStart = issueMs.filter(i => fin(i.c) && i.c <= from && (i.state === 'OPEN' || !fin(i.x) || i.x > from)).length;
   const total = openAtStart + opened.length;
   const merged = prs.filter(p => p.status === 'merged' && inside(p.mergedAt, from, to));
-  const cohort = prs.map(p => ({ p, first: realVerdicts(p)[0] })).filter(({ first }) => first && inside(first.at, from, to));
+  const cohort = prs.map(p => ({ p, first: realVerdicts(p)[0], next: realVerdicts(p)[1] })).filter(({ first }) => first && inside(first.at, from, to));
   const approved = cohort.filter(({ first }) => first.verdict === 'PASS');
+  const descriptionOnly = cohort.filter(({ first, next }) => descriptionOnlyFirst(first, next));
   const known = merged.filter(p => fin(p.tokens));
   const wasted = waste.filter(w => inside(w.at, from, to));
   const byCause = new Map(); for (const w of wasted) byCause.set(w.cause || 'unknown', (byCause.get(w.cause || 'unknown') || 0) + (fin(w.tokens) ? w.tokens : 0));
@@ -56,8 +60,9 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, 'merged', p.tokens))), count: merged.length },
     throughput: { value: perH(openedPrs.length), opened: openedPrs.length, merged: merged.length, implemented: implemented.length, openedPerHour: perH(openedPrs.length), mergedPerHour: perH(merged.length), implementedPerHour: perH(implemented.length), hours, unit: 'per hour',
       items: cap([...openedPrs.map(p => item('pr', p.number, p.title, ms(p.openedAt), 'opened')), ...merged.map(p => item('pr', p.number, p.title, p.mergedAt, 'merged')), ...implemented.map(j => item('job', String(j.id || '').slice(0, 8), 'implement job completed', ms(j.updatedAt), `issue ${j.issue ?? 'unknown'}`))]), count: openedPrs.length + merged.length + implemented.length },
-    'first-pass': { value: cohort.length ? round(approved.length / cohort.length * 100, 1) : null, approved: approved.length, reviewed: cohort.length, unit: '%',
-      items: cap(cohort.map(({ p, first }) => item('pr', p.number, p.title, first.at, `first review: ${first.verdict}`))), count: cohort.length },
+    'first-pass': { value: cohort.length ? round(approved.length / cohort.length * 100, 1) : null, approved: approved.length, reviewed: cohort.length,
+      descriptionOnlyRejected: descriptionOnly.length, unit: '%',
+      items: cap(cohort.map(({ p, first, next }) => item('pr', p.number, p.title, first.at, firstDetail(first, next)))), count: cohort.length },
     rounds: { value: merged.length ? round(sum(merged, roundsOf) / merged.length) : null, merged: merged.length, rounds: sum(merged, roundsOf), unit: 'rounds',
       items: cap(merged.map(p => item('pr', p.number, p.title, p.mergedAt, `${reviewsOf(p)} review, ${fin(p.fixRounds) ? p.fixRounds : 0} fix, ${fin(p.rebaseRounds) ? p.rebaseRounds : 0} rebase`, p.tokens))), count: merged.length },
     tokens: { value: known.length ? Math.round(sum(known, p => p.tokens) / known.length) : null, merged: merged.length, withKnownTokens: known.length, totalTokens: sum(known, p => p.tokens), unit: 'tokens',
@@ -73,9 +78,10 @@ function period({ issues, prs, jobs, waste }, from, to, spanMs) {
   return cards;
 }
 
-// issues: { number, title, state, createdAt, closedAt }; prs: dashboard view PR rows; jobs: supervisor job records; wasteRecords: breaker waste entries.
-export function headlineStats({ issues = [], prs = [], jobs = [], wasteRecords = [], now = Date.now() } = {}) {
-  const inputs = { issues, prs, jobs, waste: wasteRecords.filter(w => w && typeof w === 'object' && fin(w.at)) };
+// issues: { number, title, state, createdAt, closedAt }; prs: dashboard view PR rows; jobs: supervisor job records; wasteRecords: breaker waste entries;
+// timeline: the history timeline (issue #1376), whose archived verdicts count with the live ones.
+export function headlineStats({ issues = [], prs = [], jobs = [], wasteRecords = [], timeline = [], now = Date.now() } = {}) {
+  const inputs = { issues, prs: withArchivedVerdicts(prs, timeline), jobs, waste: wasteRecords.filter(w => w && typeof w === 'object' && fin(w.at)) };
   const openNow = issues.filter(i => i.state === 'OPEN').length;
   const closedHeld = issues.filter(i => i.state !== 'OPEN').length;
   const windows = {};

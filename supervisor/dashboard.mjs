@@ -2,7 +2,7 @@
 // the team state, the GitHub cache and the snapshot history. No GitHub call, no model call, no write.
 import { DEFAULT_GBP_PER_USD, formatCost } from './money.mjs';
 import fs from 'node:fs';
-import { headlineStats } from './headline.mjs';
+import { headlineView } from './headline-view.mjs';
 import { bestForView } from './dashbest.mjs';
 import { wasteCauses } from './wastecauses.mjs';
 import { summarize as failCausesOf } from './failcause.mjs';
@@ -765,7 +765,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     return {
       ...assignmentFields(extra, team.assignments, names),   // issue #1121: extra plus assignments, faults and the issue rows' explanation
       // Issue #866: the headline progress numbers, from the same records the rest of the view uses.
-      headline: headlineStats({ issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
+      headline: headlineView({ root, issues: extra.issues, prs: extra.prs, jobs, wasteRecords: Object.values(breakerState.waste || {}), now }),
       best: bestForView(root, now),   // issue #1326
       wasteCauses: wasteCauses(Object.values(breakerState.waste || {}), now),   // issue #1256
       since: sinceView({ jobs, state, names, describe: j => describeFor(j, { names, state }), needsYou: extra.panels.needsYou, now }, lastSeen),
