@@ -6,6 +6,7 @@ import { gbpAmount } from './money.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { redact } from './redact.mjs';
+import { shownCause } from './restartcause.mjs';
 import { readTranscript, validJobId } from './transcript.mjs';
 import { readTeamState } from './dashdata.mjs';
 
@@ -15,10 +16,12 @@ export const EVENTS_KEPT = 15;
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;  // the transcript is read from this offset, never whole
 
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+// Issue #1423: a restart shows who or what did it.
+const eventName = e => ({ at: e.at, kind: e.kind.slice(0, 64), ...(e.kind === 'recovered' ? { cause: shownCause(e.detail?.cause) } : {}) });
 const readEventNames = (root, id) => {
   let text; try { text = fs.readFileSync(path.join(root, 'events', `${id}.jsonl`), 'utf8'); } catch { return []; }
   const out = [];
-  for (const line of text.split('\n').slice(-200)) { try { const e = JSON.parse(line); if (e && Number.isFinite(e.at) && typeof e.kind === 'string') out.push({ at: e.at, kind: e.kind.slice(0, 64) }); } catch { /* damaged line */ } }
+  for (const line of text.split('\n').slice(-200)) { try { const e = JSON.parse(line); if (e && Number.isFinite(e.at) && typeof e.kind === 'string') out.push(eventName(e)); } catch { /* damaged line */ } }
   return out.filter(e => e.kind !== 'checkpoint').slice(-EVENTS_KEPT);   // checkpoints are frequent and say nothing about the end
 };
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
@@ -48,7 +51,7 @@ export function jobOutcome(root, id) {
     pushed: { headAtStart: startHead ? String(startHead).slice(0, 12) : null, lastCheckpointHead: nowHead ? String(nowHead).slice(0, 12) : null, headMovedLocally: startHead && nowHead ? startHead !== nowHead : null, uncommittedFiles: Array.isArray(cp?.status) ? cp.status.length : null, pushCommandsInLog: pushCommands,
       note: 'Evidence only: Foreman does not check the remote here. Compare with the pull request head (foreman_why_blocked).' },
     cost: { tokens: job.usage ? (job.usage.inputTokens || 0) + (job.usage.outputTokens || 0) : null, gbpEquivalent: gbpAmount(job.usage?.costUsdEstimate) },
-    events: readEventNames(root, id).map(e => ({ at: iso(e.at), kind: e.kind })),
+    events: readEventNames(root, id).map(e => ({ at: iso(e.at), kind: e.kind, ...(e.cause ? { cause: e.cause } : {}) })),
     logTail: entries.slice(-LOG_TAIL_ENTRIES).map(e => ({ seq: e.seq, kind: e.kind, text: redact(`${e.tool ? e.tool + ': ' : ''}${e.text || e.detail || ''}`, LOG_ENTRY_CHARS) })),
   };
 }

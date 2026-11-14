@@ -66,6 +66,7 @@ import { WRITER_KINDS, openFreeBatch } from './batchissue.mjs';
 import { areaOf, batchMarker, appendToBatch, newBatchBody, rejectedSink, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { slimFinding } from './rebasehunks.mjs';
+import { CAUSE, refusedRebaseWhy } from './restartcause.mjs';
 import { holdRefusedRebase, noHeadDetail, pushStep, STOP_STEP } from './rebaserefusal.mjs';
 import { fixRoundInstruction, readCarried, carriedRowError, writeFixRoundScope, fixRoundMeta } from './reviewscope.mjs';
 import { ciFixPrompt as writerCiFixPrompt, continuePrompt as writerContinuePrompt, continuedPostcondition, fixPrompt as writerFixPrompt, implementPrompt as writerImplementPrompt, reviewerRequirementsTableInstruction, tablePostcondition } from './requirements-table.mjs';
@@ -1980,7 +1981,8 @@ export class Team {
       if (breaker.blocks(this.s.breaker, this.c.breaker, { type: rec.kind, issue: rec.issue ?? null })) throw new SupervisorError(`the circuit breaker has halted new ${rec.kind} jobs; resume the breaker first`);   // issue #713: same rule as resumeTransient (issue #549)
       if (await this.providerRoleFull(job.provider ?? this.c.agents[rec.agent]?.provider, roleOfType(rec.kind))) throw new SupervisorError('the provider has no free slot for this role right now');
       rec.ingested = false; this.save();
-      await this.jobs.resume(id); log(`resumed the ${rec.kind} job ${target}`, 'resumed once'); return `job ${target} resumed`;
+      await this.jobs.resume(id, CAUSE.inboxResume);
+      log(`resumed the ${rec.kind} job ${target}`, 'resumed once'); return `job ${target} resumed`;
     }
     if (action === 'close_job') return this.closeJob(id, rec, job, reason, log);
     throw new SupervisorError('unknown action');
@@ -2976,6 +2978,7 @@ export class Team {
   // no longer open or whose head moved, or an issue that is no longer open is never relaunched (state.unblock.noResume, permanent).
   awaitingResume(id, job, j) {
     if (!this.jobs.resume || this.s.unblock.resumed[id] || this.s.unblock.noResume[id] || !TRANSIENT_STOPS.has(job.lastEvent)) return false;
+    if (job.rebaseRefused) return false;   // issue #1423: a refused or agent-stopped rebase gives the same result again
     return !this.unblockRoom(j.issue ?? j.pr);
   }
   // One predicate for "resumeTransient will pick this stopped job up" (issue #741): ingest uses it to defer the stale cause, so the two cannot drift apart.
@@ -3014,6 +3017,10 @@ export class Team {
         const job = await this.jobs.get(id);
         if (job && ['completed', 'stopped'].includes(job.status)) { j.settled = true; this.save(); return; }   // never transient again
         if (!job || !['blocked', 'failed'].includes(job.status) || !TRANSIENT_STOPS.has(job.lastEvent)) return;
+        if (job.rebaseRefused) {   // issue #1423: the refusal or agent stop is recorded; the homeowner is asked once instead
+          this.s.unblock.noResume[id] = { at: this.clock.now(), why: refusedRebaseWhy(job.rebaseRefused) };
+          this.save(); return;
+        }
         const stale = await this.staleResume(id, j, open);
         if (stale) {
           this.s.unblock.noResume[id] = { at: this.clock.now(), why: stale };
@@ -3031,7 +3038,7 @@ export class Team {
         if (room) { await this.raiseUnblockLimit(report, target, room, tk); return; }   // notifyOne then asks the homeowner about the job
         this.s.unblock.resumed[id] = this.clock.now(); j.ingested = false; this.save();
         await this.unblock(report, { target, tk, what: `resumed the ${j.kind} job ${id.slice(0, 8)}${target != null ? ` for #${target}` : ''}`, why: `it stopped on ${redactEvent(job.lastEvent)}, a transient cause` },
-          async () => { await this.jobs.resume(id); return 'resumed once; if it stops again the homeowner is asked'; });
+          async () => { await this.jobs.resume(id, CAUSE.transientRule); return 'resumed once; if it stops again the homeowner is asked'; });
       });
     }
   }
