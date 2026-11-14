@@ -315,9 +315,8 @@ async function teamTick(root, registry, dryRun, hold = null, pass = null) {
       if (!dryRun) {
         if (pass) requestOwnFollowUp({ root, report, cap: wakeCap(), spawnPass: why => spawnPass(root, why) });   // issue #1410
         record({ ...tickOutcome(report), team, actions: report.actions, ingested: (report.ingested || []).length, startedAt: tickStartedAt, heldAgents: report.held ? (report.held.agents || []) : null, holds: report.holds, ...(pass ? { trigger: pass.trigger, merged: pass.merged } : {}), noop: report.noop === true, durationMs: Date.now() - tickStartedAt, phases: report.phases ? { ...report.phases, ...phasesBefore, total: (report.phases.total || 0) + (phasesBefore['change check'] || 0) + (phasesBefore['team setup'] || 0) } : null, ghCalls: ghStats.calls, ghMs: ghStats.ms, ...(check ? { check: { result: check.replay ? 'unchanged' : 'full', reason: check.reason, probes: check.probes, served: wrapper?.stats.served ?? 0 } } : {}) });
-        // Issue #951: bounded incremental refresh of the searchable issue and PR index (one gh call per kind). Best effort; skipped on a pass GitHub proved unchanged once caught up.
         updateIndex(root, { run: ghRunner(), repository: config.repository, idle: mode === 'replay', isStatusIssue });
-        // The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
+        // Issue #951: the issue and PR index is refreshed above (bounded, best effort). The baseline is stored only after a full pass that read everything without error, and never after a replay (so the forced-full clock keeps running).
         if (mode === 'record' && tickOutcome(report).status === 'ok') { try { const next = buildCache({ repository: config.repository, baseline: check.baseline, wrapper, now: checkedAt }); if (next) saveCache(root, next); } catch { /* the next pass is a full one */ } }
         // Issues #358 and #430: publish live state to the status issue; advance the watched changes. Never throws, never fails the tick.
         const reportsStart = Date.now();
