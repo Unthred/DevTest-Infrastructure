@@ -46,8 +46,8 @@ test('#1372: boundaries: a match on line 1 and on the last line report the right
   const other = `${COLOUR_WORD}: ${'x'.repeat(8)}`;
   assert.match(inbox.validateItem({ ...DRAFT, body: `${successLine}\nplain\nplain` }).reason, /line 1\./);
   assert.match(inbox.validateItem({ ...DRAFT, body: `plain\r\nplain\r\nplain\r\n${successLine}` }).reason, /line 4\./);
-  const first = inbox.validateItem({ ...DRAFT, body: `plain\n${TOKEN}\n${other}` }).reason;
-  assert.match(first, /rule "service key prefix" matched on line 2\./, 'the first rule in list order wins, on the line where its match starts');
+  const first = inbox.validateItem({ ...DRAFT, body: `plain\n${other}\n${TOKEN}` }).reason;
+  assert.match(first, /rule "service key prefix" matched on line 3\./, 'list order wins over text order, on the line where its match starts');
 });
 test('#1372: a real looking private key block is refused naming its rule and line, and the reason holds none of it', () => {
   const block = ['-----BEGIN RSA PRIVATE ' + 'KEY-----', hex(24), '-----END RSA PRIVATE ' + 'KEY-----'].join('\n');
