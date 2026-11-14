@@ -112,7 +112,8 @@ test('a secret-shaped control reason is redacted and the answer stays valid JSON
   const secret = ['gh', 'p_'].join('') + 'A'.repeat(30);
   const reason = `token: "${secret}" leaked`;
   const controls = [{ action: 'park', target: '23', by: 'overseer', at: 1, reason, state: 'done', result: 'parked' }];
-  const view = { controls, jobs: [], attention: [], queues: {}, issues: [{ number: 23, title: 'T', state: 'OPEN', labels: [] }], prs: [], excluded: [], panels: {}, display: {} };
+  const issues = [{ number: 23, title: 'T', state: 'OPEN', labels: [] }];
+  const view = { controls, jobs: [], attention: [], queues: {}, issues, prs: [], excluded: [], panels: {}, display: {} };
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 0 });
   const out = (await tools.call('foreman_why_blocked', { kind: 'issue', number: 23 })).text;
   assert.ok(!out.includes(secret));

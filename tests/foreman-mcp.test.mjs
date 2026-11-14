@@ -312,27 +312,38 @@ test('reports: through the launcher with the permission model, the configured fo
 const headlineView = (rate, cost = {}) => ({
   ...smallView(), display: rate === null ? {} : { gbpPerUsd: rate },
   headline: { note: 'n', windows: { '24h': { cards: {
-    cost: { id: 'cost', value: 5.19, merged: 2, totalCostUsd: 10.38, unit: 'USD equivalent', previous: { value: 2.82, totalCostUsd: 5.64, unit: 'USD equivalent' }, previousValue: 2.82, delta: 2.37, items: [{ n: 1 }], ...cost },
+    cost: {
+      id: 'cost', value: 5.19, merged: 2, totalCostUsd: 10.38, unit: 'USD equivalent',
+      previous: { value: 2.82, totalCostUsd: 5.64, unit: 'USD equivalent' },
+      previousValue: 2.82, delta: 2.37, items: [{ n: 1 }], ...cost,
+    },
     waste: { id: 'waste', value: 700, costUsdEquivalent: 2, unit: 'tokens', previous: { value: 100, costUsdEquivalent: 1 }, previousValue: 100, items: [] },
   } } } },
 });
-const headlineOf = async view => JSON.parse((await call(createProtocol({ tools: toolsFor(view) }), 'foreman_headline')).result.content[0].text).windows['24h'].cards;
+const headlineOf = async view => {
+  const reply = await call(createProtocol({ tools: toolsFor(view) }), 'foreman_headline');
+  return JSON.parse(reply.result.content[0].text).windows['24h'].cards;
+};
 test('foreman_headline: with a rate the cost card and its previous period are in pounds, and the waste card carries pounds', async () => {
   const { cost, waste } = await headlineOf(headlineView(0.75));
   assert.deepEqual([cost.value, cost.totalCostGbp, cost.unit], [3.89, 7.79, 'GBP equivalent']);
-  assert.deepEqual([cost.previous.value, cost.previous.totalCostGbp, cost.previous.unit, cost.previousValue], [2.12, 4.23, 'GBP equivalent', 2.12]);
+  const previous = [cost.previous.value, cost.previous.totalCostGbp, cost.previous.unit, cost.previousValue];
+  assert.deepEqual(previous, [2.12, 4.23, 'GBP equivalent', 2.12]);
   assert.equal(cost.delta, 1.77);
   assert.equal(Math.round((cost.value - cost.previousValue) * 100) / 100, cost.delta);
   assert.ok(!('totalCostUsd' in cost) && !('totalCostUsd' in cost.previous) && !('items' in cost) && !('rateNote' in cost));
   assert.deepEqual([waste.costGbpEquivalent, waste.previous.costGbpEquivalent, 'costUsdEquivalent' in waste], [1.5, 0.75, false]);
 });
 test('foreman_headline: a period with no merged issue gives a null value with the pounds unit and no error', async () => {
-  const { cost } = await headlineOf(headlineView(0.75, { value: null, totalCostUsd: 0, merged: 0, previous: { value: null, totalCostUsd: 0, unit: 'USD equivalent' }, previousValue: null, delta: null }));
-  assert.deepEqual([cost.value, cost.unit, cost.previous.value, cost.previous.unit, cost.totalCostGbp], [null, 'GBP equivalent', null, 'GBP equivalent', 0]);
+  const none = { value: null, totalCostUsd: 0, merged: 0, previousValue: null, delta: null };
+  const { cost } = await headlineOf(headlineView(0.75, { ...none, previous: { value: null, totalCostUsd: 0, unit: 'USD equivalent' } }));
+  const got = [cost.value, cost.unit, cost.previous.value, cost.previous.unit, cost.totalCostGbp];
+  assert.deepEqual(got, [null, 'GBP equivalent', null, 'GBP equivalent', 0]);
 });
 test('foreman_headline: with no rate in the view the dollar figures stay labelled as dollars and a note says no rate is set', async () => {
   const { cost, waste } = await headlineOf(headlineView(null));
-  assert.deepEqual([cost.value, cost.totalCostUsd, cost.unit, cost.previous.value, cost.previous.unit], [5.19, 10.38, 'USD equivalent', 2.82, 'USD equivalent']);
+  const got = [cost.value, cost.totalCostUsd, cost.unit, cost.previous.value, cost.previous.unit];
+  assert.deepEqual(got, [5.19, 10.38, 'USD equivalent', 2.82, 'USD equivalent']);
   assert.match(cost.rateNote, /No pounds rate is set/); assert.match(waste.rateNote, /No pounds rate is set/);
   assert.equal(waste.costUsdEquivalent, 2);
 });
