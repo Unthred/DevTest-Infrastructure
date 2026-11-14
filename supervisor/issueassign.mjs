@@ -6,6 +6,7 @@ import { reserveOut } from './capacityteam.mjs';
 import { redact } from './dashdata.mjs';
 import { explanationText } from './dashassign.mjs';
 import { readTier } from './tier.mjs';
+import { tierHold } from './tierline.mjs';
 
 // Wait kinds that mean the issue is not stuck: it is running, has its PR, or starts on this tick.
 export const MOVING_KINDS = new Set(['running', 'pr-open', 'next']);
@@ -64,12 +65,27 @@ function waitOf(i, chosen) {
   if (i.prText) return w('pr-open', i.prText);
   if (i.startedEarlier) return w('started-earlier', 'started earlier; no PR yet');
   if (i.planned) return w('next', `starts on the next tick on ${i.planned.agent}`);
+  const tierWait = tierWaitOf(i);
+  if (tierWait) return tierWait;
   if (!chosen) return allOut(i);
   if (chosen.out) return w(chosen.out.kind, `${chosen.name} ${chosen.out.text}${at(chosen.out.until, i.zone)}`, chosen.out.until ?? null);
   if (i.capText) return w('cap', i.capText);
   if (chosen.hold) return w('held', `${chosen.name} is held: ${chosen.hold}`);
   if (chosen.busy) return w('busy', `ready; ${chosen.name} is busy with a running job`);
   return w('not-admitted', `ready; not admitted yet: ${chosen.name} has no planned start this tick (limits, a lease or a free slot may hold it)`);
+}
+
+// Issue #1417: per agent, the allowance hold on this issue's tier (from the cut off the Team computed this tick), or null for an agent that may start it.
+function tierWaitsOf(team, issue) {
+  const tier = readTier(issue).tier;
+  return Object.fromEntries(team.agents().map(([name]) => [name, tierHold(team.modes?.[name]?.tierCutoff, tier, name)]));
+}
+
+// Issue #1417: every agent that could take the issue is holding its tier, so the issue waits for allowance and says which agent holds it.
+function tierWaitOf(i) {
+  const free = i.agents.filter(a => a.canImplement && !a.out);
+  if (!i.tierWaits || !free.length || !free.every(a => i.tierWaits[a.name])) return null;
+  return { kind: 'allowance-tier', text: free.map(a => i.tierWaits[a.name]).join('; '), until: null };
 }
 
 // No agent can take an unlisted issue: say why for each one, or return null so the caller reports the fault.
@@ -137,6 +153,7 @@ export function collectAssignments(team, { cache, plan, states, activeJobs }) {
       prText: pr ? `PR #${pr.number} is open` : null,
       startedEarlier: !!team.s.implemented?.[n],
       tier: readTier(issue),
+      tierWaits: tierWaitsOf(team, issue),
       owner: ownerOf(team, n, unlisted),
       planned: act ? { agent: act.agent, reassignedFrom: act.reassignedFrom || null } : null });
   });
