@@ -32,17 +32,30 @@ export class Travels {
     for (const travel of this.active) {
       const key = targetKey(travel.target, data);
       const node = key === null ? null : root.querySelector(`.board-svg [data-ball="${CSS.escape(key)}"]`);
-      if (node) this.move(node, travel, at - travel.startedAt);
+      if (node) this.move(node, travel, at - travel.startedAt, root);
     }
   }
 
-  move(node, travel, elapsed) {
+  move(node, travel, elapsed, root) {
     const rest = travel.points[travel.points.length - 1];
     const offsets = offsetsOf(travel.points);
     const frames = travel.points.map((point, index) => ({ transform: `translate(${point.x - rest.x}px, ${point.y - rest.y}px)`, offset: offsets[index] }));
     const animation = node.animate(frames, { duration: travel.durationMs, delay: travel.delayMs ?? 0, fill: 'backwards', easing: 'linear' });
     animation.currentTime = elapsed;
     if (travel.laps) this.showLaps(node, travel.laps, animation);
+    this.playEffects(root, travel, offsets, elapsed);
+  }
+
+  // Issue #1318: a style may ask for other parts of its scenery to change while a ball travels (a gate opening). An effect names an element
+  // and the opacity it has when the ball is at a point of the path; it runs on the same clock as the ball.
+  playEffects(root, travel, offsets, elapsed) {
+    for (const effect of travel.effects ?? []) {
+      const target = root.querySelector(effect.selector);
+      if (!target) continue;
+      const frames = effect.frames.map(frame => ({ opacity: frame.opacity, offset: offsets[frame.at] }));
+      const animation = target.animate(frames, { duration: travel.durationMs, delay: travel.delayMs ?? 0, fill: 'backwards', easing: 'linear' });
+      animation.currentTime = elapsed;
+    }
   }
 
   // A returning ball shows the laps it had until it is back in the hopper, then the figure that is one more.

@@ -96,7 +96,8 @@ function landTravel(event, ctx) {
   const x = lane ? lane.x + lane.w / 2 : ctx.gNext.pegs.x + LAYOUT.ballRadius;
   const start = { x, y: event.from === 'lane_top' ? LAYOUT.laneTop + LAYOUT.ballRadius : LAYOUT.laneBottom - LAYOUT.ballRadius };
   const plan = ctx.style.plan({ kind: 'land', jobId: event.job_id, lane, box, from: start, to: end, geometry: ctx.gNext });
-  return { target: { kind: 'landed', id: event.job_id }, kind: 'land', points: plan.points, durationMs: plan.durationMs, touches: plan.touches };
+  return { target: { kind: 'landed', id: event.job_id }, kind: 'land', points: plan.points, durationMs: plan.durationMs,
+    touches: plan.touches, effects: plan.effects };
 }
 
 function returnTravel(event, ctx) {
