@@ -5,13 +5,15 @@ import { MODE_LABEL } from './budget.mjs';
 import { reserveOut } from './capacityteam.mjs';
 import { redact } from './dashdata.mjs';
 import { explanationText } from './dashassign.mjs';
+import { readTier } from './tier.mjs';
 
 // Wait kinds that mean the issue is not stuck: it is running, has its PR, or starts on this tick.
 export const MOVING_KINDS = new Set(['running', 'pr-open', 'next']);
 const RULE_TEXT = {
   listed: (a, r, of) => `listed in agents.${a}.issues (position ${r} of ${of})`,
   queued: (a, r, of) => `queued for ${a} by the unblock list (position ${r} of ${of})`,
-  unlisted: (a, r, of) => `in no agent's issue list: open issues are taken in number order by the agent the job costs least of its plan relative to its spare allowance, among agents with a free slot (position ${r} of ${of})`
+  unlisted: (a, r, of, t) => `in no agent's issue list: open issues are taken in priority tier order (lowest first), then number order, `
+    + `by the agent the job costs least of its plan relative to its spare allowance, among agents with a free slot (tier ${t}, place ${r} of ${of} ready issues)`
 };
 
 const clock = (until, zone) => (Number.isFinite(until)
@@ -29,17 +31,27 @@ export function explainIssue(i) {
   const named = i.owner?.agent ? i.agents.find(a => a.name === i.owner.agent) : null;
   const free = i.agents.filter(a => a.canImplement && !a.out), ready = free.find(a => !a.busy && !a.hold) || free[0];
   const chosen = i.planned ? i.agents.find(a => a.name === i.planned.agent) : named || ready || null;
-  const agent = chosen?.name ?? null, rule = i.owner ? RULE_TEXT[i.owner.rule](i.owner.agent || 'any agent', i.owner.rank, i.owner.of) : 'no rule assigns it';
+  const agent = chosen?.name ?? null;
+  const rule = i.owner ? RULE_TEXT[i.owner.rule](i.owner.agent || 'any agent', i.owner.rank, i.owner.of, i.tier?.tier) : 'no rule assigns it';
   const base = {
     number: i.number,
     agent,
     model: chosen?.model ?? null,
-    rule: i.planned?.reassignedFrom ? `${rule}; reassigned from ${i.planned.reassignedFrom} for allowance` : rule,
+    rule: [i.planned?.reassignedFrom ? `${rule}; reassigned from ${i.planned.reassignedFrom} for allowance` : rule, tierNote(i)].filter(Boolean).join('; '),
+    tier: i.tier?.tier ?? null,
+    tierWarning: i.tier?.warning ?? null,
     rank: i.owner?.rank ?? null,
     of: i.owner?.of ?? null,
   };
   const wait = waitOf(i, chosen);
   return { ...base, wait, fault: !agent && !wait ? 'open issue with no implementer and no stated reason' : null };
+}
+
+// Issue #1415: the tier of an issue in an agent's own list or the unblock queue (the pool rule already names it), and any Tier line warning.
+function tierNote(i) {
+  if (!i.tier) return null;
+  const own = i.owner && i.owner.rule !== 'unlisted' ? `tier ${i.tier.tier}` : null;
+  return [own, i.tier.warning].filter(Boolean).join('; ') || null;
 }
 
 function waitOf(i, chosen) {
@@ -87,7 +99,7 @@ function outOf(team, agent) {
   return l?.out ? { kind: 'allowance', text: `is at its usage limit (${String(l.reason || 'usage limit').slice(0, 160)})`, until: l.until ?? null } : null;
 }
 
-// Where an issue sits in the planner's order: its owner's hand list, the unblock queue, or the unlisted pool in number order.
+// Where an issue sits in the planner's order: its owner's hand list, the unblock queue, or the unlisted pool in tier then number order.
 function ownerOf(team, number, unlisted) {
   for (const [agent, a] of team.agents()) {
     const k = (a.issues || []).indexOf(number);
@@ -124,6 +136,7 @@ export function collectAssignments(team, { cache, plan, states, activeJobs }) {
       running: activeJobs.some(j => ['implement', 'continue'].includes(j.kind) && j.issue === n),
       prText: pr ? `PR #${pr.number} is open` : null,
       startedEarlier: !!team.s.implemented?.[n],
+      tier: readTier(issue),
       owner: ownerOf(team, n, unlisted),
       planned: act ? { agent: act.agent, reassignedFrom: act.reassignedFrom || null } : null });
   });
