@@ -1,7 +1,7 @@
-import { MODE_LABEL } from './budget.mjs';
+import { MODE_LABEL, budgetSettings } from './budget.mjs';
 import { capacityView } from './capacity.mjs';
 import { redact } from './redact.mjs';
-import { tierLineText } from './tierline.mjs';
+import { tierLineSettings, tierLineText } from './tierline.mjs';
 export { usageReading } from './readingfresh.mjs';
 
 // The reason for the mode followed by the capacity figures (used percent, learned capacity, remaining, reserve), unless the reason already carries them.
@@ -46,6 +46,7 @@ export function budgetView(team) {
       jobCost: typical,
       tierCutoff: m.tierCutoff ?? null,
       tierLine: tierLineText(m.tierCutoff),
+      tierLimits: tierLineSettings(budgetSettings(team.c)),   // issue #1417: the thresholds in force, defaults included
       held: Object.fromEntries(Object.entries(team.held?.[name] || {}).map(([k, v]) => [k, redact(v, 300)]))
     };
     out[name].reason = [withCapacity(out[name].reason, capacity), m.tierCutoff?.firstHeld == null ? '' : out[name].tierLine].filter(Boolean).join('; ');

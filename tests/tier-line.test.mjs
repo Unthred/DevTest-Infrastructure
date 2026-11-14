@@ -152,7 +152,7 @@ test('an issue in the holding agent\'s own list goes to another agent with room,
 test('foreman_budget shows the thresholds in force with the defaults when no tier_line is configured, and the cut off per agent', async t => {
   const w = world(t, { issues: [issue(1353, 5)], codexOut: true });
   await w.team.plan();
-  const view = { budget: { claude: { ...w.team.modes.claude, tierLine: budgetView(w.team).claude.tierLine } } };
+  const view = { budget: budgetView(w.team) };
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0, stale: false }) }, readHost: () => ({}),
     getPath: async () => ({ effective: { budget: { enabled: true } } }) });
   const out = JSON.parse((await tools.call('foreman_budget')).text);
