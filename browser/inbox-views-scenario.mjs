@@ -99,6 +99,40 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   check('after a reload the Compact list view is kept', (await visiblePanes()) === 'compact', await visiblePanes());
   check('no sideways page scroll in Compact list after the reload', await noSideways());
+  // Issue #1466: the Running button lists the three running jobs, newest start first, and the line above the buttons counts them.
+  await page.locator('a[data-chip="state:running"]').click();
+  await page.waitForLoadState('networkidle');
+  // The fixture also holds one approved prompt with no job (Splitdecided), which the Running view keeps next to the three jobs.
+  await page.getByRole('button', { name: 'Table', exact: true }).click();
+  const shown = await page.locator('.iv-table tbody tr').count();
+  const chipCount = Number((await page.locator('a[data-chip="state:running"] .qf-n').innerText()).trim());
+  check('the Running button count equals the rows its view shows (three jobs and the approved item)', chipCount === shown && shown === 4, shown);
+  const runningLine = page.locator('.inbox-running-line a');
+  const lineOk = (await runningLine.innerText()) === '3 jobs running now' && (await runningLine.getAttribute('href')) === '/inbox?state=running';
+  check('the line above the buttons reads 3 jobs running now and links to the Running view', lineOk);
+  await page.getByRole('button', { name: 'Table', exact: true }).click();
+  const jobRows = page.locator('.iv-table tbody tr[data-job]');
+  const order = await jobRows.evaluateAll(rs => rs.map(r => r.dataset.job[0]).join(''));
+  check('Running shows one table row per job, newest first (review, implement, fix)', order === 'abc', order);
+  const chipsOk = await jobRows.evaluateAll(rs => rs.every(r => /Job/.test(r.querySelector('td[data-col=kind]').innerText)
+    && /running/.test(r.querySelector('td[data-col=state]').innerText)));
+  check('each job row has the Job kind chip and the running chip', chipsOk);
+  const facts = await jobRows.evaluateAll(rs => rs.map(r => r.querySelector('.iv-jobfacts').innerText));
+  check('the review row reads agent, model, role and job kind', /claude · opus · reviewer · review/.test(facts[0]), facts[0]);
+  check('the implement row carries its Inbox card reference', /C\d+, issue #1449/.test(await jobRows.nth(1).locator('td[data-col=title]').innerText()));
+  check('the fix row reads attempt 1 and over 3 hours elapsed', /attempt 1 · elapsed 3 h/.test(facts[2]), facts[2]);
+  const watch = await jobRows.nth(0).locator('a.iv-watch').getAttribute('href');
+  check('Watch live leads to the job page', watch === `/jobs/${'a'.repeat(32)}`, watch);
+  for (const [label, sel, n] of [['Compact list', '.iv-crow[data-job]', 3], ['Cards', 'li.inbox-job', 3]]) {
+    await page.getByRole('button', { name: label, exact: true }).click();
+    check(`the ${label} view draws the three job rows`, (await page.locator(sel).count()) === n);
+    const factsShown = await page.locator(`${sel} .iv-jobfacts:visible`).count();
+    const watchShown = await page.locator(`${sel} a.iv-watch:visible`).count();
+    check(`the ${label} view shows the facts and Watch live`, factsShown === 3 && watchShown === 3);
+  }
+  await page.goto(`http://127.0.0.1:${port}/inbox?state=done`, { waitUntil: 'networkidle' });
+  check('job rows appear only under Running', (await page.locator('[data-job]').count()) === 0);
+  check('the line is shown whatever filter is on', (await page.locator('.inbox-running-line').innerText()) === '3 jobs running now');
   check('no script errors', errors.length === 0, errors.join('; '));
   await page.screenshot({ path: path.join(out, `${name}.png`) });
   failed = checks.some(c => !c.ok);

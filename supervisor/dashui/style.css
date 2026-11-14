@@ -627,3 +627,7 @@ li[data-reset] details form { display: flex; flex-wrap: wrap; gap: 6px 8px; alig
   .iv-table td[data-col=actions]:empty{display:none}.iv-table td[hidden]{display:none}
   .iv-crow .iv-body{flex:1 1 100%;order:3}.iv-crow .iv-meta{order:4}
 }
+/* Issue #1466: the "jobs running now" line and the job rows of the Inbox Running view. */
+.inbox-running-line{margin:0 0 var(--sp2);font-weight:600}
+.iv-jobfacts{display:block;color:var(--mut);font-size:var(--fs-sm);overflow-wrap:anywhere}.iv-joblink{color:inherit}
+.iv-watch{font-weight:600}
