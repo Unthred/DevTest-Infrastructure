@@ -1,6 +1,7 @@
 // Issue #1312: draws the board as SVG from the geometry of boardlayout.mjs. Elements are built with textContent only, so no text from the
 // model is read as markup. It keeps no state: board.mjs passes the model, the time and what is open.
 import { LAYOUT, boardGeometry, hopperBalls, boxBalls, runningBalls, allowanceView, isOut, jobClass, agentClass, ballName, boxLabel } from './boardlayout.mjs';
+import { PEG } from './boardmotion.mjs';
 import { percent, dateTime, duration } from './format.mjs';
 
 // The SVG namespace is an identifier, not a request; it is joined so the no-external-address check of tests/ui-static.test.mjs stays strict.
@@ -131,9 +132,8 @@ export function drawBoard(data, width, now, view) {
     role: 'group', 'aria-label': 'Live board', preserveAspectRatio: 'xMinYMin meet' });
   const hatch = svg('pattern', { id: 'hatch', width: 6, height: 6,
     patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svg('rect', { width: 3, height: 6, class: 'hatch-bar' }));
-  const peg = svg('pattern', { id: 'peg', width: 28, height: 28, patternUnits: 'userSpaceOnUse' },
-    svg('circle', { cx: 7, cy: 7, r: 2.5, class: 'peg-dot' }),
-    svg('circle', { cx: 21, cy: 21, r: 2.5, class: 'peg-dot' }));
+  const peg = svg('pattern', { id: 'peg', width: PEG.pitch, height: PEG.pitch, patternUnits: 'userSpaceOnUse' },
+    ...PEG.spots.map(([cx, cy]) => svg('circle', { cx, cy, r: PEG.radius, class: 'peg-dot' })));
   root.append(svg('defs', {}, hatch, peg));
   root.append(svg('rect', { class: 'pegs', x: geometry.pegs.x, y: geometry.pegs.y, width: geometry.pegs.w, height: geometry.pegs.h, rx: 8 }));
   drawLanes(root, geometry, data, view);

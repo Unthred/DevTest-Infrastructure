@@ -114,3 +114,10 @@ test('valid: the live check for the board screen finds hopper in the served boar
   assert.equal(res.status, 200);
   assert.ok(res.body.includes('hopper'));
 });
+
+test('valid: the live check for ball travel finds launch in the served boardmotion.mjs (issue #1313)', async t => {
+  const get = await serve(t);
+  const res = await get('/api/v1/ui/boardmotion.mjs');
+  assert.equal(res.status, 200);
+  assert.ok(res.body.includes('launch'));
+});

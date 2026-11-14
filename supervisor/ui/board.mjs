@@ -1,11 +1,14 @@
 // Issue #1312: the live board screen, shown when the page address ends in #/board. It asks for the liveboard model when it opens and
 // again each time the change stream says a model changed (app.mjs calls changed()); it draws the model and holds no rules of its own.
-// Part 1 of 2: a ball simply appears in its new place. No timer fetches data; a resize only redraws what was already received.
+// Part 2 (issue #1313): a change event compares the new model with the one before and the balls travel for the events between them
+// (boardmotion.mjs, boardtravel.mjs). Opening the screen, Retry and a resize move nothing. No timer fetches data or starts travel.
 import { fetchModel } from './client.mjs';
 import { drawBoard } from './boardsvg.mjs';
 import { renderLists, boxSection, errorLine, detailPanel, el } from './boardlists.mjs';
 import { ballDetail, BOXES } from './boardlayout.mjs';
 import { dateTime } from './format.mjs';
+import { planChange, carryLaps, withLaps } from './boardmotion.mjs';
+import { Travels, prefersReducedMotion } from './boardtravel.mjs';
 
 // The ball a key such as running:<job id>, waiting:<place> or landed:<job id> stands for.
 export function findBall(data, key) {
@@ -38,6 +41,11 @@ export class BoardScreen {
     this.root = null;
     this.running = false;
     this.again = false;
+    this.fromChange = false;
+    this.travels = deps.travels ?? new Travels();
+    this.reduced = deps.reducedMotion ?? prefersReducedMotion;
+    this.carry = new Map();
+    this.changedCount = 0;
     this.onClick = event => this.activate(event.target);
     this.onKey = event => this.key(event);
     this.onResize = () => this.draw();
@@ -62,23 +70,31 @@ export class BoardScreen {
     this.root = null;
     this.ball = null;
     this.box = null;
+    this.travels.stop();
   }
 
+  // The one place a travel can start: the change stream said a model changed.
   changed() {
-    return this.root ? this.refresh() : undefined;
+    if (!this.root) return undefined;
+    return this.refresh(true);
   }
 
   // One request at a time; a change that arrives while one runs is run once more after it, so the newest change is never lost.
-  async refresh() {
+  async refresh(fromChange = false) {
+    this.fromChange ||= fromChange;
     if (this.running) {
       this.again = true;
       return;
     }
     this.running = true;
+    const compare = this.fromChange;
+    this.fromChange = false;
     try {
+      const before = this.model?.data;
       this.model = await this.load('liveboard');
       this.receivedAt = Date.now();
       this.error = null;
+      if (compare && before) this.travelFrom(before, this.model.data);
     } catch (error) {
       this.error = String(error.message ?? error);
     }
@@ -90,13 +106,23 @@ export class BoardScreen {
     }
   }
 
+  // Plans the travels of one change. Nothing travels under reduced motion or below the board width; too many events are shown at once.
+  travelFrom(before, after) {
+    this.changedCount = 0;
+    const plan = planChange(before, after, { width: this.width(), now: Date.now() });
+    this.carry = carryLaps(this.carry, plan.events, after);
+    this.changedCount = plan.changed;
+    if (this.reduced()) return;
+    this.travels.begin(plan.travels, after);
+  }
+
   view() {
     return { receivedAt: this.receivedAt, now: Date.now() };
   }
 
   body() {
     if (!this.model) return this.error ? [] : [el('p', {}, 'Loading the board…')];
-    const { data } = this.model;
+    const data = withLaps(this.model.data, this.carry);
     const holder = el('div', { class: 'board-holder', role: 'group', 'aria-label': BOARD_LABEL });
     const svg = drawBoard(data, this.width(), Date.now(), this.view());
     if (svg) holder.append(svg);
@@ -115,7 +141,9 @@ export class BoardScreen {
     const focused = focusTarget();
     const error = this.error ? errorLine(this.error, this.receivedAt, Boolean(this.model)) : null;
     this.root.className = `board-screen${this.model && this.error ? ' stale' : ''}`;
-    this.root.replaceChildren(...[el('h1', {}, 'Live board'), error, ...this.body()].filter(Boolean));
+    const notice = this.changedCount > 0 ? el('p', { class: 'board-changed', role: 'status' }, `${this.changedCount} things changed`) : null;
+    this.root.replaceChildren(...[el('h1', {}, 'Live board'), error, notice, ...this.body()].filter(Boolean));
+    if (this.model) this.travels.apply(this.root, this.model.data);
     if (!focused) return;
     const [kind, id, inLists] = focused;
     this.root.querySelector(`${inLists ? '.board-lists ' : '.board-svg '}[data-${kind}="${CSS.escape(id)}"]`)?.focus();
