@@ -211,7 +211,8 @@ const NOW_1376 = Date.parse('2026-11-13T08:00:00Z');
 const pr1200 = { number: 1200, title: 'pr 1200', status: 'merged', mergedAt: Date.parse('2026-11-13T02:00:00Z'), fixRounds: 0, rebaseRounds: 0,
   verdicts: [{ verdict: 'PASS', at: Date.parse('2026-11-13T01:20:00Z'), reviewer: 'codex', head: 'abc1234' }] };
 const archive1200 = [T('2026-11-12T22:59:00Z', 1200, 'CHANGES'), T('2026-11-13T00:46:00Z', 1200, 'CHANGES')];
-const stats1376 = (prs, timeline) => headlineStats({ prs, timeline, now: NOW_1376 }).windows['24h'].cards;
+const round1200 = { id: 'd'.repeat(32), status: 'completed', kind: 'review', postcondition: { kind: 'description_edited', pr: 1200, baseHead: 'abc1234def5678' } };
+const stats1376 = (prs, timeline, jobs = [round1200]) => headlineStats({ prs, timeline, jobs, now: NOW_1376 }).windows['24h'].cards;
 
 test('first review: pull request 1200 (two archived CHANGES, then a live PASS on one head) is not approved first time and is a description only rejection', () => {
   const c = stats1376([pr1200], archive1200)['first-pass'];
@@ -222,6 +223,47 @@ test('first review: pull request 1200 (two archived CHANGES, then a live PASS on
 test('without the archived timeline the same pull request reads as approved first time (the old figure)', () => {
   const c = stats1376([pr1200], [])['first-pass'];
   assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [1, 1, 0]);
+});
+
+test('a CHANGES archived for a requirements change or a requested second review (no description round job) is not a description only rejection', () => {
+  const c = stats1376([pr1200], archive1200, [])['first-pass'];
+  assert.deepEqual([c.approved, c.reviewed, c.descriptionOnlyRejected], [0, 1, 0]);
+  assert.equal(c.items[0].detail, 'first review: CHANGES');
+  const unfinished = { ...round1200, status: 'running' };
+  assert.equal(stats1376([pr1200], archive1200, [unfinished])['first-pass'].descriptionOnlyRejected, 0);
+});
+
+test('real path: two CHANGES on one head archived by the supervisor both stay in the timeline and count as rounds', async () => {
+  const { archiveVerdict, recordTimeline, readTimeline } = await import('../supervisor/history.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376r-`);
+  const key = '1200:abc1234def5678';
+  const v = (iso, verdict) => ({ verdict, at: Date.parse(iso), reviewer: 'codex' });
+  const first = v('2026-11-12T22:59:00Z', 'CHANGES'), second = v('2026-11-13T00:46:00Z', 'CHANGES'), last = v('2026-11-13T01:20:00Z', 'PASS');
+  recordTimeline(root, { state: { verdicts: { [key]: first } } });
+  archiveVerdict(root, key, first);
+  recordTimeline(root, { state: { verdicts: { [key]: second } } });
+  archiveVerdict(root, key, second);
+  recordTimeline(root, { state: { verdicts: { [key]: last } } });
+  const timeline = readTimeline(root);
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(timeline.filter(e => e.kind === 'verdict').length, 3);
+  const live = { ...pr1200, verdicts: [{ ...last, head: 'abc1234' }] };
+  const c = stats1376([live], timeline);
+  assert.equal(c.rounds.rounds, 3);
+  assert.deepEqual([c['first-pass'].approved, c['first-pass'].descriptionOnlyRejected], [0, 1]);
+});
+
+test('an older timeline entry (id without a time) is not written a second time beside the new id', async () => {
+  const { appendTimeline, archiveVerdict, readTimeline } = await import('../supervisor/history.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376o-`);
+  const at = Date.parse('2026-11-12T22:59:00Z');
+  appendTimeline(root, [{ id: 'verdict:1200:abc1234', at, kind: 'verdict', pr: 1200, head: 'abc1234', verdict: 'CHANGES' }]);
+  archiveVerdict(root, '1200:abc1234', { verdict: 'CHANGES', at });
+  const n = readTimeline(root).length;
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(n, 1);
 });
 
 test('rounds per merged pull request count archived verdicts as review rounds', () => {
@@ -272,7 +314,7 @@ test('the first review card shows the description only rejections beside the fig
   const root = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/hl1376-`);
   appendTimeline(root, archive1200);
   addMalformedLine(root);
-  const c = headlineStats({ prs: [pr1200], timeline: readTimeline(root), now: NOW_1376 }).windows['24h'].cards['first-pass'];
+  const c = headlineStats({ prs: [pr1200], jobs: [round1200], timeline: readTimeline(root), now: NOW_1376 }).windows['24h'].cards['first-pass'];
   assert.equal(c.descriptionOnlyRejected, 1);
   const view = await overviewView();
   view.headline = headlineStats({ prs: [pr1200], timeline: readTimeline(root), now: NOW_1376 });

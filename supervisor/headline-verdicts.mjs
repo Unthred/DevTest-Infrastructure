@@ -36,5 +36,16 @@ export function withArchivedVerdicts(prs, timeline) {
   });
 }
 
-// True when the first verdict was an archived CHANGES and the next review was of the same head: the description only kind of rejection.
-export const descriptionOnlyFirst = (first, next) => first?.archived === true && first.verdict === 'CHANGES' && !!headOf(first) && headOf(first) === headOf(next);
+// The pull request and head (7 characters) of every finished description round: the postcondition of its job names both.
+export function descriptionRoundHeads(jobs) {
+  const out = new Set();
+  for (const j of Array.isArray(jobs) ? jobs : []) {
+    const c = j?.postcondition;
+    if (j?.status === 'completed' && c?.kind === 'description_edited' && Number.isSafeInteger(c.pr) && typeof c.baseHead === 'string' && c.baseHead) out.add(`${c.pr}:${c.baseHead.slice(0, 7)}`);
+  }
+  return out;
+}
+
+// True when the first verdict was an archived CHANGES whose head then had a description round. A requirements change or a requested second
+// review archives a CHANGES the same way and re-reviews the same head, but has no description round job, so it is not counted here.
+export const descriptionOnlyFirst = (first, pr, roundHeads) => first?.archived === true && first.verdict === 'CHANGES' && !!headOf(first) && roundHeads.has(`${pr}:${headOf(first)}`);

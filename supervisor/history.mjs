@@ -88,7 +88,9 @@ export function appendTimeline(root, entries) {
   const clean = []; const seen = new Set();
   for (const e of entries) { const s = sanitizeEntry(e); if (s && !seen.has(s.id)) { seen.add(s.id); clean.push(s); } }
   if (!clean.length) return 0;
-  const known = new Set(readTimeline(root).map(e => e.id));
+  // A verdict id carries its time, so a second verdict on one head is kept. Older entries lack it: match them by pr, head and time too.
+  const known = new Set();
+  for (const e of readTimeline(root)) { known.add(e.id); if (e.kind === 'verdict' && !e.detail) known.add(`verdict:${e.pr}:${e.head}:${e.at}`); }
   const fresh = clean.filter(e => !known.has(e.id));
   if (!fresh.length) return 0;
   fs.mkdirSync(archiveDir(root), { recursive: true, mode: 0o700 });
@@ -124,9 +126,11 @@ export function collectEntries({ config, root, jobs, events, state, incidents = 
   return out;
 }
 export const VERDICT_STAGES = { secondOpinion: 'second opinion', exception: 'review exception' };
+// A main verdict's id carries its time: the same head can be reviewed again (a description round) and each verdict is kept.
+const verdictId = (key, v, stage) => (stage ? `verdict:${stage}:${key}` : `verdict:${key}:${Math.floor(v.at)}`);
 export function verdictEntry(key, v, stage) {
   const [pr, head] = String(key).split(':');
-  return v && Number.isFinite(v.at) ? { id: stage ? `verdict:${stage}:${key}` : `verdict:${key}`, ...(stage ? { detail: VERDICT_STAGES[stage] } : {}), at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
+  return v && Number.isFinite(v.at) ? { id: verdictId(key, v, stage), ...(stage ? { detail: VERDICT_STAGES[stage] } : {}), at: v.at, kind: 'verdict', pr: Number(pr), head, verdict: v.verdict, reviewer: v.reviewer, job: v.job } : null;
 }
 export const mergeEntry = m => ({ id: `merge:${m.pr}`, at: m.mergedAt, kind: 'merge', pr: m.pr, issue: m.issue ?? undefined, agent: m.agent ?? undefined, reviewer: m.reviewer ?? undefined });
 
