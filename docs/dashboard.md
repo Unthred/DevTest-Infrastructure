@@ -7,6 +7,8 @@ One read-only page that shows what the agents are doing, so the homeowner need n
 ## What it shows
 Needs attention (pinned, red) · Agents now · Queue per agent (the dispatcher's own `Team.plan()` run over cached data, plus a reason for every issue and PR) · Usage · Graphs · the last 50 events. All values come from the supervisor's job records, the team state, and the cache and history that the tick writes.
 
+The Overview's **Next** card shows the planner's agent-choice reason on each planned implement or repair, as well as reviews: the deciding rule and every candidate's spare allowance, expected share, recent rate, short-window room and slot. A configured default share keeps its history note in that line.
+
 Attention rules: `needs-homeowner` issues; blocked or failed jobs (last 48 h, unless superseded by a newer job on the same issue); failed tick with time and redacted error; no tick for more than 10 minutes (or none ever); red CI on a non-draft open PR; an agent idle while the plan has work for it (same plan seen idle in snapshots spanning 9+ minutes, or the loop disabled); and **a `paused_limit` job on a `usage_limit` event while the provider's own newest allowance record shows no exhausted window** (the 13:15 case: 34% session, 18% week). With no allowance data the pause is flagged as unverifiable, not as wrong.
 
 ## Constraints and how they are met
