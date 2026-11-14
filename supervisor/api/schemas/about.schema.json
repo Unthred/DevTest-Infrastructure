@@ -1,0 +1,75 @@
+{
+  "$id": "about.schema.json",
+  "title": "The about model: reply of GET /api/v1/about (issue #1451)",
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "short": { "type": "string", "pattern": "^[0-9a-f]{7}$" },
+    "when": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+    "issue": {
+      "type": "object",
+      "required": ["number", "title"],
+      "additionalProperties": false,
+      "properties": { "number": { "type": "integer", "minimum": 1 }, "title": { "type": ["string", "null"] } }
+    },
+    "pull_request": {
+      "type": "object",
+      "required": ["number", "title", "issue"],
+      "additionalProperties": false,
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "title": { "type": ["string", "null"] },
+        "issue": { "anyOf": [{ "$ref": "#/$defs/issue" }, { "type": "null" }] }
+      }
+    },
+    "install": {
+      "type": "object",
+      "required": ["at", "commit", "result", "current", "pull_requests"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "commit": { "$ref": "#/$defs/short" },
+        "result": { "enum": ["upgraded", "verified"] },
+        "current": { "type": "boolean" },
+        "pull_requests": { "type": "array", "items": { "$ref": "#/$defs/pull_request" } }
+      }
+    },
+    "hold": {
+      "type": "object",
+      "required": ["kind", "reason", "at"],
+      "additionalProperties": false,
+      "properties": { "kind": { "enum": ["latch", "refusal"] }, "reason": { "type": "string" }, "at": { "$ref": "#/$defs/when" } }
+    },
+    "process": {
+      "type": "object",
+      "required": ["role", "version", "runs_installed"],
+      "additionalProperties": false,
+      "properties": { "role": { "type": "string" }, "version": { "$ref": "#/$defs/sha" }, "runs_installed": { "type": ["boolean", "null"] } }
+    }
+  },
+  "allOf": [
+    { "$ref": "common.schema.json#/$defs/envelope" },
+    {
+      "type": "object",
+      "properties": {
+        "model": { "const": "about" },
+        "data": {
+          "type": "object",
+          "required": ["installed", "installed_short", "installed_at", "verified_at", "main", "commits_behind", "hold", "mcp_version", "processes", "installs"],
+          "additionalProperties": false,
+          "properties": {
+            "installed": { "anyOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+            "installed_short": { "anyOf": [{ "$ref": "#/$defs/short" }, { "type": "null" }] },
+            "installed_at": { "$ref": "#/$defs/when" },
+            "verified_at": { "$ref": "#/$defs/when" },
+            "main": { "anyOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+            "commits_behind": { "type": ["integer", "null"], "minimum": 0 },
+            "hold": { "anyOf": [{ "$ref": "#/$defs/hold" }, { "type": "null" }] },
+            "mcp_version": { "anyOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+            "processes": { "type": "array", "items": { "$ref": "#/$defs/process" } },
+            "installs": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/install" } }
+          }
+        }
+      }
+    }
+  ]
+}
