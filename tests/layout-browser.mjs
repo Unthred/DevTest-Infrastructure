@@ -15,7 +15,13 @@ const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), o
 if (!process.argv[2]) { console.error('usage: node tests/layout-browser.mjs <output-dir>'); process.exit(2); }
 const { overviewView } = await import(pathToFileURL(path.join(here, 'tests/helpers/lists-fixture.mjs')).href);
 const { renderRoute } = await import(pathToFileURL(path.join(here, 'supervisor/dashrender.mjs')).href);
-const view = await overviewView({ needs: 6, warnings: 4, later: 3, next: 3, watching: 2, since: 4 });
+let view = await overviewView({ needs: 6, warnings: 4, later: 3, next: 3, watching: 2, since: 4 });
+// Issue #1454: the Overview of 14 Nov 2026 (Needs you holds 28 items; the breaker card shows no halt), and the same with a halt.
+const breaker = halt => ({ halt, byCause: [{ cause: 'review', jobs: 2, tokens: 1200, cost: 0.5, prs: [1450], halted: Boolean(halt) }], costLabel: 'a usage-equivalent estimate', failCauses: { day: [], week: [] }, error: null });
+const needsView = await overviewView({ needs: 28, warnings: 2, later: 2, next: 2 });
+needsView.breaker = breaker(null);
+const haltView = await overviewView({ needs: 28, warnings: 2, later: 2, next: 2 });
+haltView.breaker = breaker({ text: 'The circuit breaker halted new jobs.', running_text: 'Running jobs finish.', action: 'Resume it from the dashboard.', entries: [{ cause: '@global' }] });
 const lock = JSON.parse(fs.readFileSync(path.join(here, 'docker/images.lock.json'), 'utf8'));
 const storageRoot = path.join('/mnt/cache/appdata/devtest-infrastructure/layout', crypto.randomBytes(6).toString('hex'));
 const uid = process.getuid() === 0 ? 99 : process.getuid(), gid = process.getgid() === 0 ? 100 : process.getgid();
@@ -27,6 +33,8 @@ for (const f of fs.readdirSync(path.join(here, 'supervisor/dashui'))) if (/\.(m?
 const page = (route, pathname, secs) => renderRoute(view, route, { query: new URLSearchParams(), pathname }).html.replace(/<noscript><meta http-equiv="refresh"[^>]*><\/noscript>/, '').replace(/(<meta name="refresh-seconds" content=")\d+/, `$1${secs}`);
 for (const p of ['overview', 'usage', 'reviews', 'agents']) fs.writeFileSync(path.join(site, `${p}.html`), page({ page: p }, p === 'overview' ? '/' : `/${p}`, 3600));
 fs.writeFileSync(path.join(site, 'overview-fast.html'), page({ page: 'overview' }, '/', 2));
+view = needsView; fs.writeFileSync(path.join(site, 'overview-needs.html'), page({ page: 'overview' }, '/', 3600));
+view = haltView; fs.writeFileSync(path.join(site, 'overview-halt.html'), page({ page: 'overview' }, '/', 3600));
 fs.chmodSync(site, 0o755); fs.chmodSync(path.join(site, 'static'), 0o755); for (const f of fs.readdirSync(site, { recursive: true })) { const p = path.join(site, f); fs.chmodSync(p, fs.statSync(p).isDirectory() ? 0o755 : 0o644); }
 const failures = [];
 const run = async (name, spec, dir) => {
@@ -45,6 +53,9 @@ try {
   await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] });
   for (const profile of ['desktop-1280', 'tablet-768'])
     await run(profile, { phase: 'test', command: ['node', '/src/browser/layout-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `layout-${profile}`] }, site);
+  // Remove on the fixed cards (issue #1454): wide enough for the editor, at the desktop and tablet widths
+  for (const profile of ['desktop-1280', 'tablet-768'])
+    await run(`remove-${profile}`, { phase: 'test', command: ['node', '/src/browser/layout-remove-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `layout-remove-${profile}`] }, site);
 } finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(site, { recursive: true, force: true }); stage.cleanup(); }
 for (const f of fs.readdirSync(outDir).filter(f => /^layout-.*\.json$/.test(f))) { const r = JSON.parse(fs.readFileSync(path.join(outDir, f), 'utf8')); console.log(`${f}: ${r.checks.filter(c => c.ok).length}/${r.checks.length} checks passed`); for (const c of r.failed) { failures.push(`${f}: ${c.name} (${c.detail})`); } }
 if (failures.length) { console.error(`LAYOUT BROWSER CHECK FAILED (${failures.length}):\n${failures.join('\n')}`); process.exit(1); }

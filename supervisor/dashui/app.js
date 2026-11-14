@@ -5,8 +5,9 @@ import { COPY_FEEDBACK_MS, chooseRange, FILTER_DEBOUNCE_MS, formatLocal, timeOnl
 import { initLegends } from './legend.mjs';
 import { initChartOptions } from './chartopts.mjs';
 import { BAR_KEY, FIXED, addBarItem, barToSaved, moveBarItem, removeBarItem, sanitizeBar } from './appbar.mjs';
-import { COLS, MIN_W, ROW_PITCH, addGroup, canHide, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
+import { COLS, MIN_W, ROW_PITCH, addGroup, compactGroups, dragRect, groupOf, placeGroup, removeGroups, withoutCard, edgeAt, firstFit, fromBoxes, history as layoutHistory, placeCard, resizeRect, rowsFor, sanitizeLayout, toSaved, withoutPinned } from './grid.mjs';
 import { saveLists, watchLists } from './lists-ui.mjs';
+import { barShown, cardVerdict, createBarGuard, createRefusals, span } from './remove-guard.mjs';
 import { postDecision, runDecision, lowerCount, showOutcomeInViews, lowerWaitingChip } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
 
@@ -433,7 +434,7 @@ if (grid) {
   }
   function apply() {
     const pinnedIds = pinnedNow();
-    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), pinnedIds);
+    if (!editing) st = bpNow() === 'phone' ? null : sanitizeLayout(store.get(key()), ids(), colsNow(), pinnedIds, barShown(store));
     else st = withoutPinned(st, pinnedIds);
     if (st) paintFree(); else paintFlow();
     renderBar();
@@ -462,7 +463,7 @@ if (grid) {
   if (cards().length) grid.before(bar);   // every grid with cards gets the editor (issue #929), whether or not the card has phone move buttons
   const live = $('.lay-live', bar);
   const say = t => { live.textContent = ''; setTimeout(() => { live.textContent = t; }, 30); };
-  const btn = n => $(`[data-lay=${n}]`, bar);
+  const btn = n => $(`[data-lay=${n}]`, bar); const refusals = createRefusals(grid, say, () => renderBar());
   function renderBar() {
     if (!bar.isConnected) return;
     const hidden = st ? st.hidden : [];
@@ -475,19 +476,19 @@ if (grid) {
     $('[data-n]', det).textContent = cards().length - hidden.length; $('[data-total]', det).textContent = cards().length;
     const ul = $('ul', det); ul.textContent = '';
     for (const c of cards()) {
-      const id = c.dataset.card, on = !hidden.includes(id), pinned = !canHide(id, c.hasAttribute('data-pin'));
+      const id = c.dataset.card, on = !hidden.includes(id);
       const li = document.createElement('li'), b = document.createElement('button');
-      b.type = 'button'; b.className = 'btn'; b.textContent = on ? 'Remove' : 'Add'; b.disabled = on && (pinned || !editing);
-      b.setAttribute('aria-label', `${on ? 'Remove' : 'Add'} ${titleOf(c)}${pinned ? ' (always shown)' : ''}`);
+      b.type = 'button'; b.className = 'btn'; b.textContent = on ? 'Remove' : 'Add'; b.disabled = on && !editing;
+      b.setAttribute('aria-label', `${on ? 'Remove' : 'Add'} ${titleOf(c)}`);
       b.addEventListener('click', () => (on ? hideCard(id) : showCard(id)));
-      li.append(Object.assign(document.createElement('span'), { textContent: titleOf(c) + (on ? '' : ' (not on page)') }), b); ul.append(li);
+      li.append(span(titleOf(c) + (on ? '' : ' (not on page)')), b); refusals.mark(li, id); ul.append(li);
     }
     if (!editing && !hidden.length) det.open = false;
     for (const c of cards()) { c.classList.toggle('lay-selected', sel.has(c.dataset.card)); c.classList.toggle('lay-grouped', !!(st && groupOf(st.groups, c.dataset.card))); }
   }
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   function change(next, note) {
-    hist.push(st); st = next; persist(); paintFree(); renderBar(); if (note) say(note);
+    refusals.clear(); hist.push(st); st = next; persist(); paintFree(); renderBar(); if (note) say(note);
   }
   // The cards as drawn right now (flow, with any old saved layout), in cells. Collapsed cards count at their full size.
   function convertFlow() {
@@ -504,9 +505,7 @@ if (grid) {
       if (on) {
         c.tabIndex = 0; c.setAttribute('aria-roledescription', 'movable card'); c.setAttribute('aria-describedby', 'lay-help');
         for (const f of $$('a,button,input,select,textarea,summary,[tabindex]', c)) if (f !== c) { f.dataset.layTi = f.getAttribute('tabindex') ?? ''; f.tabIndex = -1; }
-        if (canHide(c.dataset.card, c.hasAttribute('data-pin'))) {
-          const h = document.createElement('button'); h.type = 'button'; h.className = 'lay-hide'; h.textContent = 'Hide'; h.setAttribute('aria-label', `Hide ${titleOf(c)}`); h.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); hideCard(c.dataset.card); }); c.append(h);   // a card that is itself a link (a KPI) must not follow it
-        }
+        const h = document.createElement('button'); h.type = 'button'; h.className = 'lay-hide'; h.textContent = 'Hide'; h.setAttribute('aria-label', `Hide ${titleOf(c)}`); h.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); hideCard(c.dataset.card); }); c.append(h);   // a card that is itself a link (a KPI) must not follow it
       } else {
         $('.lay-hide', c)?.remove(); c.style.cursor = '';
         c.removeAttribute('aria-roledescription'); c.removeAttribute('aria-describedby');
@@ -525,12 +524,13 @@ if (grid) {
   }
   function stopEditing() {
     if (!editing) return;
-    finishAct(false); editing = false; sel.clear(); decorate(false);
+    finishAct(false); editing = false; sel.clear(); refusals.clear(); decorate(false);
     document.body.classList.remove('layout-editing'); grid.classList.remove('editing');
     apply(); say('Layout mode off.'); $('[data-lay=edit]', bar).focus({ preventScroll: true });
   }
   function hideCard(id) {
-    const c = cardById(id); if (!st || !c || !canHide(id, c.hasAttribute('data-pin')) || st.hidden.includes(id)) return;
+    const c = cardById(id); if (!st || !c || st.hidden.includes(id)) return;
+    const v = cardVerdict(store, c); if (!v.ok) return refusals.show(c, v.reason);   // a refusal says why in one line (issue #1454)
     const pos = { ...st.pos }; delete pos[id];
     sel.delete(id);
     change({ pos, hidden: [...st.hidden, id], groups: withoutCard(st.groups, id) }, `${titleOf(c)} removed from the page. Use Cards to add it back.`);
@@ -790,7 +790,7 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
     const items = () => $$(':scope > [data-bar]', bar).filter(el => !FIXED.includes(el.dataset.bar));
     const itemIds = () => items().map(el => el.dataset.bar);
     const itemById = id => items().find(el => el.dataset.bar === id);
-    const nameOf = el => el.dataset.barName || el.dataset.bar;
+    const nameOf = el => el.dataset.barName || el.dataset.bar; const bg = createBarGuard(store, bar, bpNow);
     let state = sanitizeBar(store.get(BAR_KEY), itemIds()), editing = false;
     const picker = document.createElement('details'); picker.className = 'bar-picker'; picker.hidden = true;
     picker.append(Object.assign(document.createElement('summary'), { textContent: 'Add item' }), document.createElement('ul'));
@@ -807,8 +807,8 @@ document.documentElement.classList.remove('tzp');   // normally already removed 
         if (el.classList.contains('bar-removed')) continue;
         const id = el.dataset.bar, i = state.order.indexOf(id), ctl = document.createElement('span'); ctl.className = 'bar-ctl';
         const b = (t, label, fn, off) => { const x = document.createElement('button'); x.type = 'button'; x.textContent = t; x.setAttribute('aria-label', label + ' ' + nameOf(el)); x.disabled = !!off; x.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); fn(); }); return x; };
-        ctl.append(b('◀', 'Move earlier:', () => act(moveBarItem(state, id, -1), id), i <= 0), b('▶', 'Move later:', () => act(moveBarItem(state, id, 1), id), i >= state.order.length - 1), b('✕', 'Remove', () => act(removeBarItem(state, id))));
-        el.append(ctl);
+        ctl.append(b('◀', 'Move earlier:', () => act(moveBarItem(state, id, -1), id), i <= 0), b('▶', 'Move later:', () => act(moveBarItem(state, id, 1), id), i >= state.order.length - 1), b('✕', 'Remove', () => act(bg.remove(state, id), id)));
+        bg.note(id, ctl); el.append(ctl);
       }
       const ul = $('ul', picker); ul.textContent = '';
       for (const id of state.removed) {

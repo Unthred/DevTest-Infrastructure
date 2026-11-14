@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { barRemoveVerdict, removeVerdict } from '../supervisor/dashui/grid.mjs';
 import { COLS, MAX_H, MIN_H, MIN_W, PINNED, ROW_GAP, ROW_PITCH, ROW_PX, UNDO_LIMIT, bottom, canHide, cleanRect, compact, dragRect, edgeAt, firstFit, fromBoxes, history, isOldLayout, overlaps, placeCard, resizeRect, rowsFor, sanitizeLayout, settleAll, toSaved, withoutPinned } from '../supervisor/dashui/grid.mjs';
 
 const css = fs.readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
@@ -260,4 +261,58 @@ test('everything saved stays in the browser: the editor adds no request and no s
   assert.doesNotMatch(grid, /fetch|XMLHttpRequest|sendBeacon|localStorage|document|window/);
   const editor = appJs.slice(appJs.indexOf('if (grid) {'), appJs.indexOf('// dockable navigation'));
   assert.doesNotMatch(editor, /fetch\(|XMLHttpRequest|sendBeacon|innerHTML|\.submit\(/);
+});
+
+// ---- issue #1454: Remove on a fixed card works while the app bar shows what it guards, and otherwise says why
+test('removeVerdict: a fixed card is removable while the app bar item that guards it shows', () => {
+  assert.deepEqual(removeVerdict('needs', false, ['needs-you']), { ok: true });
+  assert.deepEqual(removeVerdict('approvals', false, ['needs-you']), { ok: true });
+  assert.deepEqual(removeVerdict('breaker', false, ['breaker']), { ok: true });
+  assert.deepEqual(removeVerdict('later', false, []), { ok: true }, 'an ordinary card never needed the bar');
+});
+test('removeVerdict: without the bar item the card stays and the line says what to do', () => {
+  assert.deepEqual(removeVerdict('needs', false, []), { ok: false, reason: 'Add Needs you to the top bar first.' });
+  assert.deepEqual(removeVerdict('approvals', false, ['breaker']), { ok: false, reason: 'Add Needs you to the top bar first.' });
+  assert.deepEqual(removeVerdict('breaker', false, ['needs-you']), { ok: false, reason: 'Add Breaker to the top bar first.' });
+});
+test('removeVerdict: a live pin mark wins over the bar and gives its reason', () => {
+  assert.deepEqual(removeVerdict('breaker', true, ['breaker'], 'Work is halted.'), { ok: false, reason: 'Work is halted.' });
+  assert.match(removeVerdict('x', true, []).reason, /needs you now/, 'a pin without words still has a line');
+  assert.equal(canHide('needs', false, ['needs-you']), true);
+  assert.equal(canHide('needs'), false);
+});
+test('barRemoveVerdict: the bar item stays while a card it guards is removed', () => {
+  assert.deepEqual(barRemoveVerdict('needs-you', ['needs']), { ok: false, reason: 'Add the Needs you card back first.' });
+  assert.deepEqual(barRemoveVerdict('needs-you', ['approvals']), { ok: false, reason: 'Add the Approvals card back first.' });
+  assert.deepEqual(barRemoveVerdict('breaker', ['breaker']), { ok: false, reason: 'Add the Breaker card back first.' });
+  assert.deepEqual(barRemoveVerdict('breaker', ['needs', 'later']), { ok: true });
+  assert.deepEqual(barRemoveVerdict('needs-you', []), { ok: true });
+  assert.deepEqual(barRemoveVerdict('health', ['needs']), { ok: true });
+});
+test('sanitizeLayout keeps a removed fixed card removed while its bar item shows, and brings it back when the item is gone', () => {
+  const saved = { v: 2, pos: {}, hidden: ['needs', 'breaker', 'a'] }, ids = ['needs', 'breaker', 'a'];
+  assert.deepEqual(sanitizeLayout(saved, ids, 24, [], ['needs-you', 'breaker']).hidden, ['needs', 'breaker', 'a']);
+  assert.deepEqual(sanitizeLayout(saved, ids, 24, [], ['needs-you']).hidden, ['needs', 'a'], 'the breaker item is gone: the card returns');
+  assert.deepEqual(sanitizeLayout(saved, ids, 24, ['needs'], ['needs-you']).hidden, ['a'], 'needs: live pin; breaker: bar item missing');
+});
+test('the app bar carries the Needs you count and the breaker state, and a fixed card has data-pin only for a live reason', async () => {
+  const { renderRoute } = await import('../supervisor/dashrender.mjs');
+  const { overviewView } = await import('./helpers/lists-fixture.mjs');
+  const view = await overviewView({ needs: 28 });
+  view.breaker = { halt: null, byCause: [{ cause: 'review', jobs: 1, tokens: 1, cost: 0, prs: [], halted: false }], costLabel: 'estimate', failCauses: { day: [], week: [] } };
+  const html = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  assert.match(html, /data-bar="needs-you"[^>]*data-count="28"/);
+  assert.match(html, /data-bar="breaker"[^>]*data-halted="false"/);
+  assert.doesNotMatch(html.match(/<section class="card[^"]*" data-card="needs"[^>]*>/)[0], /data-pin/);
+  assert.doesNotMatch(html.match(/<section class="card[^"]*" data-card="breaker"[^>]*>/)[0], /data-pin/);
+  view.breaker.halt = { text: 'Halted.', running_text: '', action: 'Resume.', entries: [{ cause: '@global' }] };
+  const halted = renderRoute(view, { page: 'overview' }, { query: new URLSearchParams(), pathname: '/' }).html;
+  assert.match(halted.match(/<section class="card[^"]*" data-card="breaker"[^>]*>/)[0], /data-pin="1" data-pin-why="Work is halted/);
+  assert.match(halted, /data-bar="breaker"[^>]*data-halted="true"/);
+});
+test('app.js refuses in words: no disabled or silent Remove, and both editors use the guard module', () => {
+  assert.match(appJs, /const v = cardVerdict\(store, c\); if \(!v\.ok\) return refusals\.show\(c, v\.reason\)/);
+  assert.match(appJs, /act\(bg\.remove\(state, id\), id\)/);
+  assert.doesNotMatch(appJs, /always shown/);
+  assert.match(appJs, /sanitizeLayout\(store\.get\(key\(\)\), ids\(\), colsNow\(\), pinnedIds, barShown\(store\)\)/);
 });

@@ -15,9 +15,27 @@ export const MIN_W = 3;
 export const MIN_H = 4;
 export const MAX_H = 400;
 export const UNDO_LIMIT = 50;
-// Cards that need an action can never be hidden (also any card the server marks data-pin, such as a health card in the Action state).
+// The fixed cards: each shows something the homeowner must not miss, so a card on this list can be removed only while the app bar
+// still shows the same thing (issue #1454): the Needs you count for Needs you and Approvals, the breaker state for Breaker.
 export const PINNED = ['approvals', 'needs', 'breaker'];
-export const canHide = (id, pinAttr = false) => !pinAttr && !PINNED.includes(id);
+export const BAR_GUARD = { approvals: 'needs-you', needs: 'needs-you', breaker: 'breaker' };
+const BAR_NAME = { 'needs-you': 'Needs you', breaker: 'Breaker' };
+const CARD_NAME = { approvals: 'Approvals', needs: 'Needs you', breaker: 'Breaker' };
+const PIN_FALLBACK = 'This card shows something that needs you now, so it stays while that lasts.';
+// Can the card be removed? A card the server marks data-pin (a live reason such as a breaker halt, with `pinWhy` in words) never can;
+// a fixed card can when the app bar item that guards it is among `barShown`. Pure: { ok } or { ok: false, reason } with one line.
+export function removeVerdict(id, pinAttr = false, barShown = [], pinWhy = '') {
+  if (pinAttr) return { ok: false, reason: pinWhy || PIN_FALLBACK };
+  const guard = BAR_GUARD[id];
+  if (guard && !barShown.includes(guard)) return { ok: false, reason: `Add ${BAR_NAME[guard]} to the top bar first.` };
+  return { ok: true };
+}
+export const canHide = (id, pinAttr = false, barShown = []) => removeVerdict(id, pinAttr, barShown).ok;
+// The other half: an app bar item cannot be removed while a card it guards is removed, so the count is never hidden in both places.
+export function barRemoveVerdict(barId, hiddenCards = []) {
+  const card = hiddenCards.find(id => BAR_GUARD[id] === barId);
+  return card ? { ok: false, reason: `Add the ${CARD_NAME[card]} card back first.` } : { ok: true };
+}
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const isInt = v => Number.isInteger(v);
@@ -163,12 +181,13 @@ export function edgeAt(box, px, py, m = 8) {
 // { v: 2, pos: { id: { x, y, w, h } }, hidden: [id], groups: [[id, id]], collapsed: [id] }. `hidden` = cards not chosen in the card picker (not on the page). `collapsed` is owned by the collapse buttons.
 // Anything else (an old order/span/h layout, a broken value, another version) returns null: the caller falls back to the default
 // flow, or converts an old layout. Cards that no longer exist are dropped, bad rectangles are dropped (such a card is placed in the
-// first free spot), a pinned card is never hidden, and overlapping rectangles are settled.
-export function sanitizeLayout(saved, ids, cols, pinnedIds = []) {
+// first free spot), a pinned card is never hidden, a fixed card is hidden only while its app bar item shows, and overlapping rectangles are settled.
+export function sanitizeLayout(saved, ids, cols, pinnedIds = [], barShown = []) {
   if (!isObj(saved) || saved.v !== 2 || !isObj(saved.pos)) return null;
   const pos = {};
   for (const id of ids) { const r = Object.hasOwn(saved.pos, id) ? cleanRect(saved.pos[id], cols) : null; if (r) pos[id] = r; }
-  const hidden = Array.isArray(saved.hidden) ? [...new Set(saved.hidden.filter(i => typeof i === 'string' && ids.includes(i) && canHide(i, pinnedIds.includes(i))))] : [];
+  const removable = i => typeof i === 'string' && ids.includes(i) && canHide(i, pinnedIds.includes(i), barShown);
+  const hidden = Array.isArray(saved.hidden) ? [...new Set(saved.hidden.filter(removable))] : [];
   for (const id of hidden) delete pos[id];
   const settled = settleAll(pos);
   return { pos: settled, hidden, groups: cleanGroups(saved.groups, settled) };

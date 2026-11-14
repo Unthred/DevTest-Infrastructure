@@ -425,6 +425,9 @@ html:not(.js) .dl-bar{display:none}
 .cards.editing [data-handle]{display:inline-flex}
 .cards.editing a.card{pointer-events:auto}
 .lay-hide{position:absolute;top:var(--sp2);right:var(--sp2);z-index:3;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--fg);padding:2px 8px;font:inherit;font-size:var(--fs-sm);cursor:pointer;min-height:28px}
+.lay-why{font-size:var(--fs-sm);color:var(--fg);margin-left:var(--sp2)}
+.card>.lay-why{position:absolute;top:calc(var(--sp2) + 32px);right:var(--sp2);z-index:3;max-width:calc(100% - 2 * var(--sp2));margin:0;padding:2px 8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm)}
+.bar-ctl .bar-why{align-self:center;margin-left:var(--sp1);font-size:var(--fs-sm)}
 .lay-ghost{grid-column:calc(var(--cx) + 1) / span var(--cw);grid-row:calc(var(--cy) + 1) / span var(--ch);border:2px dashed var(--link);background:color-mix(in srgb,var(--link) 14%,transparent);border-radius:var(--r);pointer-events:none;z-index:1}
 body.layout-editing{overscroll-behavior:contain}
 @media(prefers-reduced-motion:no-preference){.cards.editing>.card{transition:none}}
