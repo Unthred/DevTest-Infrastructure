@@ -1,7 +1,7 @@
 // Issue #1121: every open issue is explained: agent, model, rule, rank and the specific wait; the empty case is a fault.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { explainIssue, collectAssignments, idleRuleText } from '../supervisor/issueassign.mjs';
+import { explainIssue, collectAssignments, idleRuleText, assignmentFields } from '../supervisor/issueassign.mjs';
 import { assignmentOf, faultViews } from '../foreman-mcp/assignmentview.mjs';
 
 const agent = (name, extra = {}) => ({ name, canImplement: true, model: `${name}-model`, out: null, busy: false, hold: null, ...extra });
@@ -41,7 +41,13 @@ test('an unlisted issue goes to the first agent with a free slot, by number orde
   const unlisted = { agent: null, rule: 'unlisted', rank: 1, of: 3 };
   const r = explainIssue(base({ owner: unlisted, agents: [agent('claude', { busy: true }), agent('codex')] }));
   assert.equal(r.agent, 'codex'); assert.match(r.rule, /in no agent's issue list/); assert.equal(r.rank, 1);
-  const none = explainIssue(base({ owner: unlisted, agents: [agent('claude', { out: { kind: 'agent-paused', text: 'is waiting for reset', until: 1 } }), agent('codex', { out: { kind: 'allowance', text: 'is out', until: null } })] }));
+  const none = explainIssue(base({
+    owner: unlisted,
+    agents: [
+      agent('claude', { out: { kind: 'agent-paused', text: 'is waiting for reset', until: 1 } }),
+      agent('codex', { out: { kind: 'allowance', text: 'is out', until: null } }),
+    ],
+  }));
   assert.equal(none.agent, null); assert.equal(none.wait.kind, 'agent-paused'); assert.equal(none.fault, null);
 });
 
@@ -64,7 +70,8 @@ test('collectAssignments reads the team: list position, unlisted pool, exclusion
     exclusion: n => (n === 6 ? { kind: 'prerequisite', text: 'blocked by #1' } : null)
   };
   const issues = [3, 4, 5, 6, 9].map(number => ({ number, state: 'OPEN', headRefName: '', labels: [] }));
-  const rows = collectAssignments(team, { cache: { issues, pulls: [] }, plan: [], states: { claude: { state: 'idle' }, codex: { state: 'idle' } }, activeJobs: [] });
+  const states = { claude: { state: 'idle' }, codex: { state: 'idle' } };
+  const rows = collectAssignments(team, { cache: { issues, pulls: [] }, plan: [], states, activeJobs: [] });
   assert.deepEqual(rows.map(r => r.number), [3, 4, 5, 6]);   // delivered #9 is left out
   const by = n => rows.find(r => r.number === n);
   assert.equal(by(3).wait.kind, 'agent-paused'); assert.equal(by(4).rule.startsWith('queued for codex'), true);
@@ -88,7 +95,8 @@ test('foreman_why_blocked and foreman_status carry the assignment and the faults
   const { createTools } = await import('../foreman-mcp/tools.mjs');
   const ok = explainIssue(base());
   const fault = { ...explainIssue(base({ owner: null, agents: [] })), number: 8 };
-  const view = { agents: [], issues: [{ number: 7, state: 'OPEN' }, { number: 8, state: 'OPEN' }, { number: 9, state: 'OPEN' }], assignments: [ok, fault], assignmentFaults: [{ issue: 8, fault: fault.fault }] };
+  const openIssues = [{ number: 7, state: 'OPEN' }, { number: 8, state: 'OPEN' }, { number: 9, state: 'OPEN' }];
+  const view = { agents: [], issues: openIssues, assignments: [ok, fault], assignmentFaults: [{ issue: 8, fault: fault.fault }] };
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}) });
   const run = async (name, args) => JSON.parse((await tools.call(name, args)).text);
   const why = await run('foreman_why_blocked', { kind: 'issue', number: 7 });
@@ -100,15 +108,40 @@ test('foreman_why_blocked and foreman_status carry the assignment and the faults
 
 // Issue #1171: `act.reassignedFrom || null` in collectAssignments: a name is kept, null and undefined both become null (no "reassigned" text).
 test('collectAssignments: reassignedFrom present, null and undefined', () => {
-  const team = { agents: () => [['claude', { issues: [3] }], ['codex', { issues: [] }]], s: { unblock: { queued: {} }, implemented: {} }, unlisted: () => [], delivered: new Set(),
-    timeZone: 'UTC', held: {}, modes: {}, limitedOf: () => null, pauseText: () => null, modelFor: ({ agent }) => ({ model: `${agent}-m` }), exclusion: () => null };
+  const team = {
+    agents: () => [['claude', { issues: [3] }], ['codex', { issues: [] }]],
+    s: { unblock: { queued: {} }, implemented: {} },
+    unlisted: () => [],
+    delivered: new Set(),
+    timeZone: 'UTC',
+    held: {},
+    modes: {},
+    limitedOf: () => null,
+    pauseText: () => null,
+    modelFor: ({ agent }) => ({ model: `${agent}-m` }),
+    exclusion: () => null,
+  };
   const rule = reassignedFrom => {
     const act = { type: 'implement', issue: 3, agent: 'codex', ...(reassignedFrom === 'absent' ? {} : { reassignedFrom }) };
-    const rows = collectAssignments(team, { cache: { issues: [{ number: 3, state: 'OPEN', headRefName: '', labels: [] }], pulls: [] }, plan: [act], states: {}, activeJobs: [] });
+    const issues = [{ number: 3, state: 'OPEN', headRefName: '', labels: [] }];
+    const rows = collectAssignments(team, { cache: { issues, pulls: [] }, plan: [act], states: {}, activeJobs: [] });
     return rows[0].rule;
   };
   assert.match(rule('claude'), /reassigned from claude for allowance/);
   assert.doesNotMatch(rule(null), /reassigned/);
   assert.doesNotMatch(rule(undefined), /reassigned/);
   assert.doesNotMatch(rule('absent'), /reassigned/);
+});
+
+// Issue #1351: an issue row with neither a reason nor an assignment status keeps reason null (it was '' before).
+test('an issue row with no reason and no status keeps reason null', () => {
+  const names = { issue: n => ({ text: `Issue ${n}` }) };
+  const row = explainIssue(base({ number: 1127 }));
+  const statusText = assignmentFields({ issues: [{ number: 1127, reason: '' }] }, [row], names).issues[0].reason;
+  assert.match(statusText, /^agent: claude/, 'the status alone when the row has no reason (boundary)');
+  const joined = assignmentFields({ issues: [{ number: 1127, reason: 'CI red' }] }, [row], names).issues[0].reason;
+  assert.equal(joined, `CI red | ${statusText}`, 'reason and status joined by " | " (valid)');
+  const none = assignmentFields({ issues: [{ number: 1127, reason: '' }] }, [], names).issues[0].reason;
+  assert.equal(none, null, 'neither reason nor status is null, not an empty string (invalid)');
+  assert.equal(assignmentFields({ issues: [{ number: 1127 }] }, [], names).issues[0].reason, null);
 });
