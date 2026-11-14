@@ -20,6 +20,13 @@ export function normaliseAlert(text) {
     .replace(/(\bpr <n> ).+?( is still )/, '$1<title>$2');
 }
 
+// Issue #1421: the level is shown when the row has one (rows written before levels existed have none).
+function rowOf(o) {
+  if (!o || !Number.isFinite(o.at)) return null;
+  const level = typeof o.level === 'string' ? { level: o.level.slice(0, 20) } : {};
+  return { at: o.at, text: String(o.text ?? ''), delivered: o.delivered === true, ...level };
+}
+
 export function readAlerts(root) {
   const file = path.join(root, 'team', 'alerts.jsonl');
   let fd; try { fd = fs.openSync(file, 'r'); } catch { return { rows: [], partial: false }; }
@@ -28,7 +35,7 @@ export function readAlerts(root) {
     fs.readSync(fd, buf, 0, buf.length, start);
     let lines = buf.toString('utf8').split('\n'); if (start > 0) lines = lines.slice(1);   // the first line of a tail is cut
     const rows = [];
-    for (const l of lines) { if (!l) continue; try { const o = JSON.parse(l); if (o && Number.isFinite(o.at)) rows.push({ at: o.at, text: String(o.text ?? ''), delivered: o.delivered === true }); } catch { /* damaged line */ } }
+    for (const l of lines) { if (!l) continue; try { const row = rowOf(JSON.parse(l)); if (row) rows.push(row); } catch { /* damaged line */ } }
     return { rows, partial: start > 0 };
   } finally { fs.closeSync(fd); }
 }
@@ -42,7 +49,7 @@ export function alertsView(root, { now = Date.now(), since = null, contains = nu
   if (want === undefined) throw new Error('delivered must be true or false');
   const needle = contains ? String(contains).slice(0, 200).toLowerCase() : null;
   const lim = Math.min(200, Math.max(1, Math.trunc(Number(limit)) || 50));
-  const clean = r => ({ at: iso(r.at), text: redact(r.text, 500), delivered: r.delivered });
+  const clean = r => ({ at: iso(r.at), text: redact(r.text, 500), delivered: r.delivered, ...(r.level ? { level: r.level } : {}) });
   const picked = rows.filter(r => r.at >= from && (want === null || r.delivered === want) && (!needle || redact(r.text, 2000).toLowerCase().includes(needle))).sort((a, b) => b.at - a.at);
   const groups = new Map();
   for (const r of picked) {

@@ -328,10 +328,10 @@ export class SelfUpgrade {
     fs.appendFileSync(this.recordFile, `${JSON.stringify({ at: this.clock.now(), ...entry })}\n`, { mode: 0o600 });
   }
   // One alert per key, recorded before delivery so a failing channel cannot cause a repeat every tick.
-  async alert(key, text) {
+  async alert(key, text, level) {
     if (this.s.alerted[key]) return;
     this.s.alerted[key] = this.clock.now(); this.save();
-    try { await this.d.alert(text); } catch (error) { this.log(`ai-supervisor: upgrade alert not delivered: ${error.message}`); }   // the upgrade decision is unaffected
+    try { await this.d.alert(text, level ? { level } : undefined); } catch (error) { this.log(`ai-supervisor: upgrade alert not delivered: ${error.message}`); }   // the upgrade decision is unaffected
   }
 
   // Issue #695: when the batching window since the last finished install ends (null = no window: first install, or min_install_gap_minutes 0).
@@ -536,7 +536,7 @@ export class SelfUpgrade {
     this.s.pending = { from, to: target, prs: eligibility.prs, checks, at: now };
     this.noteInstall({ result: 'installed', sha: target, reason: null }); this.save();
     this.record({ from, to: target, prs: eligibility.prs, checks, result: 'upgraded' });
-    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`);
+    await this.alert(`${target}:upgraded`, `Supervisor upgraded to ${short(target)} (${await this.prNames(eligibility.prs)}).`, 'info');
     return 'upgraded';
   }
 

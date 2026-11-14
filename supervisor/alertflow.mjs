@@ -9,11 +9,11 @@ function skip(report, what, reason, log) {
   log(`ai-supervisor: ${what}: ${reason}`);
 }
 
-// team: { alert, save }. sent: marks the alert as sent in state (omitted for an alert that is never retried).
-export async function alertThenRecord(team, { report, what, text, sent = null, log = line => console.error(line) }) {
+// team: { alert, save }. sent: marks the alert as sent in state (omitted for an alert that is never retried). level: issue #1421; none means action.
+export async function alertThenRecord(team, { report, what, text, sent = null, level = undefined, log = line => console.error(line) }) {
   if (!team.alert) return false;
   try {
-    await team.alert(text);
+    await team.alert(text, level ? { level } : undefined);
   } catch (error) {
     skip(report, what, `alert delivery failed${sent ? '; will retry' : ''}: ${messageOf(error)}`, log);
     return false;
