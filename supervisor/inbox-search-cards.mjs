@@ -9,6 +9,8 @@ const storedCard = status => ({
   kind: status.kind ?? 'unknown',
   state: status.state ?? 'unknown',
   createdAt: status.createdAt ?? null,
+  decision: status.decision ?? null,   // issue #1416: the list views say what was decided and when
+  decidedAt: status.decidedAt ?? null,
   title: status.title || 'An inbox item that cannot be shown',
   reason: redactLong(String(status.reason ?? status.result ?? ''), 400, ' [cut]'),
   issue: status.issue ?? null,

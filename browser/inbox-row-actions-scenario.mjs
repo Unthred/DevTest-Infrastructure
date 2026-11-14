@@ -77,6 +77,7 @@ try {
   await page.locator('.iv-sort[data-sort="title"]').click();
   const orderBefore = await tableOrder(), sortBefore = await sortState(), searchBefore = await page.evaluate(() => location.search);
   check('the Title sort is on before the press', /Title:ascending/.test(sortBefore), sortBefore);
+  await tRow(DRAFT).locator('button').first().scrollIntoViewIfNeeded();   // the sort moved the row, so bring it back before the position is read (issue #1416: rows are taller on a phone)
   const scrollBefore = await page.evaluate(() => Math.round(window.scrollY));
   const waitingBefore = await waitingCount();
   check('three items are waiting before the first press', waitingBefore === 3, waitingBefore);

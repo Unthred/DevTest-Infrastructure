@@ -52,7 +52,25 @@ try {
   for (const [key, sel] of [['cards', '[data-inbox]'], ['table', 'tbody tr'], ['compact', '.iv-crow']]) counts[key] = await pane(key).locator(sel).count();
   check('the three views hold the same number of items', counts.cards === counts.table && counts.table === counts.compact && counts.cards >= 5, JSON.stringify(counts));
 
+  // Issue #1416: the title takes the room, the chips lead, a decided item says so, and the phone stacks each row.
   await page.getByRole('button', { name: 'Table', exact: true }).click();
+  const ciwatch = page.locator('.iv-table tbody tr', { hasText: 'Ciwatch' });
+  const lines = await ciwatch.locator('td[data-col="title"] .iv-title').evaluate(el => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
+  const widths = await ciwatch.locator('td:visible').evaluateAll(tds => tds.map(td => [td.dataset.col, td.getBoundingClientRect().width]));
+  const titleW = Object.fromEntries(widths).title;
+  if (!phone) {
+    check('the Ciwatch title takes at most two lines at 1280', lines <= 2, lines);
+    check('the title cell is wider than every other cell', widths.every(([k, w]) => k === 'title' || w < titleW), JSON.stringify(widths));
+    check('the Kind and State chips come before the title', (await ciwatch.locator('td').evaluateAll(tds => tds.map(t => t.dataset.col).slice(0, 3).join())) === 'kind,state,title');
+  } else {
+    const box = el => el.evaluate(n => n.getBoundingClientRect().top);
+    check('at 390 the chips, then the title, stack in the row', (await box(ciwatch.locator('td[data-col="kind"]'))) < (await box(ciwatch.locator('td[data-col="title"]'))));
+  }
+  check('Kind and State show a chip with their word', /Issue draft/.test(await ciwatch.locator('td[data-col="kind"] .badge').innerText()) && /waiting/.test(await ciwatch.locator('td[data-col="state"] .badge').innerText()));
+  const decidedRow = page.locator('.iv-table tbody tr', { hasText: 'Splitdecided' });
+  check('an item already decided shows the decision and its time', /Approved \d\d:\d\d, waiting for the next pass/.test(await decidedRow.innerText()), await decidedRow.innerText());
+  check('a row not yet decided still shows its controls', (await ciwatch.locator('.iv-acts form').count()) === 2);
+  check('the Result column is shown while a row has a result', await page.locator('th[data-col="result"]').isVisible());
   await page.locator('.iv-sort[data-sort="age"]').click();
   const asc = await rowTitles();
   check('Age ascending lists the newest item first', asc[0].includes('Read only drift check') && asc.at(-1).includes('Rules drift check'), asc.join(' | ').slice(0, 300));
