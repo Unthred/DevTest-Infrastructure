@@ -6,6 +6,7 @@
 // check is `verifyPending`, called by the CLI with the outcome of the live tick that ran under the new version.
 import { mcpNeedsInstall } from './mcpinstall.mjs'; import { cleanupFrom, rollbackNote, rollbackInstall } from './rollbackcleanup.mjs';
 import { dropStaleLatch } from './tickskips.mjs';
+import { noteRefusal, attemptDue } from './upgrade-attempts.mjs';
 export { liveTickOutcome, classifySkips } from './tickskips.mjs';   // issue #302, #1119: what a live tick says about the new version
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,8 +48,8 @@ export const VERIFY_MAX_WAIT_MS = 60 * 60 * 1000;
 // the first retry after ENV_RETRY_MS, doubling each time up to ENV_RETRY_MAX_MS. Only a failed validator or test run latches.
 export const ENV_RETRY_MS = 10 * 60 * 1000;
 export const ENV_RETRY_MAX_MS = 4 * 60 * 60 * 1000;
-// Issue #581: a commit refused by a failed check gets one more attempt after this delay without waiting for main to move
-// (a check that fails only under load is not a defect of the commit). A second failure latches it until a newer main.
+// Issues #581, #1368: the fallback for a further attempt no job-end event started (supervisor/upgrade-attempts.mjs has the rule: up to three
+// further attempts, each 10 minutes after the last). A refused commit is blocked until main moves once its attempts are used.
 export const PRECHECK_RETRY_MS = 30 * 60 * 1000;
 // Issue #489: the explicit list of paths that do NOT need an install. The list is the only rule: every other path (bin/, supervisor/,
 // tools/ outside tools/ci/, a root file that is not *.md, and anything unknown) needs one.
@@ -430,6 +431,7 @@ export class SelfUpgrade {
     if (this.s.fetchFailures) { delete this.s.fetchFailures; delete this.s.fetchRetryAt; if (this.s.install?.result === 'transient' && !this.s.install.sha) delete this.s.install; this.save(); }
     // Issue #265: the dashboard reads main and how far behind the install is from here (live origin/main), not from the last attempt.
     this.noteMain(from, target);
+    if (this.s.refusedAttempts && (this.s.refusedAttempts.sha !== target || target === from)) delete this.s.refusedAttempts;   // issue #1368: main moved or installed
     if (this.s.refusal && (this.s.refusal.from !== from || this.s.refusal.to !== target)) { delete this.s.refusal; this.save(); }   // issue #488: the installed commit or main moved
     if (this.s.handDeploy && this.s.handDeploy.from !== from) { delete this.s.handDeploy; this.save(); }   // the installed commit moved: the item is done
     if (!SHA.test(target || '') || target === from) { if (this.s.urgent?.reason === 'homeowner request') delete this.s.urgent; this.save(); return 'current'; }
@@ -459,11 +461,11 @@ export class SelfUpgrade {
       return 'not-eligible';
     }
     if (this.s.refusal?.kind === 'not-eligible') { delete this.s.refusal; this.save(); }
-    const now = this.clock.now();
+    const now = this.clock.now(), { prs } = eligibility;
     // A failed check latches this commit until a newer main; an environmental failure is retried after ENV_RETRY_MS (#69).
     // Checked before the quiet wait so a latched target never holds dispatch for a commit that will not be installed (#134).
     const latched = this.s.prechecked[target];
-    const retryDue = typeof latched === 'number' && !this.s.precheckRetried?.[target] && now - latched >= PRECHECK_RETRY_MS;
+    const retryDue = typeof latched === 'number' && await attemptDue(this, target, now, PRECHECK_RETRY_MS);
     if (latched && !retryDue && !(latched.environmental && now - latched.at >= envBackoffMs(latched.attempts))) return 'precheck-failed';
     // Issue #845: no drain. A running job needs nothing from the install: each version is its own immutable directory under versions/<sha>
     // and the install only repoints `current`, so a running worker keeps executing the files it started from, and the tick (ingest, post-
@@ -488,14 +490,13 @@ export class SelfUpgrade {
     if (!pre.ok) {
       const attempts = pre.environmental ? (latched?.environmental ? (latched.attempts || 1) + 1 : 1) : 0;
       this.s.prechecked[target] = pre.environmental ? { at: now, environmental: true, attempts } : now;
-      this.s.precheckRetried = this.retriedFor(target, retryDue);   // one delayed retry per commit, kept across environmental outcomes
+      const attempt = pre.environmental ? {} : noteRefusal(this.s, { sha: target, now, stage: 'pre-check', tests: pre.tests });   // issue #1368
       this.noteInstall(pre.environmental
         ? { result: 'transient', sha: target, reason: pre.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }
-        : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre) });
+        : { result: 'blocked', sha: target, reason: pre.reason, ...failureFields(pre), ...attempt });
       this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: pre-check failed (${pre.reason}).${excerptNote(pre)}`);
-      if (!pre.environmental) this.refuse(from, target, 'precheck', pre.reason);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.environmental ? pre.reason : refusalText(pre.reason), ...failureFields(pre) });
+      this.record({ from, to: target, prs, checks: { ...checks, preChecks: 'failed' }, result: 'precheck_failed', reason: pre.environmental ? pre.reason : refusalText(pre.reason), ...failureFields(pre), ...attempt });
       return 'precheck-failed';
     }
     checks.preChecks = flaky ? 'ok-after-retry' : 'ok';
@@ -508,7 +509,6 @@ export class SelfUpgrade {
       // The clean copy could not be taken at install time (GitHub unreachable): nothing was swapped, so retry, do not roll back.
       const attempts = (latched?.environmental ? (latched.attempts || 1) : 0) + 1;
       this.s.prechecked[target] = { at: now, environmental: true, attempts }; delete this.s.lastUpgradeAt;
-      this.s.precheckRetried = this.retriedFor(target, retryDue);
       this.noteInstall({ result: 'transient', sha: target, reason: up.reason, attempts, nextAttemptAt: now + envBackoffMs(attempts) }); this.save();
       this.record({ from, to: target, prs: eligibility.prs, checks, result: 'precheck_failed', reason: up.reason });
       return 'precheck-failed';
@@ -517,11 +517,10 @@ export class SelfUpgrade {
       // The install-time validator, tests or payload check failed before anything was swapped: block only this commit until a newer
       // main, with one alert. No rollback and no global latch (#101).
       this.s.prechecked[target] = now; delete this.s.lastUpgradeAt;
-      this.s.precheckRetried = this.retriedFor(target, retryDue);
-      this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up) }); this.save();
+      const attempt = noteRefusal(this.s, { sha: target, now, stage: 'install', tests: up.tests });   // issue #1368
+      this.noteInstall({ result: 'blocked', sha: target, reason: up.reason, ...failureFields(up), ...attempt }); this.save();
       await this.alert(`${target}:precheck`, `Supervisor upgrade to ${short(target)} not done: install-time check failed (${up.reason}).${excerptNote(up)}`);
-      this.refuse(from, target, 'install-check', up.reason);
-      this.record({ from, to: target, prs: eligibility.prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: refusalText(up.reason), ...failureFields(up) });
+      this.record({ from, to: target, prs, checks: { ...checks, installChecks: 'failed' }, result: 'precheck_failed', reason: refusalText(up.reason), ...failureFields(up), ...attempt });
       return 'precheck-failed';
     }
     if (!up.ok) {
@@ -555,9 +554,6 @@ export class SelfUpgrade {
     this.record({ from, to: target, result: r.result === 'failed' ? 'mcp_install_failed' : 'mcp_install', reason: this.s.mcp.reason, mcpChanged: changed });
     if (r.result === 'failed') await this.alert(`${target}:mcp`, `Foreman MCP server not updated to ${short(target)}: ${this.s.mcp.reason}. The previous copy was kept and still works; Foreman itself installed. Check docs/foreman-mcp.md.`);
   }
-
-  // The delayed retry is spent once used or already recorded for this commit; only a different target clears it.
-  retriedFor(target, retryDue) { return retryDue || this.s.precheckRetried?.[target] ? { [target]: true } : {}; }
 
   // `ok` is false when the live tick threw or reported skipped items; `running` is the sha this process runs from.
   async verifyPending({ running, ok, reason }) {

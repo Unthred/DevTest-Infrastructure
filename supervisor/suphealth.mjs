@@ -133,6 +133,7 @@ export function readUpgrades(root) {
     out.push({ at: Number.isFinite(r.at) ? r.at : null, from: SHA.test(r.from || '') ? r.from : null, to: SHA.test(r.to || '') ? r.to : null,
       prs: (Array.isArray(r.prs) ? r.prs : []).filter(Number.isSafeInteger).slice(0, 30), result: scrub(r.result, 24), reason: r.reason ? scrub(r.reason, 300) : null,
       checks: r.checks && typeof r.checks === 'object' ? Object.fromEntries(Object.entries(r.checks).slice(0, 10).map(([k, v]) => [scrub(k, 20), scrub(v, 24)])) : {},
+      attempt: Number.isSafeInteger(r.attempt) ? r.attempt : null,   // issue #1368
       files: (Array.isArray(r.files) ? r.files : []).slice(0, 10).map(f => scrub(f, 100)) });
   }
   return out.slice(-500);
@@ -148,6 +149,7 @@ export function readSelfUpgrade(root) {
   const p = st.pending, i = st.install;
   const install = i && typeof i.result === 'string' ? { result: scrub(i.result, 30), sha: SHA.test(i.sha || '') ? i.sha : null, at: Number.isFinite(i.at) ? i.at : null,
     nextAttemptAt: Number.isFinite(i.nextAttemptAt) ? i.nextAttemptAt : null, reason: i.reason ? scrub(i.reason, 400) : null, cleanup: i.cleanup ? scrub(i.cleanup, 120) : null,
+    attempt: Number.isSafeInteger(i.attempt) ? i.attempt : null,   // issue #1368
     tests: Array.isArray(i.tests) ? i.tests.slice(0, 5).map(x => scrub(x, 200)) : [], excerpt: typeof i.excerpt === 'string' ? redactLong(i.excerpt, 1500, '[excerpt cut]') : '', retried: i.retried === true } : null;
   return { install, prechecked, latch, lastUpgradeAt: Number.isFinite(st.lastUpgradeAt) ? st.lastUpgradeAt : null, waitingSince: Number.isFinite(st.waitingSince) ? st.waitingSince : null,
     pending: p && SHA.test(p.to || '') ? { from: SHA.test(p.from || '') ? p.from : null, to: p.to, at: Number.isFinite(p.at) ? p.at : null } : null };
