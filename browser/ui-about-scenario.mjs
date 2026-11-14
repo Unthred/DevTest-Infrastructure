@@ -66,7 +66,10 @@ try {
   await partOf('Yesterday').locator('summary').first().click();
   box = await text();
   check('opening a day shows its changes under group headings', /The menu opens faster/.test(box) && /improved/i.test(box) && /The old settings files are gone/.test(box) && /tidying/i.test(box), box);
-  check('the current install is not repeated in Earlier', (await partOf('Earlier').innerText()).indexOf(SENTENCE) < 0 && box.split(SENTENCE).length === 2);
+  const daySummaries = await partOf('Earlier').locator('details > summary').allTextContents();
+  const dayTexts = await partOf('Earlier').locator('details').allTextContents();
+  check('the current install is not repeated in Earlier: exactly two day parts, none for Today, none holding its sentence',
+    daySummaries.length === 2 && !daySummaries.some(t => /Today/.test(t)) && !dayTexts.some(t => t.includes(SENTENCE)), daySummaries.join('|'));
 
   check('the technical numbers are not shown while Technical details is closed', !/1425/.test(box) && !/Pull request/.test(box));
   await partOf('Technical details').locator('summary').first().click();
