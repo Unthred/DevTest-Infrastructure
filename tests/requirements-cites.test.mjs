@@ -183,3 +183,53 @@ test('the mandated full-suite command is not read as a named test', () => {
   const full = ['Does the thing', 'Met', '`supervisor/new-thing.mjs:3`; test `does the thing` in `tests/new-thing.test.mjs`; `/root/bin/ai-supervisor test-slot run -- node --test "tests/**/*.test.mjs"`'];
   assert.deepEqual(problems([full]), []);
 });
+
+// Issue #1440: the claims of a description a script can test (files beyond the item, unchanged claims, measured totals).
+const diffOf = (...paths) => paths.map(p => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n@@ -1,1 +1,2 @@\n x\n+y`).join('\n');
+const ISSUE_1377 = '## Files this item edits\n- supervisor/api/attention.mjs\n- tests/api-attention.test.mjs\n- tests/api-overview.test.mjs\n';
+const DIFF_1420 = diffOf('supervisor/api/attention.mjs', 'supervisor/api/models/overview.mjs', 'tests/api-attention.test.mjs', 'tests/api-overview.test.mjs');
+const claims = (body, diff, issueBody = '') => requirementsCiteProblems({ body, diff, headFiles: new Map(), issueBody });
+
+test('PR 1420 for issue 1377: overview.mjs changed and not declared is reported; declared with a reason it passes', () => {
+  const found = claims('Adds the thing.', DIFF_1420, ISSUE_1377);
+  assert.deepEqual(found.map(p => p.cite), ['supervisor/api/models/overview.mjs']);
+  const declared = 'Adds the thing.\n\n## Files beyond the item\n- `supervisor/api/models/overview.mjs`: two lines so the overview reads the new field\n';
+  assert.deepEqual(claims(declared, DIFF_1420, ISSUE_1377), []);
+});
+
+test('files beyond the item: no reason is reported; an issue without the heading is not tested', () => {
+  const noReason = 'x\n\n## Files beyond the item\n- supervisor/api/models/overview.mjs\n';
+  assert.match(claims(noReason, DIFF_1420, ISSUE_1377)[0].reason, /without a reason/);
+  assert.deepEqual(claims('x', DIFF_1420, '## Notes\nnothing here\n'), []);
+});
+
+test('an unchanged claim about a file the diff changes is reported; about a file it leaves alone it passes', () => {
+  const diff = diffOf('supervisor/team.mjs');
+  const found = claims('team.mjs is unchanged and other.mjs is changed.', diff);
+  assert.equal(found.length, 1);
+  assert.match(found[0].reason, /team\.mjs is unchanged but the diff changes supervisor\/team\.mjs/);
+  assert.equal(claims('The file `supervisor/team.mjs` is untouched.', diff).length, 1);
+  assert.deepEqual(claims('supervisor/other.mjs is unchanged; team.mjs changes the thing.', diff), []);
+});
+
+test('PR 1427 totals are reported, both lines; an issue number, a line cite and a version are not totals', () => {
+  const body = '- `node tools/ci/check-size.mjs`: 0 failure(s), 1351 warning(s), 181 smaller.\n'
+    + '- Full suite with the test slot: tests 3939, pass 3937, fail 0.\n';
+  const found = claims(body, '');
+  assert.equal(found.length, 2);
+  assert.match(found[0].reason, /state only the outcome/);
+  const quiet = 'Closes #1440, follows PR #1420. See supervisor/team.mjs:519 and v2.1.0. The suite passed with no failure. Adds 3 new tests.';
+  assert.deepEqual(claims(quiet, ''), []);
+  assert.equal(claims('The diff changes 5 files.', '').length, 1);
+});
+
+test('through the real gate, the new problems reach the author in the one message with the cite problems', async () => {
+  const body = `${table([['Gone', 'Met', '`supervisor/missing.mjs:4`']])}\nteam.mjs is unchanged. tests 10, pass 10\n`;
+  const gh = { pullDiff: async () => diffOf('supervisor/team.mjs'), fileAtRef: async () => null, getIssue: async () => ({ body: ISSUE_1377 }) };
+  const pr = { number: 5, headRefOid: 'a'.repeat(40), closingIssuesReferences: [{ number: 1377 }] };
+  const message = await citeGateError(pr, body, gh);
+  assert.match(message, /^requirements table cites do not match/);
+  const parts = [/does not exist/, /is unchanged but the diff changes/, /measured total/, /supervisor\/team\.mjs: is changed but/];
+  for (const part of parts) assert.match(message, part);
+  assert.equal(await citeGateError(pr, body, { ...gh, pullDiff: async () => { throw new Error('x'); } }), null);
+});
