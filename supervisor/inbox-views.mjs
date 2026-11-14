@@ -2,6 +2,7 @@
 // Compact list. The page server-renders all three from one ordered list of items and the browser script (dashui/inbox-views-ui.mjs)
 // shows one, so the filtered items and their order are the same in every view. Without the script the Cards view shows.
 import { factsHtml, jobTitleLink } from './inbox-job-row.mjs';
+import { decisionHtml } from './decisioncard-ui.mjs';
 import { COLUMNS, VIEWS, VIEW_LABELS, decisionForms, kindLabel, rowOf, stateMark, stateSeverity } from './dashui/inbox-views.mjs';
 
 // The scripts the Inbox page loads; dashserver adds them to its static files with one Object.assign.
@@ -38,8 +39,18 @@ const cell = (row, key, esc, highlight) => {
   return esc(row[key]);
 };
 
+// Issue #1477: a decision card's row carries the card's own controls, drawn by the Overview's decisionHtml (one set of forms, one script,
+// dashui/decision-ui.mjs). The post returns to the Inbox page at the filter shown (`returnTo`) and at the card's row in the Cards view.
+// `withText` puts the options text where the Cards view shows its Decision line; a record with no card shows that text and no button.
+export const rowAnchor = id => `att-inbox-${id}`;
+export function decisionControls(row, { returnTo = '', withText = false } = {}) {
+  const item = { id: row.id, card: row.card, decision: withText || !row.card ? row.options : '' };
+  return decisionHtml(item, rowAnchor(row.id), returnTo);
+}
+
 // The forms, an error place and an outcome place the decision script (dashui/app.js) finds through data-inbox; empty when the item has no buttons.
-function actionsHtml(row, form) {
+function actionsHtml(row, form, returnTo) {
+  if (row.decision === true) return `<div class="iv-decision">${decisionControls(row, { returnTo })}</div>`;
   const { approve, reject } = decisionForms(row, form);
   if (!approve && !reject) return '';
   return `<div class="acts iv-acts">${approve}${reject}</div><div class="inbox-err" role="alert" hidden></div><span class="inbox-outcome" hidden></span>`;
@@ -47,24 +58,24 @@ function actionsHtml(row, form) {
 
 // The chip cells sort on the record's own word, not on the chip's marker character (data-sort).
 const SORTED_AS_WORD = new Set(['kind', 'state']);
-export function tableRow(row, { esc, highlight, form, noResult = false }) {
+export function tableRow(row, { esc, highlight, form, returnTo = '', noResult = false }) {
   const cells = COLUMNS.map(c => {
     const created = c.key === 'age' ? ` data-created="${row.created ?? ''}"` : '';
     const sort = SORTED_AS_WORD.has(c.key) ? ` data-sort="${esc(row[c.key])}"` : '';
     const empty = c.key === 'result' && noResult ? ' data-empty="1" hidden' : '';
     return `<td data-col="${c.key}" data-label="${esc(c.label)}"${created}${sort}${empty}>${cell(row, c.key, esc, highlight)}</td>`;
   }).join('');
-  const actions = `<td data-col="actions" data-label="Actions">${actionsHtml(row, form)}</td>`;
+  const actions = `<td data-col="actions" data-label="Actions">${actionsHtml(row, form, returnTo)}</td>`;
   return `<tr data-id="${esc(row.id)}" ${rowKey({ ...row, id: esc(row.id) })} data-state="${esc(row.state)}">${cells}${actions}</tr>`;
 }
 
-export function compactRow(row, { esc, highlight, form }) {
+export function compactRow(row, { esc, highlight, form, returnTo = '' }) {
   const result = row.full ? `<p class="iv-more-result"><b>Result</b> <span>${highlight(row.full)}</span></p>` : '';
   const prompt = row.prompt ? `<p class="iv-more-prompt"><b>Prompt</b> <span>${highlight(row.prompt)}</span></p>` : '';
   const chips = `<span class="iv-chips">${stateChip(row, esc)} ${kindChip(row, esc)}</span>`;
   const meta = `<span class="iv-meta"><span class="iv-age" data-created="${row.created ?? ''}">${esc(row.age)}</span> · <span class="iv-source">${esc(row.source)}</span></span>`;
   const summary = `${chips}<span class="iv-body">${titleHtml(row, esc, highlight)}${decidedLine(row, esc)}${factsLine(row, esc)}</span>${meta}`;
-  const actions = actionsHtml(row, form);
+  const actions = actionsHtml(row, form, returnTo);
   const none = `<p class="sub">${row.job ? 'The job has not finished.' : 'No result yet.'}</p>`;
   return `<li class="iv-crow" data-id="${esc(row.id)}" ${rowKey({ ...row, id: esc(row.id) })} data-state="${esc(row.state)}">`
     + `<details><summary>${summary}</summary><div class="iv-more">${result + prompt || none}</div></details>${actions}</li>`;
@@ -93,9 +104,10 @@ const tableHtml = (rows, ctx) => {
 };
 
 // records: the filtered inbox records in display order; cardsHtml: the existing card list for the same records.
-export function inboxViews({ records, now, esc, highlight, cardsHtml, form }) {
-  const rows = records.map(r => rowOf(r, now));
-  const ctx = { esc, highlight, form };
+export function inboxViews({ records, now, esc, highlight, cardsHtml, form, returnTo = '' }) {
+  // The card and its options text are only drawn for a decision row.
+  const rows = records.map(r => ({ ...rowOf(r, now), card: r.card, options: String(r.body || '') }));
+  const ctx = { esc, highlight, form, returnTo };
   return `<div class="iv" data-iv data-view="cards">${switchBar(esc)}<div data-pane="cards">${cardsHtml}</div>${tableHtml(rows, ctx)}`
     + `<ul class="iv-compact" data-pane="compact" hidden>${rows.map(r => compactRow(r, ctx)).join('')}</ul>`
     + '<script type="module" src="/static/inbox-views-ui.mjs"></script></div>';

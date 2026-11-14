@@ -10,7 +10,13 @@ const TOO_SOON = 'That was too soon after the last decision; wait a second and p
 export const wantsJson = req => /application\/json/.test(req.headers.accept || '');
 
 // The page to return to without script: the card's own anchor, so the tab and card are the same. Anything unexpected falls back to the top.
-export const backTo = anchor => (ANCHOR.test(anchor || '') ? `/#${anchor}` : '/');
+// Issue #1477: a post from the Inbox page also names `from`, that page with its filter, and returns there at the card's row.
+const INBOX_FROM = /^\/inbox(\?[A-Za-z0-9%=&+._~*,:-]{0,300})?$/;
+export function backTo(anchor, from = '') {
+  const hash = ANCHOR.test(anchor || '') ? `#${anchor}` : '';
+  if (INBOX_FROM.test(from || '')) return from + hash;
+  return hash ? `/${hash}` : '/';
+}
 
 export const doneReply = control => ({
   status: 200,

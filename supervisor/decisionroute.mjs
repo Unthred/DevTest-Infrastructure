@@ -26,13 +26,14 @@ export function decisionRoute({ root, source, cachedView, store, wake, now, guar
       chunks.push(c);
     }
     const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-    const back = backTo(form.get('back'));
+    const back = backTo(form.get('back'), form.get('from') || '');
     if (!proofValid(root, form.get('proof'))) return badProof(send);
     const t = now();
     const slot = reserveCooldown(root, 'inbox', t, INBOX_COOLDOWN_MS);
     if (!slot.ok) {
       const wait = String(Math.max(1, Math.ceil((slot.retryAt - t) / 1000)));
-      return send(303, 'text/plain; charset=utf-8', 'too soon', { location: `/?notice=inbox-cooldown${back.slice(1)}`, 'retry-after': wait });
+      const location = back.startsWith('/inbox') ? back : `/?notice=inbox-cooldown${back.slice(1)}`;   // issue #1477: the Inbox page has no notice, so it returns to itself
+      return send(303, 'text/plain; charset=utf-8', 'too soon', { location, 'retry-after': wait });
     }
     const prepared = await cachedView({ root, config: source(), now: t, configError: source.invalid, timeline: false, allTime: false });
     const found = resolveClick(prepared.view, { card: form.get('card') || '', control: form.get('control') || '', supersededBy: form.get('superseded_by') || '' });

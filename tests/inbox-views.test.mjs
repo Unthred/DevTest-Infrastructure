@@ -10,6 +10,11 @@ import { handler, STATIC } from '../supervisor/dashserver.mjs';
 import { inboxViews, tableRow, compactRow } from '../supervisor/inbox-views.mjs';
 import { COLUMNS, ageText, decisionForms, defaultView, rowOf, sanitizePrefs, sortRows, stateMark } from '../supervisor/dashui/inbox-views.mjs';
 import { buildInbox, LONG_TITLE } from './helpers/inbox-views-fixture.mjs';
+import { DECISION_CARDS, writeDecisionState } from './helpers/inbox-decision-fixture.mjs';
+import { inboxCard } from '../supervisor/inbox-page.mjs';
+import { backTo } from '../supervisor/decisionreply.mjs';
+import { writeToken } from '../supervisor/dashwrite.mjs';
+import { allStatuses } from '../supervisor/inbox.mjs';
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const fakeForm = (id, decision, label, cls) => `<form class="inbox-form"><button class="btn ${cls}">${label}</button></form>`;
@@ -349,4 +354,106 @@ test('the real /inbox page, from job records on disk, shows the Running rows and
   const all = await s.get('/inbox');
   assert.match(all.body, /running now/);
   assert.doesNotMatch(all.body, /data-job=/);
+});
+
+// ---- Issue #1477: a decision card's row carries the card's own controls, in all three views
+// The real dashboard handler over the four cards of 14 Nov 2026 (tests/helpers/inbox-decision-fixture.mjs) and a prompt row beside them.
+async function serveDecisions(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iv1477-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'jobs'), { recursive: true });
+  const extra = writeDecisionState(root);
+  const inboxDir = path.join(root, 'inbox');
+  buildInbox(inboxDir);
+  const config = { schema_version: 1, enabled: true, repository: 'o/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, ...extra, inbox: { dir: inboxDir },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
+  const server = http.createServer();
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise(r => { server.close(r); server.closeAllConnections(); }));
+  const port = server.address().port;
+  server.on('request', handler({ wake: () => {}, root, config, host: '127.0.0.1', port, now: () => Date.now() }));
+  const req = (method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: { host: `127.0.0.1:${port}`, ...headers } }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); });
+    r.on('error', reject);
+    if (body) r.write(body);
+    r.end();
+  });
+  const post = (fields, { json = false } = {}) => req('POST', '/decision', { headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/x-www-form-urlencoded', ...(json ? { accept: 'application/json' } : {}) }, body: new URLSearchParams({ proof: writeToken(root), ...fields }).toString() });
+  return { get: p => req('GET', p), post, inboxDir };
+}
+const buttonsOf = html => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(m => m[1]);
+// The html of one row in each view, by the item id.
+function rowsOf(page, id) {
+  const cut = (re, end) => { const i = page.search(re); return i < 0 ? '' : page.slice(i).split(end)[0]; };
+  return {
+    cards: cut(new RegExp(`<li class="inbox-item" id="att-inbox-${id}"`), '</li>'),
+    table: cut(new RegExp(`<tr data-id="${id}"`), '</tr>'),
+    compact: cut(new RegExp(`<li class="iv-crow" data-id="${id}"`), '</li><li class="iv-crow"') ,
+  };
+}
+
+test('GET /inbox: each decision row of 14 Nov 2026 shows exactly its card controls in the Cards, Table and Compact views', async t => {
+  const s = await serveDecisions(t);
+  const page = (await s.get('/inbox?state=waiting')).body;
+  for (const [id, labels] of Object.entries(DECISION_CARDS)) {
+    const views = rowsOf(page, id);
+    for (const [view, html] of Object.entries(views)) {
+      assert.ok(html, `${id} has a row in ${view}`);
+      assert.deepEqual(buttonsOf(html), labels, `${id} in ${view}`);
+      assert.ok(!html.includes('class="btn inbox-approve"') && !html.includes('inbox-reject'), `${id} in ${view} has no plain Approve or Reject`);
+    }
+  }
+});
+test('GET /inbox: Close as superseded keeps its required input in every view, and a prompt row beside the cards keeps Approve and Reject', async t => {
+  const s = await serveDecisions(t);
+  const page = (await s.get('/inbox?state=waiting')).body;
+  for (const [view, html] of Object.entries(rowsOf(page, 'fixlimit-1146'))) {
+    assert.match(html, /<input class="decision-input" type="text" name="superseded_by" required maxlength="60"/, view);
+    assert.equal([...html.matchAll(/name="superseded_by"/g)].length, 1, `${view}: one input`);
+  }
+  const prompt = page.match(/<tr data-id="[a-f0-9]{32}"[^]*?<\/tr>/)[0];
+  assert.deepEqual(buttonsOf(prompt), ['Approve', 'Reject']);
+  assert.match(prompt, /class="acts iv-acts"/);
+});
+test('POST /decision from the Inbox page: without script it returns to the Inbox at the same filter and the row; the row then shows Working in all views', async t => {
+  const s = await serveDecisions(t);
+  const page = (await s.get('/inbox?state=waiting&kind=decision')).body;
+  const form = rowsOf(page, 'split-stuck-1175').table.match(/<form[^>]*>[^]*?Reject split<\/button><\/form>/)[0];
+  assert.match(form, /name="back" value="att-inbox-split-stuck-1175"/);
+  assert.match(form, /name="from" value="\/inbox\?state=waiting&amp;kind=decision"/);
+  const r = await s.post({ card: 'split-stuck-1175', control: 'reject_split', back: 'att-inbox-split-stuck-1175', from: '/inbox?state=waiting&kind=decision' });
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.location, '/inbox?state=waiting&kind=decision#att-inbox-split-stuck-1175');
+  const clicks = allStatuses(s.inboxDir).filter(x => x.click);
+  assert.deepEqual(clicks.map(x => [x.click.card, x.click.action, x.click.target]), [['split-stuck-1175', 'reject_split', '1175']], 'the click is recorded');
+  const after = (await s.get('/inbox?state=waiting&kind=decision')).body;
+  for (const [view, html] of Object.entries(rowsOf(after, 'split-stuck-1175'))) {
+    assert.match(html, /data-state="working"[^>]*>Working: Reject split recorded/, view);
+    assert.deepEqual(buttonsOf(html), ['Approve split', 'Unpark'], `${view}: the recorded control is not offered again`);
+  }
+});
+test('POST /decision with script from the Inbox page answers JSON, records the click and leaves other cards alone', async t => {
+  const s = await serveDecisions(t);
+  const r = await s.post({ card: 'split-stuck-1175', control: 'reject_split', back: 'att-inbox-split-stuck-1175', from: '/inbox?state=waiting' }, { json: true });
+  assert.equal(r.status, 200);
+  assert.equal(JSON.parse(r.body).outcome, 'done');
+  assert.equal(allStatuses(s.inboxDir).filter(x => x.click?.action === 'reject_split').length, 1);
+  const after = (await s.get('/inbox?state=waiting')).body;
+  assert.deepEqual(buttonsOf(rowsOf(after, 'fixlimit-1146').table), ['Extra fix round', 'Close as superseded', 'Unpark']);
+});
+test('a return address that is not an Inbox page is ignored: the post returns to the Overview card', () => {
+  for (const from of ['//evil.example/inbox', 'https://evil.example/inbox', '/inbox/../x', '/inboxes', '/inbox?a="b', '/inbox?' + 'a'.repeat(400), '']) {
+    assert.equal(backTo('att-x', from), '/#att-x', from);
+  }
+  assert.equal(backTo('att-x', '/inbox?state=all&search=a+b'), '/inbox?state=all&search=a+b#att-x');
+  assert.equal(backTo('', '/inbox?state=all'), '/inbox?state=all');
+  assert.equal(backTo('att-x'), '/#att-x');
+});
+test('a decision record with no card shows its Decision text and no button, and a card with an error shows the error', () => {
+  const none = { id: 'split-x-1', kind: 'decision', state: 'pending', decision: true, title: 'No card', body: 'Choose A or B', card: null };
+  const broken = { ...none, id: 'split-x-2', title: 'Broken card', card: { type: null, error: 'Foreman raised "x", which this dashboard has no decision entry for.' } };
+  const html = inboxViews({ records: [none, broken], now: NOW, ...ctx, cardsHtml: [none, broken].map(r => inboxCard(r, '', { esc, tag: () => '', form: fakeForm })).join(''), returnTo: '/inbox?state=waiting' });
+  assert.ok(!/decision-control|inbox-approve|inbox-reject/.test(html), 'no card or Approve button anywhere');
+  assert.equal([...html.matchAll(/Decision: Choose A or B/g)].length, 3, 'the text shows once in each of the three views');
+  assert.equal([...html.matchAll(/Error: Foreman raised/g)].length, 3, 'the error shows in each view');
 });

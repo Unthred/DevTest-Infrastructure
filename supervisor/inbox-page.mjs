@@ -1,5 +1,5 @@
 import { highlightInboxText } from '../foreman-mcp/inbox-search.mjs';
-import { inboxViews } from './inbox-views.mjs';
+import { decisionControls, inboxViews } from './inbox-views.mjs';
 import { decisionForms } from './dashui/inbox-views.mjs';
 import { inboxAllRecords } from '../foreman-mcp/inbox-search-records.mjs';
 import { applyFilters, countButtons, describeFilters, parseFilters } from './inbox-filter.mjs';
@@ -11,19 +11,32 @@ const highlighted = (text, query, esc) => highlightInboxText(text, query)
   .map(part => (part.matched ? `<mark>${esc(part.text)}</mark>` : esc(part.text)))
   .join('');
 
-export function inboxCard(card, query, { esc, tag, form }) {
+// Issue #1477: the Inbox address a decision post returns to without script: the same state, kind and search. A search too long for the
+// route's address check is left out, so the viewer still lands on the page.
+const returnPath = ({ state, kind, search }) => {
+  const q = new URLSearchParams({ state });
+  if (kind) q.set('kind', kind);
+  if (search && encodeURIComponent(search).length <= 150) q.set('search', search);
+  return `/inbox?${q}`;
+};
+
+export function inboxCard(card, query, { esc, tag, form, returnTo = '' }) {
   const reference = card.reference ? `<span class="inbox-ref">${highlighted(card.reference, query, esc)}</span> ` : '';   // issue #1414
   const title = reference + highlighted(card.title || 'An inbox item that cannot be shown', query, esc);
   const why = card.why ? `<div class="sub">Why: ${highlighted(card.why, query, esc)}</div>` : '';
   const body = highlighted(card.text || '', query, esc);
   const { approve, reject } = decisionForms(card, form);
   const tagHtml = card.decision === true ? '' : tag(card.id, card.kind);
+  const isDecision = card.decision === true;
+  // Issue #1477: the card's own controls stand in place of the plain Decision text.
+  const asRow = { id: card.id, card: card.card, options: card.body };
+  const decisionPart = isDecision ? decisionControls(asRow, { returnTo, withText: true }) : '';
+  const actions = isDecision ? '' : `<div class="acts">${approve}${reject}</div>`;
   const will = card.will ? `<div class="sub">${esc(card.will)}</div>` : '';
-  const options = card.decision === true && card.body ? `<div class="sub">Decision: ${highlighted(card.body, query, esc)}</div>` : '';
   return `<li class="inbox-item" id="att-inbox-${esc(card.id)}" data-inbox="${esc(card.id)}">
 <h3 class="inbox-title t">${title}</h3><div class="sub">${esc(card.kind || 'unknown')} · ${esc(card.state || 'unknown')} ${tagHtml}</div>${why}${will}
-<pre class="inbox-text">${body}</pre>${options}<div class="sub">${card.hash ? `Content hash ${esc(card.hash)}` : ''}</div>
-<div class="acts">${approve}${reject}</div><div class="inbox-err" role="alert" hidden></div><span class="inbox-outcome" hidden></span></li>`;
+<pre class="inbox-text">${body}</pre>${decisionPart}<div class="sub">${card.hash ? `Content hash ${esc(card.hash)}` : ''}</div>
+${actions}<div class="inbox-err" role="alert" hidden></div><span class="inbox-outcome" hidden></span></li>`;
 }
 
 export function inboxSummary(view, esc) {
@@ -41,10 +54,11 @@ export function inboxPage(view, query, { card, decided, esc, form, grid, tag }) 
   const current = parseFilters(query, counts);
   const visible = current.state === 'running' ? applyFilters(running.rows, { ...current, state: 'all' }) : applyFilters(records, current);
   const highlight = text => highlighted(text, current.search, esc);
-  const cardOf = item => (item.kind === 'job' ? jobCard(item, view.generatedAt, { esc, highlight }) : inboxCard(item, current.search, { esc, tag, form }));
+  const returnTo = returnPath(current);
+  const cardOf = item => (item.kind === 'job' ? jobCard(item, view.generatedAt, { esc, highlight }) : inboxCard(item, current.search, { esc, tag, form, returnTo }));
   const cardsHtml = `<ul class="panel-list">${visible.map(cardOf).join('')}</ul>`;
   const result = visible.length
-    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml, form })}`
+    ? `<p class="sub" role="status">${visible.length} matching Inbox item${visible.length === 1 ? '' : 's'}</p>${inboxViews({ records: visible, now: view.generatedAt, esc, highlight, cardsHtml, form, returnTo })}`
     : emptyResult(describeFilters(current), esc, current.state === 'running' && !current.kind && !current.search);
   const script = '<script type="module" src="/static/inbox-filter.mjs"></script>';
   const body = runningLine(running.jobsRunning, esc) + chipRows(current, counts, esc) + filterForm(current, esc) + result + decided(view) + script;
