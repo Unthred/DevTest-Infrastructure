@@ -84,6 +84,19 @@ test('a short window that cannot cover the job skips that agent even though the 
   assert.match(act.choice.candidates[0].skipped, /short window cannot cover the job/);
 });
 
+test('a projected overrun of the short window no longer holds the job while the window has room (issue #1424)', async t => {
+  const rising = (used, short) => ({ ...withShort('big', used, short), observedAt: NOW - HOUR / 4 });
+  const earlier = { allowance: { big: rising(0.1, 0.0) } };
+  const w = world(t, { budget: CAPS, issues: ONLY_23, jobRecords: [...history('big', 1e5, 0), ...history('small', 1e5, 10)],
+    allowance: { big: withShort('big', 0.1, 0.25), small: { ...weekly('small', 0.1), status: 'allowed' } }, snapshots: [earlier] });
+  w.team.c.limits.provider_roles = { codex: { implementer: 0 } };
+  const [act] = implementOf(await w.team.plan());
+  const row = act.choice.candidates.find(c => c.id === 'big');
+  assert.ok(row.shortRoom < 0, `projected short room ${row.shortRoom}`);
+  assert.ok(row.shortActualRoom > 0.7);
+  assert.equal(act.agent, 'big');
+});
+
 test('an agent named unlike its provider gets the same recent rate', async t => {
   // The newest reading is the provider's record; the earlier readings are the agent's snapshots. A lookup by agent name finds no newest reading.
   const earlier = { allowance: { big: { ...weekly('big', 0.05), observedAt: NOW - 1.5 * HOUR } } };

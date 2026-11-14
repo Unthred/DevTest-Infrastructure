@@ -43,8 +43,14 @@ function rateOf(candidate, kind) {
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
 }
 
+// Actual room is what the window has left now; it alone refuses a candidate (issue #1424).
+function actualRoomOf(window) {
+  return 1 - window.used;
+}
+
+// Projected room carries the recent rate to the reset; it only ranks candidates.
 function roomOf(window, rate, now) {
-  return 1 - window.used - rate * hoursUntil(window.resetsAt, now);
+  return actualRoomOf(window) - rate * hoursUntil(window.resetsAt, now);
 }
 
 function requiredTarget(candidates) {
@@ -63,7 +69,11 @@ function choiceCost(row) {
   return row.expectedShare / Math.max(row.spare, MIN_SPARE);
 }
 
+// A negative projected spare ranks after every candidate with a non-negative one; it still qualifies (issue #1424).
 function compare(left, right) {
+  const leftOver = left.spare < 0;
+  const rightOver = right.spare < 0;
+  if (leftOver !== rightOver) return leftOver ? 1 : -1;
   const costDifference = choiceCost(left) - choiceCost(right);
   if (Math.abs(costDifference) > EPSILON) return costDifference;
   const leftPreferred = left.pin === 'preferred';
@@ -75,9 +85,14 @@ function compare(left, right) {
 function ruleOf(winner, runnerUp) {
   if (winner.pin === 'required') return 'required pin';
   if (!runnerUp) return 'only qualifying candidate';
+  if (winner.spare >= 0 && runnerUp.spare < 0) return 'non-negative projected spare';
   if (Math.abs(choiceCost(winner) - choiceCost(runnerUp)) > EPSILON) return 'least plan cost';
   if (winner.pin === 'preferred' && runnerUp.pin !== 'preferred') return 'preferred pin';
   return 'config order';
+}
+
+function shortRefusal(actualRoom, jobShare) {
+  return `short window cannot cover the job: actual short room ${percent(actualRoom)} is below the job's ${percent(jobShare)}`;
 }
 
 function rowOf(candidate, order, target, now) {
@@ -93,8 +108,9 @@ function rowOf(candidate, order, target, now) {
   const shortRoom = short && Number.isFinite(short.used) && Number.isFinite(short.resetsAt)
     ? roomOf(short, shortRate, now)
     : null;
+  const shortActualRoom = short && Number.isFinite(short.used) ? actualRoomOf(short) : null;
   const unknownShort = short === null;
-  const shortCannotCover = !reason && shortRoom !== null && shortRoom < candidate.share.short;
+  const shortCannotCover = !reason && shortActualRoom !== null && shortActualRoom < candidate.share.short - EPSILON;
   return {
     id: candidate.id,
     order: candidate.order ?? order,
@@ -109,8 +125,9 @@ function rowOf(candidate, order, target, now) {
     recentRate: weeklyRate,
     shortRate,
     shortRoom,
+    shortActualRoom,
     shortWindow: unknownShort ? 'unknown' : (shortProblem ? 'invalid' : 'known'),
-    skipped: reason ?? (shortCannotCover ? 'short window cannot cover the job' : null),
+    skipped: reason ?? (shortCannotCover ? shortRefusal(shortActualRoom, candidate.share.short) : null),
   };
 }
 
@@ -144,7 +161,7 @@ export function describeChoice(result) {
       ? 'short window unknown'
       : row.shortWindow === 'invalid'
         ? 'short room unknown'
-        : `short room ${percent(row.shortRoom)}`;
+        : `actual short room ${percent(row.shortActualRoom)}; projected short room ${percent(row.shortRoom)}`;
     const slot = row.freeSlot ? 'free slot' : 'full slot';
     const decision = row.skipped ? `skipped: ${row.skipped}` : 'qualifies';
     return `${row.id}: ${spare}; ${share}${note}; recent rate ${percent(row.recentRate)}/h; ${short}; ${slot}; ${decision}`;
