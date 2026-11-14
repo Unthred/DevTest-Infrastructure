@@ -199,3 +199,21 @@ test('the real reconcile command accepts --wake known-time and records the time 
   assert.ok(rec && rec.at > Date.now(), 'the pass end recorded the time');
   assert.equal(rec.at, JSON.parse(fs.readFileSync(path.join(root, 'jobs', `${'a'.repeat(32)}.json`), 'utf8')).nextAttemptAt + MARGIN_MS);
 });
+
+test('an unreadable local config cannot abort the pass: the result is still printed and nothing is recorded', t => {
+  const root = world(t, { jobs: [pausedJob('a'.repeat(32), Date.now() + 3600000)], reading: null });
+  fs.chmodSync(root, 0o700);
+  fs.writeFileSync(path.join(root, 'team.local.json'), '{bad');
+  const run = spawnSync(process.execPath, [cli, 'reconcile', '--wake', 'known-time', '--state-root', root],
+    { encoding: 'utf8', timeout: 120000 });
+  assert.doesNotMatch(run.stderr, /ai-supervisor: unreadable team\.local\.json\n\s+at /, 'the pass-end step did not throw');
+  assert.doesNotThrow(() => JSON.parse(run.stdout.trim().split('\n').pop()), `the pass printed its result: ${run.stdout}${run.stderr}`);
+  assert.match(run.stderr, /known time not recorded/);
+});
+
+test('recordPassEnd with a loader that throws logs and returns null', t => {
+  const logs = [];
+  const out = recordPassEnd({ root: world(t), config: () => { throw new Error('unreadable'); }, log: l => logs.push(l) });
+  assert.equal(out, null);
+  assert.match(logs.join('\n'), /known time not recorded/);
+});

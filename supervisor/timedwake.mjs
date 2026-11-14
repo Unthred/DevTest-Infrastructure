@@ -75,9 +75,10 @@ export function recordNextStartable(root, found, now) {
 }
 
 // The pass end step: works out and records the earliest known startable time. Logs why when nothing is armed. Never throws.
+// `config` is a team config or a function that loads one, so an unreadable config is caught here and cannot abort the pass.
 export function recordPassEnd({ root, config, now = Date.now(), log = line => console.error(line) }) {
   try {
-    const found = earliestStartable(inputsFromState(root, config, now));
+    const found = earliestStartable(inputsFromState(root, typeof config === 'function' ? config() : config, now));
     recordNextStartable(root, found, now);
     if (found.at === null && found.why !== 'nothing waits on a known time') log(`ai-supervisor: no known-time wake armed: ${found.why}`);
     return found;
