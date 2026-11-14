@@ -40,6 +40,7 @@ import { outcomeRedirect } from './probeoutcome.mjs';
 import { listRuns, readRun, readEvidenceFile, parseFilePath, DEFAULT_EVIDENCE_ROOT } from './evidence.mjs';
 import { buildDiagnostics, readDiskSamples, readRecorder, DAY_MS, DEFAULT_RECORDER_DIR } from './diagnostics.mjs';
 import { wakeView, requestWake, spawnDetachedPass, spawnDetachedLane, inboxWatcher, inboxScanDone } from './wake.mjs';
+import { createTimedWake } from './timedwake.mjs';
 import * as inboxStore from './inbox.mjs';
 import { inboxApiReply } from './inbox-api.mjs';
 import { controlsOf } from './controlactions.mjs';
@@ -432,6 +433,8 @@ export function serve({ root, config, host, port = DEFAULT_PORT, evidenceRoot })
     try { if (inboxScanDone(root, src(), inboxStore.scan)) return; } catch { /* fall back to a pass */ }
     try { defaultWake(root, 'inbox', src()); } catch { /* the schedule is the fallback */ }
   } }) : { stop() {} };
-  server.once('close', () => watcher.stop());
+  // Issue #1408: one timer for the earliest known time work becomes startable, armed again from state each time this process starts.
+  const timed = createTimedWake({ root, config: src, wake: () => defaultWake(root, 'known-time', src()) });
+  server.once('close', () => { watcher.stop(); timed.stop(); });
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
 }

@@ -49,6 +49,7 @@ import { handInstall, handInstallHold } from './handinstall.mjs';
 import { SelfUpgrade, QUIET_MAX_WAIT_MS, MIN_INSTALL_GAP_MS, holdOf, realDeps, runningSha, liveTickOutcome, classifySkips } from './upgrade.mjs';
 import { dirLock, requestWake, spawnDetachedPass, recordWakePass, TRIGGERS, workerArgs, wakeStatus, WAKE_MAX_PER_HOUR } from './wake.mjs';
 import { drivePass } from './wakepass.mjs';
+import { recordPassEnd } from './timedwake.mjs';
 import { activeJobSummary } from './incomplete.mjs';
 const self = fileURLToPath(import.meta.url);
 function args(list) {
@@ -676,6 +677,7 @@ async function main() {
         try { result.selfUpgrade = before.error ? { error: before.error } : await selfUpgradeAfter(root, registry, before, result.team); } catch (error) { result.selfUpgrade = { error: String(error.message).slice(0, 200) }; }
         installsMs += Date.now() - afterStart;
         if (result.team && !result.team.skipped && !result.team.error) addPassPhases(root, { installs: installsMs });
+        recordPassEnd({ root, config: loadTeamConfig(teamConfigFile, root) });   // issue #1408: the earliest known startable time
         // Issue #406: this process ran the old code and dispatched nothing after an install; ask for a pass on the new code now. The request is
         // seen when this pass releases the pass lock, so the follow-up runs the installed code and verifies the install.
         if (before.result === 'upgraded') wakeNextJob(root, 'install');
