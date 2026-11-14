@@ -3,7 +3,7 @@
 import { readTier } from '../tier.mjs';
 
 export const MAX_TEXT = 300;
-const SKIPPED_LINE = /^(#{1,6}\s|<!--|Tier\s*:|Prerequisites?\b)/i;
+const SKIPPED_LINE = /^(#{1,6}\s|<!--|Tier\s*:|Prerequisites?\b|\*{0,2}Depends\s+on\*{0,2}\s*:)/i;
 const LEADING_ITEM_NUMBER = /^\s*V2[\s-]*(?:item[\s-]*)?\d+[\s:.–—-]*/i;
 // A code word closing a title is one capitalised word after a lower case one ("... gives the version Aboutfacts").
 // A capitalised word after a capitalised word is a name ("Home Assistant") and stays.

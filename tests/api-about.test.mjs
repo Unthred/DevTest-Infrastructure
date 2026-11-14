@@ -187,3 +187,29 @@ test('wording: tiers map to groups and a body with no sentence falls back to the
   assert.equal(describeChange(5, undefined, { number: 3, title: 'Fix it Codeword', body: 'Tier: 0\n## Only a heading' }).text, 'Fix it');
   assert.equal(describeChange(5, undefined, undefined).text, 'Pull request 5');
 });
+
+test('a rolled back install is not listed as a version or marked current', async t => {
+  const lines = [
+    ...realRecords(),
+    record(NOW - 3600000, 'upgraded', { prs: [2] }, NEW, THIRD),
+    record(NOW - 3000000, 'rolled_back', { prs: [2], reason: 'x' }, NEW, THIRD),
+  ];
+  const data = await about(t, { lines, installed: NEW });
+  assert.deepEqual(data.installs.map(i => [i.short, i.current]), [['f748e46', true]]);
+});
+
+test('an install of the same commits again after a rollback keeps its new install time', async t => {
+  const again = NOW - 1000000;
+  const lines = [
+    record(NOW - 3600000, 'upgraded', { prs: [2] }, NEW, THIRD),
+    record(NOW - 3000000, 'rollback_failed', { prs: [2] }, NEW, THIRD),
+    record(again, 'upgraded', { prs: [2] }, NEW, THIRD),
+  ];
+  const data = await about(t, { lines, installed: THIRD });
+  assert.equal(data.installs[0].at, new Date(again).toISOString());
+});
+
+test('wording: a Depends on line, plain or bold, is skipped like a prerequisite line', () => {
+  assert.equal(firstSentence('Tier: 3\nDepends on: #12, #15\n\nThe real sentence.'), 'The real sentence.');
+  assert.equal(firstSentence('Tier: 3\n**Depends on**: #12\n\nThe real sentence.'), 'The real sentence.');
+});

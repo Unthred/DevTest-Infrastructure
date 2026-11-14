@@ -22,6 +22,8 @@ const commit = sha => (sha ? { commit: sha, short: sha.slice(0, 7) } : null);
 function versionsOf(records) {
   const byPair = new Map();
   for (const r of records) {
+    // A rollback undoes that install: the pair is dropped, and a later install of the same pair starts afresh.
+    if (['rolled_back', 'rollback_failed'].includes(r.result) && r.from && r.to) byPair.delete(`${r.from}>${r.to}`);
     if (!['upgraded', 'verified'].includes(r.result) || !r.to || !r.from || r.from === r.to || !Number.isFinite(r.at)) continue;
     const pair = byPair.get(`${r.from}>${r.to}`) ?? { to: r.to, installedAt: null, verifiedAt: null, prs: new Set() };
     if (r.result === 'upgraded') pair.installedAt ??= r.at;
