@@ -1,0 +1,72 @@
+{
+ "pr": 1367,
+ "reviewedHead": "038cc8c9b6eda495932e09ae4f1c063af21b4d0a",
+ "fixHead": "a5499a4d2b0e0507d733f567ac420a1ac40cce0d",
+ "fixFiles": [
+  "docs/api-contract.md",
+  "supervisor/agenticon.mjs",
+  "tests/agenticon.test.mjs"
+ ],
+ "blocking": [
+  {
+   "kind": "blocking",
+   "text": "Requirement 3 (security check) not met: supervisor/agenticon.mjs compares the whole qualified tag name, so a namespace-prefixed script or foreignObject element passes. Probed at the head: checkIcon('<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:s=\"http://www.w3.org/2000/svg\"><s:script>alert(1)</s:script></svg>') returns {ok:true}, and the same holds for <s:foreignObject/>. In XML these are real SVG script and foreignObject elements, and a prefixed script is a well-known way around SVG sanitisers. The requirement says none 'anywhere', and the intent is that nothing unsafe placed in the folder reaches a browser. The route's CSP (default-src 'none'; sandbox) reduces the impact, but the pure check is the gate the issue specifies. Fix: compare the local name (the text after the last ':') and add tests for prefixed script and foreignObject."
+  },
+  {
+   "kind": "blocking",
+   "text": "Requirement 3 'a reference to anything other than a fragment inside the same file' is not enforced for references made by SVG animation, or by a url in a style element written with a CSS escape. Probed at the head, each returns {ok:true}: <a><set attributeName=\"href\" to=\"javascript:alert(1)\"/></a>; <use href=\"#a\"><animate attributeName=\"href\" values=\"http://e/x.svg#a\"/></use>; <style>path{fill:\\75rl(http://e/x)}</style> (CSS reads \\75rl( as url(). Fix: refuse set and animate elements whose attributeName is href or xlink:href (or refuse non-fragment to/values/from/by on them), treat a backslash escape in a style block as unsafe (or decode CSS escapes before testing for url/@import), and add tests for each case."
+  }
+ ],
+ "requirements": [
+  {
+   "requirement": "1. New route module answers GET /api/v1/agent-icon/{agent}, serving <state root>/agent-icons/<agent>.svg",
+   "status": "met",
+   "evidence": "supervisor/api/routes/agent-icon.mjs (new); supervisor/agenticon-file.mjs:24 path.join(root, ICON_DIR, `${agent}.svg`); test 'a star saved for claude is served...' passes"
+  },
+  {
+   "requirement": "2. Lookup by configured agent id only, request text never joined to a directory; unknown agent or missing file answer 404 not_found",
+   "status": "met",
+   "evidence": "supervisor/agenticon-file.mjs:23 checks configured ids before any path is built; tests cover '..', empty name, slash, %2F, %2e%2e, claude.svg, secret, an unconfigured agent and a missing file, all 404 not_found"
+  },
+  {
+   "requirement": "3. Pure module: at most 20,000 bytes, svg root, no script, foreignObject, on* attribute, non-fragment reference, or style element with import/url; unacceptable file answers 404 and is logged once per change",
+   "status": "not-met",
+   "evidence": "supervisor/agenticon.mjs: the size, root, plain script/foreignObject/onload/href cases and the once-per-change log (agenticon-file.mjs logOnce) work, but prefixed <s:script>/<s:foreignObject>, set/animate href references and a CSS-escaped url in a style element are accepted (see blocking findings)"
+  },
+  {
+   "requirement": "4. Accepted file served as image/svg+xml with no-cache, nosniff and a CSP that allows nothing",
+   "status": "met",
+   "evidence": "supervisor/api/routes/agent-icon.mjs:9-16; router reply() lets the extra headers override the defaults; test checks all three headers"
+  },
+  {
+   "requirement": "5. Each liveboard agent gains icon (route path or null); schema updated and closed",
+   "status": "met",
+   "evidence": "supervisor/api/models/liveboard.mjs:13-16; liveboard.schema.json adds icon to required with a pattern, additionalProperties false kept; schema tests pass"
+  },
+  {
+   "requirement": "6. No logo file added; fixtures are a star and a hexagon",
+   "status": "met",
+   "evidence": "the diff adds only .mjs, .json and .md files; STAR and HEXAGON fixtures in the tests"
+  },
+  {
+   "requirement": "7. Contract document gains the route, folder, file rules and a how-to paragraph including single colour shape on a transparent background",
+   "status": "met",
+   "evidence": "docs/api-contract.md:100-106 'The agent icon' and 'How to add an icon'"
+  },
+  {
+   "requirement": "8. File read when the route or model is requested; no timer, no stored copy",
+   "status": "met",
+   "evidence": "readAgentIcon reads synchronously on each call from the route and the model; no timer; only the logged signatures are kept; test 'the file is read on each request' passes"
+  },
+  {
+   "requirement": "Tests: unit tests in tests/agenticon.test.mjs; real data claude/codex; boundary 20,000/20,001; script, onload, image on another host, foreignObject, not SVG, empty; '..', empty, slash; contract tests over the real dashboard handler",
+   "status": "met",
+   "evidence": "tests/agenticon.test.mjs (6 tests) and tests/api-agent-icon.test.mjs (8 tests) cover every listed case; the full suite passes in the test slot"
+  },
+  {
+   "requirement": "Live check: GET /api/v1/agent-icon/nosuchagent -> 404 contains not_found",
+   "status": "not-applicable",
+   "evidence": "after install; listed under the issue's Live checks and as an After install row (overseer); the local test confirms nosuchagent -> 404 not_found"
+  }
+ ]
+}
