@@ -14,7 +14,7 @@ export const RULE_NAMES = [
   { name: 'bearer scheme', advice: 'Say that the request is authenticated; leave out the scheme word and what follows it.' },
   { name: 'address with password', advice: 'Write the address without its user and secret part.' },
   { name: 'word then separator', advice: 'Use a different word, or reword so no colon or equals sign comes right after that word.' },
-  { name: 'word then separator', advice: 'Use a different word, or reword so no colon, equals sign or space comes right after that flag.' },
+  { name: 'word then separator', advice: 'Use a different word, or reword so no equals sign or space comes right after that flag.' },
 ];
 
 // { name, advice, line } for the first rule that changes the text, or null when none does.

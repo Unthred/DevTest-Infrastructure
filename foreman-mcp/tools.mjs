@@ -72,14 +72,19 @@ const summariseHeadline = (h, view) => {
 const NO_RATE_NOTE = 'No pounds rate is set in the dashboard view (display.gbpPerUsd), so these figures stay in US dollars.';
 const withoutKeys = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
 const hasRate = v => Number.isFinite(v?.display?.gbpPerUsd);
+const previousInGbp = (prev, v) => ({ value: gbpOf(prev.value, v), totalCostGbp: gbpOf(prev.totalCostUsd, v), unit: 'GBP equivalent' });
 function gbpCard(id, c, v) {
   if (id !== 'cost' && id !== 'waste') return c;
   if (!hasRate(v)) return { ...c, unit: id === 'cost' ? 'USD equivalent' : c.unit, rateNote: NO_RATE_NOTE };
   const prev = c.previous;
   if (id === 'cost') {
     const rest = withoutKeys(c, ['totalCostUsd', 'value', 'unit', 'previous', 'previousValue', 'delta']);
-    const previous = prev ? { ...withoutKeys(prev, ['totalCostUsd', 'value', 'unit']), value: gbpOf(prev.value, v), totalCostGbp: gbpOf(prev.totalCostUsd, v), unit: 'GBP equivalent' } : prev;
-    return { ...rest, value: gbpOf(c.value, v), totalCostGbp: gbpOf(c.totalCostUsd, v), unit: 'GBP equivalent', previous, previousValue: gbpOf(c.previousValue, v), delta: gbpOf(c.delta, v) };
+    const previous = prev ? { ...withoutKeys(prev, ['totalCostUsd', 'value', 'unit']), ...previousInGbp(prev, v) } : prev;
+    const value = gbpOf(c.value, v);
+    const previousValue = gbpOf(c.previousValue, v);
+    // Issue #1433: the delta is the difference of the two pounds figures shown, so the card never disagrees with itself by a penny.
+    const delta = value !== null && previousValue !== null ? Math.round((value - previousValue) * 100) / 100 : gbpOf(c.delta, v);
+    return { ...rest, value, totalCostGbp: gbpOf(c.totalCostUsd, v), unit: 'GBP equivalent', previous, previousValue, delta };
   }
   const rest = withoutKeys(c, ['costUsdEquivalent', 'previous']);
   const previous = prev ? { ...withoutKeys(prev, ['costUsdEquivalent']), costGbpEquivalent: gbpOf(prev.costUsdEquivalent, v) } : prev;

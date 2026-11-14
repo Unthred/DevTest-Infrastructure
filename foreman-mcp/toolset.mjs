@@ -52,6 +52,6 @@ export function createToolset(options) {
 }
 
 // Redacts the values of a JSON answer so it stays parseable; text that is not JSON is redacted as plain text.
-function redactAnswer(text) {
+export function redactAnswer(text) {
   try { return JSON.stringify(redactDeep(JSON.parse(text)), null, 1); } catch { return redact(text); }
 }

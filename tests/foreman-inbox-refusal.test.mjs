@@ -118,7 +118,7 @@ test('#1372: foreman_propose itself refuses a submit-time match naming the rule 
 });
 test('#1380: the advice for the flag form of the last rule covers a space after the flag', () => {
   const flag = checkProposal({ ...DRAFT, body: 'run it with --tok' + 'en ' + hex(8) });
-  assert.match(flag.error, /colon, equals sign or space comes right after that flag\.$/);
+  assert.match(flag.error, /equals sign or space comes right after that flag\.$/);
   const word = checkProposal({ ...DRAFT, body: 'the colour tok' + 'en: crimson' });
   assert.match(word.error, /colon or equals sign comes right after that word\.$/);
 });

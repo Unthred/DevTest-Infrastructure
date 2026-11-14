@@ -10,6 +10,8 @@ import * as inbox from '../supervisor/inbox.mjs';
 import { Team } from '../supervisor/team.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { controlRecords } from '../supervisor/controlactions.mjs';
+import { redactAnswer } from '../foreman-mcp/toolset.mjs';
+import { redact } from '../foreman-mcp/redact.mjs';
 import { createToolset as createTools } from '../foreman-mcp/toolset.mjs';
 import { createInbox } from '../foreman-mcp/inbox.mjs';
 import { controlsFor } from '../foreman-mcp/controlview.mjs';
@@ -108,8 +110,10 @@ test('records: who, when, why and result are readable through foreman_why_blocke
 test('a secret-shaped control reason is redacted and the answer stays valid JSON', async t => {
   const w = world(t);
   const secret = ['gh', 'p_'].join('') + 'A'.repeat(30);
-  const controls = [{ action: 'park', target: '23', by: 'overseer', at: 1, reason: `token: "${secret}" leaked`, state: 'done', result: 'parked' }];
-  const view = { controls, jobs: [], attention: [], queues: {}, issues: [{ number: 23, title: 'T', state: 'OPEN', labels: [] }], prs: [], excluded: [], panels: {}, display: {} };
+  const reason = `token: "${secret}" leaked`;
+  const controls = [{ action: 'park', target: '23', by: 'overseer', at: 1, reason, state: 'done', result: 'parked' }];
+  const issues = [{ number: 23, title: 'T', state: 'OPEN', labels: [] }];
+  const view = { controls, jobs: [], attention: [], queues: {}, issues, prs: [], excluded: [], panels: {}, display: {} };
   const tools = createTools({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 0 });
   const out = (await tools.call('foreman_why_blocked', { kind: 'issue', number: 23 })).text;
   assert.ok(!out.includes(secret));
@@ -154,4 +158,10 @@ test('control records redact and bound reason and result', t => {
   assert.ok(!byTime[3].reason.includes('hunter') && !byTime[3].result.includes('hunter'));
   assert.match(byTime[3].reason, /\[secret\]/);
   assert.equal(byTime[4].result, null);
+});
+test('redactAnswer keeps an answer with a real "token" key valid JSON (it breaks under a whole-text redact)', () => {
+  const answer = JSON.stringify({ ['tok' + 'en']: 'abcdefghijkl', controls: [{ reason: 'ok' }] }, null, 1);
+  const out = redactAnswer(answer);
+  assert.equal(JSON.parse(out).token, '[redacted]');
+  assert.throws(() => JSON.parse(redact(answer)), 'the whole-text redact leaves invalid JSON, so this input proves the fix');
 });
