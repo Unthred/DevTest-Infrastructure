@@ -23,12 +23,19 @@ const pull = (number, state, head = sha(number)) => ({ number, headRefOid: head,
 function world(t, answerAt) {
   const root = tmp(t), clock = { now: 1_000_000 }, spawned = [], reads = [], watchers = [];
   const wake = () => requestWake({ root, reason: 'ci', now: clock.now, spawnPass: r => spawned.push(r) });
-  const tick = pulls => startCiWatchers({ root, pulls, start: h => {
+  // The tick is the real recordTickWithSkips (view -> pendingHeads -> watcher record); only the process start is replaced.
+  const startWatcher = h => {
     const pid = process.pid;   // a live process stands in for the detached watcher: the record names a running pid
     const readHead = async () => { reads.push(clock.now); return answerAt(h, clock.now); };
     watchers.push({ h, done: runWatch({ root, ...h, readHead, wake, now: () => clock.now, sleep: async ms => { clock.now += ms; await Promise.resolve(); } }) });
     return { pid };
-  } });
+  };
+  const tick = pulls => {
+    let out;
+    const team = { c: { repository: 'o/r', agents: {} }, delivered: [], view: { prs: pulls, issues: [] } };
+    recordTickWithSkips(root, { now: clock.now, status: 'ok', jobs: [], ghCalls: 1, team, startWatcher, onWatchers: o => { out = o; } });
+    return out;
+  };
   return { root, clock, spawned, reads, watchers, tick };
 }
 
@@ -160,4 +167,24 @@ test('the tick record starts a watcher for a pending head only for a live tick, 
   assert.ok(fs.existsSync(marker), 'the watcher process read the head through gh');
   recordTickWithSkips(root, { ...base, now: 6000, ghCalls: 5, team: { ...team, view: { prs: [], issues: [] } } });   // no pending head left: no second watcher
   assert.equal(readLastSnapshot(root).ghCalls, 6, "the watcher's read is added to the pass call count");
+});
+
+// The real tick path from the view: the dashboard copy of a pull request drops the check times, so heads must come from the full view.
+test('the tick judges pending on the full view: heads done by the #331 rule or a newer rerun get no watcher, a pending head gets one', async t => {
+  const root = tmp(t), bin = path.join(root, 'bin'), marker = path.join(root, 'read');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\n[ "$1 $2" = "pr view" ] || exit 1\necho "$3" >> ${marker}\necho '{"state":"CLOSED"}'\n`, { mode: 0o755 });
+  const savedPath = process.env.PATH; process.env.PATH = `${bin}:${savedPath}`; t.after(() => { process.env.PATH = savedPath; });
+  const done = { ...pull(1358, 'green'), statusCheckRollup: [{ name: 'test', workflowName: 'ci', status: 'IN_PROGRESS', conclusion: 'SUCCESS', startedAt: '2026-11-13T10:00:00Z', completedAt: '2026-11-13T10:05:00Z' }] };
+  const rerun = { ...pull(1359, 'green'), statusCheckRollup: [
+    { name: 'test', workflowName: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: '2026-11-13T10:10:00Z', completedAt: '2026-11-13T10:12:00Z' },
+    { name: 'test', workflowName: 'ci', status: 'COMPLETED', conclusion: 'FAILURE', startedAt: '2026-11-13T10:00:00Z', completedAt: '2026-11-13T10:02:00Z' }] };
+  const tick = prs => ({ now: 5000, status: 'ok', jobs: [], ghCalls: 1, team: { c: { repository: 'o/r', agents: {} }, delivered: [], view: { prs, issues: [] } } });
+  recordTickWithSkips(root, tick([done, rerun]));
+  await new Promise(r => setTimeout(r, 500));
+  assert.equal(fs.existsSync(marker), false, 'no watcher was started for a head the planner judges green');
+  recordTickWithSkips(root, tick([done, rerun, pull(1360, 'pending')]));
+  const end = Date.now() + 30000;
+  while (!fs.existsSync(marker) && Date.now() < end) await new Promise(r => setTimeout(r, 100));
+  assert.deepEqual(fs.readFileSync(marker, 'utf8').trim().split('\n'), ['1360'], 'only the pending head was watched');
 });

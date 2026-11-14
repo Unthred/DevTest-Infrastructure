@@ -16,8 +16,10 @@ export function recordTickWithSkips(root, args) {
     // listing the skips is best effort; the tick itself is recorded
   }
   if (realTick(args)) {
+    // The full view, not cache.pulls: the dashboard copy drops the check fields that the issue #331 rule and reruns need.
     try {
-      startCiWatchers({ root, pulls: cache.pulls, start: head => spawnWatcher({ root, ...head }) });
+      const out = startCiWatchers({ root, pulls: args.team.view.prs, start: head => (args.startWatcher || spawnWatcher)({ root, ...head }) });
+      args.onWatchers?.(out);   // lets a test see which heads were started, already watched or left to the schedule
     } catch {
       // a watcher that cannot start is left to the scheduled pass
     }
