@@ -5,6 +5,7 @@
 import { SupervisorError } from './core.mjs';
 import { liveJobsFor } from './livejobs.mjs';
 import { SAVED_PREFIX } from './ghclose.mjs';
+import { addReason } from './closedreason-store.mjs';
 
 export const MAX_SUPERSEDERS = 5;
 const SHA = /^[0-9a-f]{40}$/;
@@ -51,6 +52,16 @@ async function checkAll(team, n, by) {
   return { nums, ...found };
 }
 
+export const CLOSE_CALL = 'close_superseded';
+
+// Issue #1460: an issue closed here as not planned has a reason the homeowner approved, so it goes in the record the closed-with-no-reason
+// check reads (a pull request is not counted by that check). A record that cannot take it never undoes the close; the result says so.
+function recordReason(team, n, names, reason) {
+  if (!team.root) return ' (reason not recorded: Foreman has no state folder here)';
+  const written = addReason(team.root, n, { reason: `Superseded by ${names}. ${reason}`, at: team.clock.now(), call: CLOSE_CALL });
+  return written.ok ? '' : ` (reason not recorded: ${written.why})`;
+}
+
 // Returns null for every other action, so the team's inbox pass can try it before its own switch.
 export const closeSupersededApproved = (team, item) => (item.action === 'close_superseded' ? closeSuperseded(team, item) : null);
 
@@ -68,6 +79,7 @@ export async function closeSuperseded(team, { target, superseded_by: by, reason 
   const marker = `Closed as superseded by ${names}.`;
   if (!(await team.gh.hasComment(n, marker))) await team.gh.comment(n, `${marker}${kept} Reason: ${reason}`);
   await team.gh.closeItem(n, pr ? 'pull' : 'issue');
-  team.logUnblock({}, { target: n, tk: pr ? 'pull' : 'issue', what: `closed the ${what} as superseded by ${names}`, why: `homeowner approved on the dashboard: ${reason}`, result: kept ? 'branch saved, closed' : 'closed' });
-  return `${what} #${n} closed, superseded by ${names}${kept ? '; branch saved' : ''}`;
+  const note = pr ? '' : recordReason(team, n, names, reason);
+  team.logUnblock({}, { target: n, tk: pr ? 'pull' : 'issue', what: `closed the ${what} as superseded by ${names}`, why: `homeowner approved on the dashboard: ${reason}`, result: `${kept ? 'branch saved, closed' : 'closed'}${note}` });
+  return `${what} #${n} closed, superseded by ${names}${kept ? '; branch saved' : ''}${note}`;
 }
