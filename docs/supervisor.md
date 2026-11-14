@@ -72,6 +72,29 @@ Cron runs the reconcile script with almost no `PATH`, so `gh`, `codex` and `clau
 - **Idle reasons.** Each idle agent on the dashboard and in `team status` states why in plain words: `waiting for homeowner: fix limit reached on #41`, `only work is draft #28`, `all issues blocked by #3`, `waiting for review of #29`, and so on, with links on the dashboard.
 - **Fix-limit alerts.** When the per-PR fix limit is reached, the one `needs-homeowner` notice is followed immediately by an alert through the same channel as the self-upgrade alerts, carrying the PR link and the decision needed. Every alert is logged to `team/alerts.jsonl`.
 - **Alert channel (explicit, no default).** `team.local.json` names exactly one channel: `"alerts": { "channel": "unraid" }` (the Unraid notify script that feeds the AI channel; production sets this) or `"alerts": { "command": ["/abs/program", "arg"] }` (text on stdin). With neither, nothing is sent: the alert is logged as `delivered:false` with its `error`, the reason is printed to stderr (reconcile.log), and the caller retries. Under the Node test runner the real notify script is refused even when configured, so a test-run tick on Tower cannot notify the homeowner; test fixtures also name an inert `alerts.command`, so migration 003 never gives a test root the Unraid channel. Migration 003 adds `"alerts": { "channel": "unraid" }` to an install that names no route; a rollback (`tools/rollback-supervisor.sh --supervisor`) removes exactly that entry and marks 003 not applied, because the previous version's validator rejects `alerts.channel`. Upgrade alerts raised in the first reconcile of a new version run before the migration and are refused (2026-11-10: about 300 allowance alerts came from test-suite ticks that fell through to the old default).
+- **Alert levels (issue #1421).** Every alert has a level: `action` (the homeowner must decide or do something), `problem` (something failed and Foreman is handling or retrying it) or `info` (something routine happened). The caller gives it where the alert is raised, as `alert(text, { level })`; a caller that gives none gets `action`, and an unknown level is refused with an error. The Unraid route sends `action` with the subject `Tower | Foreman needs you` and `problem` with `Tower | Foreman problem`. `alerts.notify_levels` in `team.local.json` (the host file) lists the levels that are sent; the default is `["action", "problem"]`, and a value that is not a list of `action`, `problem` and `info` is refused when the config loads. It applies to both channels. A level that is not sent is still written to `team/alerts.jsonl` with its `level`, as `delivered:false` with a `skipped` reason and no `error`: it is not a delivery failure, so nothing retries it. Every row carries its `level`, and `foreman_alerts` shows it. A custom `alerts.command` receives the level as the first line of its input, then the alert text. In this slice only `Supervisor upgraded to <sha>` is `info`; all other alerts stay `action`.
+
+  Every place an alert is raised, with the level proposed for the follow-up item that sets the remaining levels (the Level now column is what the code does today):
+
+  | Raised in | Text | Level now | Proposed |
+  | --- | --- | --- | --- |
+  | `upgrade.mjs` upgraded | `Supervisor upgraded to <sha> (<PR names>).` | info | info |
+  | `upgrade.mjs` flaky | `Supervisor upgrade to <sha>: <stage> tests failed in the full run and passed when each failed file ran alone ... The install went ahead.` | action | info |
+  | `upgrade.mjs` diverged | `Supervisor self-upgrade skipped: installed <sha> is not an ancestor of main <sha>.` | action | problem |
+  | `upgrade.mjs` upgrader | `Supervisor upgrade to <sha>: needs the homeowner: changes the bootstrap installer ...` | action | action |
+  | `upgrade.mjs` eligibility | `Supervisor upgrade to <sha> not done: <reason>.` | action | problem |
+  | `upgrade.mjs` pre-check | `Supervisor upgrade to <sha> not done: pre-check failed (<reason>).` | action | problem |
+  | `upgrade.mjs` install-time check | `Supervisor upgrade to <sha> not done: install-time check failed (<reason>).` | action | problem |
+  | `upgrade.mjs` MCP | `Foreman MCP server not updated to <sha>: <reason>. The previous copy was kept ...` | action | problem |
+  | `upgrade.mjs` dashboard restart | `Dashboard server was not restarted on <sha> after the upgrade/rollback: <reason>. ...` | action | problem |
+  | `upgrade.mjs` dashboard down | `Dashboard server was not answering and could not be restarted on <sha>: <reason>. ...` | action | problem |
+  | `upgrade.mjs` rolled back | `Upgrade to <sha> rolled back: <note>. Automatic upgrades are paused until the homeowner clears <file>.` | action | action |
+  | `team.mjs` allowance | `Allowance: <agent mode line>` | action | info |
+  | `team.mjs` lease holder | `Needs the homeowner: <lease text>` | action | action |
+  | `team.mjs` churn | `Needs the homeowner: PR #n drew a new, different set of blocking findings ... Decision needed ...` | action | action |
+  | `team.mjs` fix limit | `Needs the homeowner: PR #n is still rejected (<cause>) after <n> fix rounds ... Decision needed ...` | action | action |
+  | `team.mjs` unblock limit | `Needs the homeowner: Foreman reached <limit>; automatic unblocking has stopped. #n` | action | action |
+  | `pendingstepssync.mjs` | `<n> homeowner steps are still waiting: PR #n (<title>), ... See Needs you on the dashboard.` | action | action |
 - **Fix-limit alert retries.** An alert is retried on later ticks until the channel accepts it, then never repeated, and a failure never undoes the notice.
 
 ## Installs do not wait for running jobs (issue #845, replaces the drain of issue #136)
