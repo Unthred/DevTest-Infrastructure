@@ -105,6 +105,18 @@ test('valid: a batch already held by an older appended line is repaired and late
   assert.equal(report.followUpsRejected, undefined);
 });
 
+
+test('valid: a held older line that also quotes a file name in backticks is repaired and a plain finding is appended', async () => {
+  const marker = '<!-- devtest-followup-batch v1 area=supervisor -->';
+  const held = `${marker}\nBatch.\n- In \`supervisor/x.mjs\` the test uses bodyFault('Depends on: not-an-issue')\n`;
+  assert.equal(clean(held), false, 'the starting body is held');
+  const { run } = writer(held);
+  const { body, report } = await run([PLAIN]);
+  assert.ok(body.includes(PLAIN), body);
+  assert.ok(clean(body), body);
+  assert.equal(report.followUpsRejected, undefined);
+});
+
 test('invalid: a body still held after the one retry is not written and the finding reaches the tick report through the writer', async () => {
   const marker = '<!-- devtest-followup-batch v1 area=supervisor -->';
   // Three real declarations: the retry neutralises only the line the parser names, so two remain and the parser still holds the body.

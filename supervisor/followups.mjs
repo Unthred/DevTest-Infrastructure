@@ -32,7 +32,12 @@ const quotePhrase = text => String(text).split(CODE).map((part, i) => (i % 2 ? p
 const fault = text => { const p = parseDependsOn(text); return p.malformed || p.line ? p : null; };
 const neutralise = text => String(text).split('\n').map(l => (new RegExp(PHRASE.source, 'i').test(l) ? quotePhrase(l.replace(/`/g, "'")) : l)).join('\n');
 
-const neutraliseLine = (text, line) => String(text).split('\n').map(l => (l.trim() === line ? quotePhrase(l.replace(/`/g, "'")) : l)).join('\n');
+// The parser names a line after blanking its code spans, so the line is found by blanking the same way (a held line may also quote a file name in backticks).
+const blank = text => String(text).replace(/```[\s\S]*?```/g, m => m.replace(/[^\n]/g, ' ')).replace(/`[^`\n]*`/g, m => ' '.repeat(m.length));
+const neutraliseLine = (text, line) => {
+  const orig = String(text).split('\n');
+  return blank(text).split('\n').map((b, i) => (b.trim() === String(line).trim() ? quotePhrase(orig[i].replace(/`/g, "'")) : orig[i])).join('\n');
+};
 
 // The sink a tick report passes to appendToBatch: a rejected finding is never dropped, it is listed with its reason (issue #1409).
 export const rejectedSink = (report, id, j, redact) => rejected => {
