@@ -8,13 +8,13 @@ const NOT_OFFERED = 'does not do this job type';
 const REASON_LIMIT = 700;
 const DATA_PROBLEM = /is missing|is not a number|is invalid|or invalid/;   // the core's skip reasons for a reading it cannot use
 
-// The issues budget.choice.pins requires on this agent, so it offers them even when its own list does not name them.
+// A required pin is exclusive: the pinned agent offers its issues first, even when its own list does not name them, and no other agent offers them.
 export function withRequiredPins(config, agent, listed) {
   const pins = config.budget?.choice?.pins ?? {};
-  const pinned = Object.entries(pins)
-    .filter(([, pin]) => pin.mode === 'required' && pin.agent === agent)
-    .map(([issue]) => Number(issue));
-  return [...listed, ...pinned.filter(issue => !listed.includes(issue))];
+  const required = Object.entries(pins).filter(([, pin]) => pin.mode === 'required');
+  const mine = required.filter(([, pin]) => pin.agent === agent).map(([issue]) => Number(issue));
+  const elsewhere = new Set(required.filter(([, pin]) => pin.agent !== agent).map(([issue]) => Number(issue)));
+  return [...mine, ...listed.filter(issue => !mine.includes(issue) && !elsewhere.has(issue))];
 }
 
 // The fields a started job keeps from its choice (none for a job the choice core did not run for).

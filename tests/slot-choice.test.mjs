@@ -131,12 +131,24 @@ test('a required pin brings the issue to its agent', async t => {
   assert.equal(pinned.choice.rule, 'required pin');
 });
 
+test('a required pin holds when the pinned agent also has its own work, and the listed owner does not take the issue', async t => {
+  const budget = { ...CAPS, choice: { pins: { 23: { agent: 'small', mode: 'required' } } } };
+  const roles = { implementer: 2, reviewer: 1 };
+  const plan = implementOf(await world(t, { budget, roles, issues: OPEN, allowance: both() }).team.plan());
+  assert.equal(plan.find(a => a.issue === 23)?.agent, 'small', 'issue 23 goes to the pinned agent');
+  assert.ok(!plan.some(a => a.agent === 'big' && a.issue === 23));
+  const single = implementOf(await world(t, { budget, issues: OPEN, allowance: both() }).team.plan());
+  assert.ok(!single.some(a => a.agent === 'big' && a.issue === 23), 'with one slot the owner still does not take the pinned issue');
+});
+
 test('a required pin waits when its agent has no free slot, and no other agent takes the job', async t => {
   const budget = { ...CAPS, choice: { pins: { 23: { agent: 'small', mode: 'required' } } } };
   const w = world(t, { budget, issues: ONLY_23, allowance: both() });
+  w.team.c.limits.provider_roles = { codex: { implementer: 0 } };   // the real limit that fills the pinned agent's slot
   w.team.providerSlotFull = provider => provider === 'codex';
   assert.deepEqual(implementOf(await w.team.plan()), []);
-  assert.match(w.team.held.big.implement, /small: .*skipped: no free slot/);
+  assert.match(w.team.held.small.implement, /slot full/);
+  assert.equal(w.team.held.big?.implement, undefined, 'the owner does not offer the pinned issue');
 });
 
 test('both agents below their reserve start no implement, but a review and a cifix still run', async t => {
