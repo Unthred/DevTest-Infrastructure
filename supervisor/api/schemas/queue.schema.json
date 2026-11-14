@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "queue.schema.json",
+  "title": "Read model: queue (GET /api/v1/queue, issue #1349)",
+  "allOf": [{ "$ref": "common.schema.json#/$defs/envelope" }],
+  "properties": {
+    "model": { "const": "queue" },
+    "data": {
+      "type": "object",
+      "required": ["summary", "stages", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "$ref": "#/$defs/summary" },
+        "stages": { "type": "array", "items": { "type": "string" } },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/queue_item" } }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "summary": {
+      "type": "object",
+      "required": ["ranked", "held", "parked", "open_changes", "max_open_changes"],
+      "additionalProperties": false,
+      "properties": {
+        "ranked": { "$ref": "#/$defs/count" },
+        "held": { "$ref": "#/$defs/count" },
+        "parked": { "$ref": "#/$defs/count" },
+        "open_changes": { "$ref": "#/$defs/count" },
+        "max_open_changes": { "type": ["integer", "null"] }
+      }
+    },
+    "prerequisites": {
+      "type": "object",
+      "required": ["line_state", "raw_line", "declared", "open"],
+      "additionalProperties": false,
+      "properties": {
+        "line_state": { "enum": ["none", "ok", "malformed"] },
+        "raw_line": { "type": ["string", "null"] },
+        "declared": { "type": "array", "items": { "type": "integer" } },
+        "open": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "change": {
+      "type": ["object", "null"],
+      "required": ["review_rounds", "fix_rounds", "fix_limit", "rebase_attempts", "verdict", "checks", "head"],
+      "additionalProperties": false,
+      "properties": {
+        "review_rounds": { "$ref": "#/$defs/count" },
+        "fix_rounds": { "$ref": "#/$defs/count" },
+        "fix_limit": { "type": ["integer", "null"] },
+        "rebase_attempts": { "$ref": "#/$defs/count" },
+        "verdict": { "enum": ["pass", "changes", null] },
+        "checks": { "enum": ["passing", "failing", "pending", "unknown"] },
+        "head": { "type": ["string", "null"] }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "required": ["tokens", "cost_pence"],
+      "additionalProperties": false,
+      "properties": {
+        "tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "cost_pence": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "queue_item": {
+      "type": "object",
+      "required": [
+        "key", "type", "number", "title", "source", "project", "url", "rank", "rank_of", "agent", "role", "stage",
+        "condition", "prerequisites", "estimated_start_at", "change", "parent_key", "actions", "labels", "usage",
+        "opened_at", "last_activity_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^(issue|change)-[0-9]+$" },
+        "type": { "enum": ["issue", "change"] },
+        "number": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string" },
+        "source": { "type": "string" },
+        "project": { "type": "string" },
+        "url": { "type": ["string", "null"] },
+        "rank": { "type": ["integer", "null"], "minimum": 1 },
+        "rank_of": { "type": ["integer", "null"], "minimum": 1 },
+        "agent": { "type": ["string", "null"] },
+        "role": { "enum": ["implementer", "reviewer"] },
+        "stage": { "enum": ["queued", "implementing", "in_review", "fixing", "rebasing", "ready_to_merge", "merged", "installed", "verified", "parked"] },
+        "condition": { "$ref": "common.schema.json#/$defs/condition" },
+        "prerequisites": { "$ref": "#/$defs/prerequisites" },
+        "estimated_start_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+        "change": { "$ref": "#/$defs/change" },
+        "parent_key": { "type": ["string", "null"], "pattern": "^issue-[0-9]+$" },
+        "actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action" } },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "usage": { "$ref": "#/$defs/usage" },
+        "opened_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] },
+        "last_activity_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    }
+  }
+}

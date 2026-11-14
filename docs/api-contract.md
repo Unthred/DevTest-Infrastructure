@@ -131,6 +131,17 @@ The first row that matches wins. A review's verdict is the one recorded on its o
 
 `laps` is the number of earlier jobs for the same issue or pull request that started inside the last 7 days and whose box was `changes_asked`, `failed` or `out_of_allowance`. The lap count applies the table without its `needs_you` row, so naming the item in Needs you does not remove its laps.
 
+## The queue model
+
+Issue #1349. `GET /api/v1/queue` is the read-only list for a queue screen. It adapts the prepared dashboard view—the same queues, dependency records, last planning ledger, attention entries, estimates and jobs that `foreman_why_blocked` reads—and does not write or call GitHub.
+
+- `items` has one item for every open issue and every open change, plus changes merged on the request's calendar day. A closed issue without a merged change is absent. An issue represented by a change merged today is not repeated. `summary` reports the ranked, held, parked and open-change counts, and `stages` gives the board-column order.
+- Each item has its reference (`key`, `type`, `number`, `title`, `source`, `project`, `url`), `agent`, `role`, `stage`, `condition`, rank fields, prerequisites, estimate, change details, parent key, actions, labels, usage and activity times. `rank` is its place in the estimate queue: next first, then lowest number, including blocked items. `rank_of` is that queue's size; merged-today items have both fields null.
+- `role` is `reviewer` for a running review job or a change awaiting review; otherwise it is `implementer`. An issue that takes its change's state takes that role too. `usage.tokens` is the recorded job total and `usage.cost_pence` is its usage-equivalent USD estimate converted by the configured pounds-per-dollar rate; unknown values are null. Change labels are only the labels the prepared change row retains (`needs-homeowner` today).
+- `condition` is the hold or work state. A dependency uses `waitText` from the dependency module and its recorded `since`; a retry cap uses the attention item's recorded `since`. A slot, host or other planner hold has `since: null`, because Foreman records no start time for it. A malformed prerequisite line is `held`, `fault` and `malformed_prerequisite_line`.
+- `prerequisites.line_state` is `none` when no dependency line was recorded, `ok` for a valid line, or `malformed`; `raw_line` is the recorded line, `declared` is every stated issue number and `open` is the prerequisites not yet installed. Changes have an empty `none` prerequisite record.
+- `actions` is the attention table's actions for that item, including their command input and enabled/refusal data. Items with no matching attention entry carry `[]`; for example a retry cap supplies `work_item.clear_retry_cap`.
+
 ## Schema subset
 
 `validate.mjs` has no imports and supports only `$ref` (same file, and other files by `$id`), `allOf`, `anyOf`, `type` (one or a list), `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minimum`, `maximum`, `pattern` and `format: date-time` (UTC, ending in `Z`). It returns a list of strings, each starting with the path of the fault. Schemas must stay inside this subset.
