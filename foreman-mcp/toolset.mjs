@@ -40,7 +40,8 @@ export function createToolset(options) {
       const out = await base.call(name, args);
       if (out.isError || !WITH_CONTROLS.has(name)) return out;
       const view = await options.source.get().then(r => r.view, () => null);
-      return { ...out, text: withControls(name, args, out.text, view?.controls).slice(0, MAX_TEXT + 4000) };
+      // The controls are added after the answer was redacted, so the combined text is redacted once more before it is bounded.
+      return { ...out, text: redact(withControls(name, args, out.text, view?.controls)).slice(0, MAX_TEXT + 4000) };
     }
     const t = now(); while (calls.length && t - calls[0] > 60000) calls.shift();
     if (calls.length >= CALLS_PER_MINUTE) return { isError: true, text: `rate limit: more than ${CALLS_PER_MINUTE} calls in a minute; try again shortly` };

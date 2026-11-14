@@ -116,3 +116,32 @@ test('a refusal is recorded with its reason, and the tools wait for and return t
   assert.equal(out.state, 'refused'); assert.match(out.reason, /no open issue or pull request #999/);
   const bad = await tools.call('foreman_park', { number: 5 }); assert.equal(bad.isError, true); assert.match(bad.text, /reason must be a non-empty string/);
 });
+// Writes a finished control status the way the inbox store keeps it, so an over-long text (which a proposal cannot carry) is covered too.
+function writeControl(dir, n, { reason, result, state = 'done' }) {
+  const id = n.toString(16).padStart(32, '0');
+  const rec = { id, kind: 'control', state, createdAt: 1000 + n, control: { action: 'park', target: '1139', by: 'overseer', reason, changed: true }, result };
+  fs.writeFileSync(path.join(dir, 'status', `${id}.json`), JSON.stringify(rec));
+  return id.slice(0, 8);
+}
+test('control records redact and bound reason and result', t => {
+  const dir = tmp(t, 'ctlrec-');
+  fs.mkdirSync(path.join(dir, 'status'));
+  const word = n => 'abcd '.repeat(n / 5);
+  const secret = ['pass', 'word'].join('') + '=' + ['hunter', '2horse'].join('');   // assembled at run time; redact masks a password pair
+  writeControl(dir, 1, { reason: 'fix limit reached; split proposed', result: 'pull request #1139 is parked.' });
+  writeControl(dir, 2, { reason: word(300), result: word(300) });
+  writeControl(dir, 3, { reason: word(305).slice(0, 301), result: word(305).slice(0, 301) });
+  writeControl(dir, 4, { reason: `because ${secret} was seen`, result: `done ${secret}` });
+  writeControl(dir, 5, { reason: 'no result yet', result: undefined, state: 'running' });
+  const byTime = controlRecords(dir, inbox).sort((a, b) => a.at - b.at);
+  assert.equal(byTime.length, 5);
+  assert.equal(byTime[0].reason, 'fix limit reached; split proposed');
+  assert.equal(byTime[0].result, 'pull request #1139 is parked.');
+  assert.equal(byTime[1].reason.length, 300);
+  assert.equal(byTime[1].result.length, 300);
+  assert.equal(byTime[2].reason.length, 300);
+  assert.equal(byTime[2].result.length, 300);
+  assert.ok(!byTime[3].reason.includes('hunter') && !byTime[3].result.includes('hunter'));
+  assert.match(byTime[3].reason, /\[secret\]/);
+  assert.equal(byTime[4].result, null);
+});

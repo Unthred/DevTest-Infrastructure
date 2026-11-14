@@ -1,4 +1,4 @@
-# Foreman MCP server (read-only, for the overseer)
+# Foreman MCP server for the overseer
 
 Issue #569, decision D-030 (an agent proposal until the homeowner approves it). A small stdio MCP server that lets the overseer read Foreman's state from Claude desktop, over SSH to a restricted Tower account. It reads, with one exception: the inbox (issue #124, D-031 proposed, below), where it can only propose items for the homeowner to approve on the dashboard.
 
