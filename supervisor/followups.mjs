@@ -1,6 +1,8 @@
 // Issue #864: review follow-ups are batched into one open issue per area, and a PR that keeps drawing new, different blocking
 // findings is stopped early. Pure functions only: no I/O, no model call.
 
+import { parseDependsOn } from '../foreman-mcp/dependency-parser.mjs';
+
 const SEG = s => String(s).split('/').filter(Boolean);
 
 // The area of a pull request: the top-level directory that holds most of its changed files (a root-level file counts as "root").
@@ -21,21 +23,63 @@ export const batchMarker = area => `<!-- devtest-followup-batch v1 area=${area} 
 export const jobMarker = (job, pr, head) => `<!-- devtest-review-followup v1 job=${job} pr=${pr} head=${head} -->`;
 const norm = t => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
 
-// Adds one review's follow-ups to a batch issue body. Idempotent per review job (its marker is in the body already: nothing changes),
-// and a finding whose text is already listed is not added twice. Returns { body, added }.
-export function appendToBatch(body, { job, pr, head, items }) {
-  const marker = jobMarker(job, pr, head);
-  if (String(body).includes(marker)) return { body: String(body), added: 0 };
-  const have = new Set(String(body).split('\n').map(l => norm(l.replace(/^\s*-\s*/, ''))));
-  const fresh = [], seen = new Set();
-  for (const t of items) { const n = norm(t); if (n && !have.has(n) && !seen.has(n)) { seen.add(n); fresh.push(t); } }
-  const section = `${marker}\nFrom PR #${pr} at head \`${head}\`:\n${fresh.length ? fresh.map(t => `- ${t}`).join('\n') : '- _nothing new: every finding was already listed above_'}`;
-  return { body: `${String(body).replace(/\s+$/, '')}\n\n${section}\n`, added: fresh.length };
+// Issue #1409: a finding that quotes the prerequisite phrase must never make the dependency parser hold the batch issue. Every occurrence
+// outside a code span is written inside one (the parser ignores code). A batch issue never has a real declaration, so any line the real
+// parser reads as one (or reports as malformed) is a fault; every line carrying the phrase is neutralised once (the parser blanks code in the line it names), and a finding still faulty is rejected.
+const PHRASE = /\bdepends[ \t]+on\**(?:[ \t]*:)?/gi;
+const CODE = /(```[\s\S]*?```|`[^`\n]*`)/;
+const quotePhrase = text => String(text).split(CODE).map((part, i) => (i % 2 ? part : part.replace(PHRASE, m => `\`${m}\``))).join('');
+const fault = text => { const p = parseDependsOn(text); return p.malformed || p.line ? p : null; };
+const neutralise = text => String(text).split('\n').map(l => (new RegExp(PHRASE.source, 'i').test(l) ? quotePhrase(l.replace(/`/g, "'")) : l)).join('\n');
+
+// The parser names a line after blanking its code spans, so the line is found by blanking the same way (a held line may also quote a file name in backticks).
+const blank = text => String(text).replace(/```[\s\S]*?```/g, m => m.replace(/[^\n]/g, ' ')).replace(/`[^`\n]*`/g, m => ' '.repeat(m.length));
+const neutraliseLine = (text, line) => {
+  const orig = String(text).split('\n');
+  return blank(text).split('\n').map((b, i) => (b.trim() === String(line).trim() ? quotePhrase(orig[i].replace(/`/g, "'")) : orig[i])).join('\n');
+};
+
+// The sink a tick report passes to appendToBatch: a rejected finding is never dropped, it is listed with its reason (issue #1409).
+export const rejectedSink = (report, id, j, redact) => rejected => {
+  if (report) (report.followUpsRejected ||= []).push(...rejected.map(r => ({ job: id, pr: j.pr, reason: r.reason, text: redact(String(r.text), 300) })));
+};
+
+// Returns { text } safe to append, or { reason } when it cannot be made safe. `check` is the parser (injectable for tests).
+export function makeFindingSafe(finding, check = fault) {
+  let text = quotePhrase(finding);
+  let bad = check(`- ${text}`);
+  if (bad) { text = neutralise(text); bad = check(`- ${text}`); }
+  return bad ? { reason: `the dependency parser would still read it as a prerequisite line (${bad.malformed || 'a declaration'})` } : { text };
 }
 
-export function newBatchBody(area, { job, pr, head, items }) {
+// Adds one review's follow-ups to a batch issue body. Idempotent per review job (its marker is in the body already: nothing changes),
+// and a finding whose text is already listed is not added twice. Returns { body, added, rejected: [{ text, reason }] }; a rejected finding
+// is not written, and the caller reports it. A body the parser would hold is never returned changed.
+export function appendToBatch(body, { job, pr, head, items, onRejected }, check = fault) {
+  const marker = jobMarker(job, pr, head);
+  if (String(body).includes(marker)) return { body: String(body), added: 0, rejected: [] };
+  const done = r => { if (r.rejected.length) onRejected?.(r.rejected); return r; };
+  const have = new Set(String(body).split('\n').map(l => norm(l.replace(/^\s*-\s*/, ''))));
+  const fresh = [], rejected = [], seen = new Set();
+  for (const t of items) {
+    const n = norm(t);
+    if (!n || have.has(n) || seen.has(n)) continue;
+    seen.add(n);
+    const safe = makeFindingSafe(t, check);
+    if (safe.reason) rejected.push({ text: t, reason: safe.reason }); else fresh.push(safe.text);
+  }
+  const section = `${marker}\nFrom PR #${pr} at head \`${head}\`:\n${fresh.length ? fresh.map(t => `- ${t}`).join('\n') : '- _nothing new: every finding was already listed above_'}`;
+  let next = `${String(body).replace(/\s+$/, '')}\n\n${section}\n`;
+  let bad = check(next);
+  // A batch already held by an older line is repaired, not left to refuse every later finding: the line the parser names is neutralised and the check runs once more.
+  if (bad?.line) { next = neutraliseLine(next, bad.line); bad = check(next); }
+  if (bad) return done({ body: String(body), added: 0, rejected: [...rejected, ...fresh.map(text => ({ text, reason: 'the batch body would be held by the dependency parser' }))] });
+  return done({ body: next, added: fresh.length, rejected });
+}
+
+export function newBatchBody(area, { job, pr, head, items, onRejected }) {
   const head0 = `${batchMarker(area)}\nBatched non-blocking review findings for the \`${area}\` area. Foreman adds the follow-ups of later reviews here instead of opening one issue per review; one implementer run clears the list. Follow-up from PR #${pr}.`;
-  return appendToBatch(head0, { job, pr, head, items }).body;
+  return appendToBatch(head0, { job, pr, head, items, onRejected }).body;
 }
 
 // A batch is only started when something material is in it: a finding the reviewer wrote. A list made only of immaterial

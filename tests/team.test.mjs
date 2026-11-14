@@ -12,7 +12,7 @@ import * as claude from '../supervisor/adapters/claude.mjs';
 import { ghRunner, githubClient } from '../supervisor/github.mjs';
 import { runProcess } from '../supervisor/process.mjs';
 
-const H = n => String(n).repeat(40).slice(0, 40);
+const H = n => String(n).repeat(40).slice(0, 40), fu = text => ({ kind: 'follow-up', text });
 const green = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
 const config = (over = {}) => ({
   schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p',
@@ -63,7 +63,7 @@ test('helpers: checks state, prerequisites, branch ownership, verdict shape', ()
 
 test('verdict classifications require blocking findings for CHANGES and allow PASS follow-ups', () => {
   const base = { pr: 5, headSha: H(1), commandsRun: ['node --test'] };
-  const follow = { kind: 'follow-up', text: 'Improve the status wording later' };
+  const follow = fu('Improve the status wording later');
   const block = { kind: 'blocking', text: 'Acceptance criterion fails' };
   assert.equal(validateVerdict({ ...base, verdict: 'PASS', findings: [follow] }, { pr: 5, head: H(1) }), null);
   assert.equal(validateVerdict({ ...base, verdict: 'CHANGES', findings: [block, follow] }, { pr: 5, head: H(1) }), null);
@@ -80,7 +80,7 @@ test('verdict classifications require blocking findings for CHANGES and allow PA
 test('PASS follow-ups open one linked issue even if verdict comment posting is retried', async t => {
   const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
   const [id, rec] = Object.entries(w.team.s.jobs)[0];
-  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [{ kind: 'follow-up', text: 'Improve the status wording' }], commandsRun: ['node --test'] });
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [fu('Improve the status wording')], commandsRun: ['node --test'] });
   w.jobs.states[id].status = 'completed';
   let fail = true; const post = w.gh.comment;
   w.gh.comment = async (n, body) => { if (fail) { fail = false; throw new Error('temporary comment failure'); } return post(n, body); };
@@ -96,7 +96,7 @@ test('PASS follow-ups open one linked issue even if verdict comment posting is r
 test('a lost issue-create response reuses the issue on the next ingest', async t => {
   const w = reviewWorld(t); await w.team.execute((await w.team.plan())[0]);
   const [id, rec] = Object.entries(w.team.s.jobs)[0];
-  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [{ kind: 'follow-up', text: 'Document an optional status detail' }], commandsRun: ['x'] });
+  writeVerdict(w, rec.ticket, { pr: 10, headSha: H(1), verdict: 'PASS', findings: [fu('Document an optional status detail')], commandsRun: ['x'] });
   w.jobs.states[id].status = 'completed';
   const create = w.gh.createIssue;
   w.gh.createIssue = async (...args) => { await create(...args); throw new Error('response lost'); };
@@ -110,7 +110,7 @@ test('a lost issue-create response reuses the issue on the next ingest', async t
 test('fix-round review prompt scopes to previous blocking findings and regressions', async t => {
   const w = reviewWorld(t, H(2));
   w.team.s.verdicts[`10:${H(1)}`] = { verdict: 'CHANGES', reviewer: 'claude', at: 1,
-    findings: [{ kind: 'blocking', text: 'Broken acceptance' }, { kind: 'follow-up', text: 'Optional polish' }] };
+    findings: [{ kind: 'blocking', text: 'Broken acceptance' }, fu('Optional polish')] };
   w.team.s.jobs.fix1 = { kind: 'fix', pr: 10, head: H(1), at: 2 };
   w.jobs.states.fix1 = { status: 'completed' };
   await w.team.execute((await w.team.plan())[0]);
@@ -1612,40 +1612,40 @@ test('#583 a job on the current head, or with unpushed or uncommitted work, or u
 test('#864 follow-ups of several reviews in one area share one open issue, updated rather than duplicated', async t => {
   const w = reviewWorld(t);
   w.gh.listPullFiles = async () => ['supervisor/team.mjs', 'supervisor/github.mjs', 'tests/team.test.mjs'];
-  const a = await w.team.batchFollowUps('job1', { pr: 10, head: H(1) }, ['Wording of the status line', 'Rename a helper'], true);
-  const b = await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, ['Rename a helper', 'Add a comment on the cap'], true);
+  const a = await w.team.batchFollowUps('job1', { pr: 10, head: H(1) }, [fu('Wording of the status line'), fu('Rename a helper')]);
+  const b = await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, [fu('Rename a helper'), fu('Add a comment on the cap')]);
   assert.equal(a, b); assert.equal(w.calls.issues.length, 1); assert.equal(w.calls.updates.length, 1);
   const body = w.gh.issues.find(i => i.number === a).body;
   assert.match(body, /area=supervisor/); assert.match(body, /From PR #10/); assert.match(body, /From PR #12/);
   assert.equal(body.split('Rename a helper').length - 1, 1, 'a finding already listed is not added twice');
   assert.match(body, /Add a comment on the cap/);
   // the same review job again changes nothing
-  await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, ['Add a comment on the cap'], true);
+  await w.team.batchFollowUps('job2', { pr: 12, head: H(2) }, [fu('Add a comment on the cap')]);
   assert.equal(w.calls.updates.length, 1);
 });
 test('#864 a different area gets its own batch, and a closed batch is not reused', async t => {
   const w = reviewWorld(t);
   w.gh.listPullFiles = async n => (n === 10 ? ['docs/a.md'] : ['supervisor/x.mjs']);
-  const docs = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['Fix a typo'], true);
-  const sup = await w.team.batchFollowUps('j2', { pr: 11, head: H(2) }, ['Tidy a name'], true);
+  const docs = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, [fu('Fix a typo')]);
+  const sup = await w.team.batchFollowUps('j2', { pr: 11, head: H(2) }, [fu('Tidy a name')]);
   assert.notEqual(docs, sup);
   w.gh.issues.find(i => i.number === sup).state = 'CLOSED';
-  const again = await w.team.batchFollowUps('j3', { pr: 13, head: H(3) }, ['Another note'], true);
+  const again = await w.team.batchFollowUps('j3', { pr: 13, head: H(3) }, [fu('Another note')]);
   assert.notEqual(again, sup); assert.equal(w.calls.issues.length, 3);
 });
 test('#864 immaterial-only follow-ups open no issue, but join an existing batch', async t => {
   const w = reviewWorld(t);
   w.gh.listPullFiles = async () => ['supervisor/x.mjs'];
-  assert.equal(await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['Description claim is wrong (immaterial): 5 files'], false), null);
+  assert.equal(await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, [{ text: 'Description claim is wrong (immaterial): 5 files' }]), null);
   assert.equal(w.calls.issues.length, 0);
-  const n = await w.team.batchFollowUps('j2', { pr: 10, head: H(1) }, ['A real follow-up'], true);
-  assert.equal(await w.team.batchFollowUps('j3', { pr: 11, head: H(2) }, ['Description claim is wrong (immaterial): 6 lines'], false), n);
+  const n = await w.team.batchFollowUps('j2', { pr: 10, head: H(1) }, [fu('A real follow-up')]);
+  assert.equal(await w.team.batchFollowUps('j3', { pr: 11, head: H(2) }, [{ text: 'Description claim is wrong (immaterial): 6 lines' }]), n);
   assert.match(w.gh.issues.find(i => i.number === n).body, /6 lines/);
 });
 test('#864 an unreadable file list falls back to a general batch', async t => {
   const w = reviewWorld(t);
   w.gh.listPullFiles = async () => { throw new Error('gh down'); };
-  await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['x note'], true);
+  await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, [fu('x note')]);
   assert.match(w.calls.issues[0][2], /area=general/);
 });
 test('#864 the re-review prompt judges the earlier blocking findings first and keeps new blocking to the changed lines', () => {
@@ -1684,13 +1684,13 @@ test('#864 churn raises its Needs you item at the shipped fix limit and no final
 test('#864 a batch that a PR implements is frozen: later follow-ups open the next batch', async t => {
   const w = reviewWorld(t);
   w.gh.listPullFiles = async () => ['supervisor/x.mjs'];
-  const first = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, ['A note'], true);
+  const first = await w.team.batchFollowUps('j1', { pr: 10, head: H(1) }, [fu('A note')]);
   const before = w.gh.issues.find(i => i.number === first).body;
   w.gh.listPulls = async () => [{ number: 50, headRefName: `claude/issue-${first}-batch` }];
-  const next = await w.team.batchFollowUps('j2', { pr: 50, head: H(2) }, ['Another note'], true);
+  const next = await w.team.batchFollowUps('j2', { pr: 50, head: H(2) }, [fu('Another note')]);
   assert.notEqual(next, first);
   assert.equal(w.gh.issues.find(i => i.number === first).body, before);
-  assert.equal(await w.team.batchFollowUps('j3', { pr: 51, head: H(3) }, ['Third note'], true), next);
+  assert.equal(await w.team.batchFollowUps('j3', { pr: 51, head: H(3) }, [fu('Third note')]), next);
 });
 test('#864 no churn stop when findings repeat, after one new round only, or when the last round passed', async t => {
   const same = ['The cache key ignores the branch name entirely'];

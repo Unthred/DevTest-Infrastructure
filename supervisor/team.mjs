@@ -63,7 +63,7 @@ import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
 import { WRITER_KINDS, openFreeBatch } from './batchissue.mjs';
-import { areaOf, batchMarker, appendToBatch, newBatchBody, isMaterial, churnRounds, churnText } from './followups.mjs';
+import { areaOf, batchMarker, appendToBatch, newBatchBody, rejectedSink, isMaterial, churnRounds, churnText } from './followups.mjs';
 import { activeProviderSlotUse, activeSlotUse, unavailableStart } from './slotaccounting.mjs';
 import { slimFinding } from './rebasehunks.mjs';
 import { holdRefusedRebase, noHeadDetail, pushStep, STOP_STEP } from './rebaserefusal.mjs';
@@ -2196,7 +2196,7 @@ export class Team {
           const followUps = [...r.verdict.findings.filter(f => f.kind === 'follow-up'),
             ...(r.verdict.descriptionClaims || []).filter(c => c.status === 'false' && c.materiality === 'immaterial').map(c => ({ text: `Description claim is wrong (immaterial: ${c.reason}): ${c.claim}` }))];
           let followUpIssue = null;
-          if (r.verdict.verdict === 'PASS' && followUps.length) followUpIssue = await this.batchFollowUps(id, j, followUps.map(f => f.text), isMaterial(followUps));
+          if (r.verdict.verdict === 'PASS' && followUps.length) followUpIssue = await this.batchFollowUps(id, j, followUps, report);
           const body = `<!-- ${MARKER} v1 job=${id} pr=${j.pr} head=${j.head} verdict=${r.verdict.verdict} reviewer=${j.agent} -->\n**${r.verdict.verdict}** — ${j.secondOpinion ? 'second-opinion review' : 'independent review'} on \`${j.model || 'the default model'}\` in a fresh session, by \`${j.agent}\` of exact head ${this.commitRef(j.head)} (recorded by the dispatcher from ${this.names().job({ id, kind: 'review', pr: j.pr }).text}; comment text is never trusted).\n\n${r.verdict.findings.map(f => `- **${f.kind}**: ${f.text}`).join('\n') || '_no findings_'}${followUpIssue ? `\n\nFollow-ups: issue #${followUpIssue}.` : ''}\n\n${checklistText(r.verdict)}Commands run:\n${r.verdict.commandsRun.map(c => `- \`${c.replace(/`/g, "'")}\``).join('\n')}`;
           // The verdict becomes merge-eligible only after its public record is posted; a failed comment records nothing,
           // so the next tick retries the whole step and nothing can merge on an unposted PASS.
@@ -2241,9 +2241,11 @@ export class Team {
   // Issue #864: follow-ups of a PASS are collected into one open issue per area (the PR's dominant top-level directory), updated rather than
   // duplicated. A new issue is opened only when the batch has a material finding; an immaterial-only list goes to an existing batch or nowhere.
   // Idempotent per review job: its marker is in the batch body once added.
-  async batchFollowUps(id, j, texts, material) {
+  async batchFollowUps(id, j, followUps, report = null) {
+    const texts = followUps.map(f => f.text), material = isMaterial(followUps);
     let files = []; try { files = (await this.gh.listPullFiles?.(j.pr)) || []; } catch { /* area falls back to general */ }
     const area = areaOf(files), marker = batchMarker(area), entry = { job: id, pr: j.pr, head: j.head, items: texts };
+    entry.onRejected = rejectedSink(report, id, j, redact);
     const prs = await this.gh.listPulls().catch(() => []);
     const open = await openFreeBatch(this.gh, marker, { prs, jobs: Object.values(this.s.jobs) });   // frozen batches are skipped (issue #1370: shared)
     if (open) {
