@@ -55,6 +55,7 @@ export const TABLE = Object.freeze([
     act('work_item.park', 'direct', true, BY_ISSUE),
   ]),
   row(/^upgrade-latched$/, 'upgrade-latched', 'install', 'homeowner', 'upgrade_latched', [act('upgrade.clear_latch', 'person_only', true)]),
+  row(/^upgrade-blocked$/, 'upgrade-blocked', 'install', 'fault', 'install_tests_refused', [act('upgrade.retry_install', 'direct', false)]),   // issue #1368
   row(/^upgrade-refused$/, 'upgrade-refused', 'install', 'fault', 'upgrade_refused'),
   row(/^dashboard-restart-failed$/, 'dashboard-restart-failed', 'install', 'fault', 'dashboard_restart_failed'),
   row(/^dashboard-stale$/, 'dashboard-stale', 'install', 'fault', 'dashboard_stale'),

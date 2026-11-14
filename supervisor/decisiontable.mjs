@@ -77,6 +77,7 @@ const T = {
   'closed-noreason-unreadable': { clears: 'clears when the record of close reasons can be read again', actions: [] },
   'hand-deploy': { clears: 'clears when the installed commit moves past the change', actions: [] },
   'upgrade-latched': { clears: 'clears when you clear the latch with the control on this card (or ai-supervisor self-upgrade clear-latch on Tower)', actions: ['clear_latch'] },
+  'upgrade-blocked': { clears: 'clears when this commit or a later one installs, or main moves to a commit that installs (use Retry install now for one more attempt)', actions: [] },
   'upgrade-refused': { clears: 'clears when a later main is installed or the refusal no longer applies', actions: [] },
   'dashboard-restart-failed': { clears: 'clears when the dashboard restarts on the installed commit', actions: [] },
   'dashboard-stale': { clears: 'clears when the dashboard is restarted on the installed commit', actions: [] },

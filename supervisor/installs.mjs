@@ -51,6 +51,7 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
   const su = readSelfUpgrade(root), inst = readInstalled(root);
   let state = {}; try { state = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')) || {}; } catch { /* none */ }
   const records = readUpgrades(root).slice(-INSTALLS_KEPT).reverse().map(r => ({ at: iso(r.at), from: r.from, to: r.to, prs: r.prs, result: r.result, failed: FAILED.has(r.result), reason: r.reason, checks: r.checks, files: r.files }));
+  readUpgrades(root).slice(-INSTALLS_KEPT).reverse().forEach((r, n) => { records[n].attempt = r.attempt ?? null; });   // issue #1368
   const f = state.refusal, i = su.install;
   return {
     note: 'Install records come from team/upgrades.jsonl and self-upgrade.json. Process versions are read from each process command line under versions/<sha>/ (the command line itself is not returned). Evidence, not a remote check.',
@@ -58,7 +59,7 @@ export function installs(root, { now = Date.now(), procRoot = '/proc', running }
     latch: su.latch ? { at: iso(su.latch.at), from: su.latch.from, to: su.latch.to, reason: su.latch.reason } : null,
     lastInstall: i ? {
       result: i.result, sha: i.sha, at: iso(i.at), nextAttemptAt: iso(i.nextAttemptAt), reason: i.reason,
-      cleanup: i.cleanup || null, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt
+      cleanup: i.cleanup || null, attempt: i.attempt ?? null, failingTests: i.tests, retried: i.retried, excerpt: i.excerpt
     } : null,
     refusal: f && SHA.test(f.to || '') ? { kind: scrub(f.kind || '', 24), from: SHA.test(f.from || '') ? f.from : null, to: f.to, at: iso(f.at), reason: scrub(f.reason || '', 300) } : null,
     processes: processVersions(procRoot, { currentSha: inst.sha }).map(p => ({ ...p, matchesInstalled: inst.sha ? p.version === inst.sha : null })),

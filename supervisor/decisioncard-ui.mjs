@@ -27,6 +27,12 @@ const closeReasonForm = item => `<form method="post" action="/api/v1/commands/wo
   + '<button class="btn close-reason-button" type="submit">Record reason</button>'
   + '<div class="sub close-reason-status" role="status" aria-live="polite" hidden></div></form>';
 
+// Issue #1368: the control of the upgrade-blocked item is one button that sends the named command upgrade.retry_install
+// (dashui/retry-install-ui.mjs); the page's access proof is added by withProof.
+const retryInstallForm = '<form method="post" action="/api/v1/commands/upgrade.retry_install" class="retry-install-form">'
+  + '<button class="btn retry-install-button" type="submit" title="Makes the next install skip its wait and starts one more attempt of the refused commit.">Retry install now</button>'
+  + '<div class="sub retry-install-status" role="status" aria-live="polite" hidden></div></form>';
+
 // item: a Needs you item with its `card`; `decision` is its by-hand next step text; `anchor` is the id of the element the card sits in.
 export function decisionHtml(item, anchor = '') {
   const card = item.card;
@@ -35,9 +41,10 @@ export function decisionHtml(item, anchor = '') {
   const pending = card.pending || [];
   const open = card.controls.filter(c => !pending.includes(c.action));
   const form = card.type === 'closed-noreason' && item.issues?.length ? closeReasonForm(item) : '';
+  const retry = card.type === 'upgrade-blocked' ? retryInstallForm : '';
   const acts = open.length ? `<div class="acts">${open.map(c => control(item.id, c, anchor)).join('')}</div>` : '';
   return `<div class="decision-card" data-decision="${esc(card.type)}"><div class="sub decision-reason">Why: ${esc(card.reason)}</div>`
     + `<div class="sub decision-clears">${esc(card.clears[0].toUpperCase() + card.clears.slice(1))}.</div>`
     + (item.decision ? `<div class="sub">Decision: ${esc(item.decision)}</div>` : '')
-    + form + acts + status(pending, card.controls) + (card.later ? `<div class="sub decision-later">${esc(card.later)}</div>` : '') + '</div>';
+    + form + retry + acts + status(pending, card.controls) + (card.later ? `<div class="sub decision-later">${esc(card.later)}</div>` : '') + '</div>';
 }

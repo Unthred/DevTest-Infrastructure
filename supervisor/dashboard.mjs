@@ -17,6 +17,7 @@ import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CA
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
 import { latchAttention } from './latchaction.mjs';
+import { attemptsAttention } from './upgrade-attempts.mjs';
 import { STALE_TICK_MS, isUnknownJob, agentStates, latestAllowance, redact, readVersion } from './dashdata.mjs';
 import { planningInputs } from './planning.mjs';
 import { pendingProposals, proposalWords } from './decisionproposals.mjs';
@@ -713,8 +714,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
     // Issue #209: a failed dashboard restart or a fall back to the last good version stays a Needs you item until a restart succeeds.
     try { const f = JSON.parse(fs.readFileSync(path.join(root, 'team', 'self-upgrade.json'), 'utf8')).dashboardFailure; if (f && typeof f.reason === 'string') attention.push({ id: 'dashboard-restart-failed', text: redact(`The dashboard server could not be ${f.kind === 'watchdog' ? 'brought back after it stopped answering' : 'restarted after the ' + (f.kind === 'rollback' ? 'rollback' : 'upgrade')}${/^[0-9a-f]{40}$/.test(f.target || '') ? ` on ${sha7(f.target)}` : ''}: ${f.reason}. ${f.recovered ? 'The last good version was started again and is serving now.' : 'Foreman keeps trying on later ticks with a growing delay.'}`, 500), ref: null, severity: 'action', action: 'Check supervisor/dashboard.log, then restart the dashboard server on the installed version.' }); } catch { /* none */ }
     // Issue #302: a rolled-back upgrade pauses all later upgrades (the latch); one Needs you item says why and how to clear it.
-    attention.push(...latchAttention(root, ver), ...closedReasonAttention(root, c.issues));   // issue #1306
-    // Issue #134: a pending supervisor upgrade holds back new jobs until the running ones finish.
+    attention.push(...latchAttention(root, ver), ...closedReasonAttention(root, c.issues), ...attemptsAttention(root, ver));   // issues #1306, #1368
     // Issue #362: a storage warning is a Needs you item; nothing is ever deleted automatically.
     if (history?.storage?.warnings?.length) attention.push({ id: 'history-storage', text: redact(`History storage: ${history.storage.warnings.join(' ')}`, 400), ref: null, severity: 'warn', action: 'Free space on the volume or move the history archive; Foreman never deletes history by itself.' });
     // Issue #153: a failed config migration skips each tick (and is retried) until the homeowner fixes team.local.json
