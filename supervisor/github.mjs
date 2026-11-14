@@ -7,6 +7,7 @@ import { citeFacts } from './github-cite-facts.mjs';
 import { redactTopology } from './redact.mjs';
 import { recentlyClosedIssues } from './github-recent.mjs';
 import { closeWrites } from './ghclose.mjs';
+import { ciRerunCalls } from './ghcirerun.mjs';
 
 const TRANSIENT = /error connecting to|connection (reset|refused|timed out)|timeout|timed out|temporarily unavailable|\bEOF\b|TLS handshake|HTTP 5\d\d|could not resolve host/i;
 export const isRateLimit = text => /rate limit/i.test(String(text || ''));
@@ -46,7 +47,7 @@ export function githubClient(config, gh = ghRunner()) {
   return { ...citeFacts(repo, gh), ...closeWrites(repo, gh),   // issue #1337: the close writes use the same (counting) runner
     listPulls: async () => withLabels(json(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])),
     listLabels: async () => (json(['label', 'list', '--repo', repo, '--limit', '200', '--json', 'name']) || []).map(l => l.name),
-    ...mergedReaders(json, repo),
+    ...mergedReaders(json, repo), ...ciRerunCalls(repo, gh, json),
     getMergedPull: async n => json(['pr', 'view', String(n), '--repo', repo, '--json', 'number,state,headRefName,headRefOid,statusCheckRollup']),
     // Check runs of any app (issue #142), including third-party checks such as GitGuardian that gh run view cannot show.
     listCheckRuns: async sha => { if (!/^[0-9a-f]{40}$/.test(String(sha))) throw new SupervisorError('invalid commit sha'); return json(['api', '--method', 'GET', `repos/${repo}/commits/${sha}/check-runs`, '-f', 'per_page=100'])?.check_runs || []; },

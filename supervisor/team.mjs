@@ -71,10 +71,13 @@ import { hasFindingKeys, countRound, descriptionEdited, descriptionRoundFor, fin
 import { recordCreatedInboxJob } from './inboxlaunch.mjs';
 import { approveDecisions } from './decisionapprove.mjs';
 import { alertThenRecord } from './alertflow.mjs';
+import { heldCiState, watchCi, mainCiItems } from './cirerun.mjs';
+import { CHECK_OK, realTime, checkKey, checkTime, checkDone, checkLabel, isCancelled, latestChecks, OPEN_PULLS_CAP, RERUN_SETTLE_MS, checksState, failingChecks, scannerOnly } from './checkstate.mjs';
+// Issue #1375: the check judging lives in checkstate.mjs; every moved name stays importable from here.
+export { CHECK_OK, checkDone, isCancelled, latestChecks, OPEN_PULLS_CAP, checksState, failingChecks, scannerOnly };
 import { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE } from './teamconfig.mjs';
 // Issue #1239: configuration validation and loading live in teamconfig.mjs; every moved name stays importable from here.
 export { ROLES, OVERALL_ROLES, roleCount, UNBLOCK_DEFAULTS, globToRegExp, validateTeamConfig, expectedFiles, capNotes, normalizeReviewConfig, applyLocalOverride, loadTeamConfig, weeklyAtOf, HEALTH_DEFAULTS, DEFAULT_REBASERS, LOCAL_OVERRIDE };
-
 const SHA = /^[0-9a-f]{40}$/;
 const INBOX_WINDOW_MS = 24 * 3600000;   // the run window of an inbox job whose end was not recorded (older records)
 const ANY_MODEL = { pattern: '.*', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
@@ -137,20 +140,10 @@ export const FIX_LIMIT_OPTIONS = 'wait for another agent to be able to review (a
 // Issue #303: D-025 (a PASS carries across a clean, unchanged, green rebase) binds only once the homeowner approves it. See ENFORCED_DECISIONS.
 export const CARRY_DECISION = 'D-025';
 
-// Issue #149: judge each check by its latest run on the head. A push followed by a PR description edit starts two runs of the same
-// check about 20 s apart; the concurrency group cancels the first. That superseded cancelled run is not a failure.
-const CHECK_OK = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
-// Issue #331: GitHub can leave a check run at status IN_PROGRESS after it has a conclusion and a completed time (seen on PR #329).
-// A conclusion plus a completed time is done whatever the status says.
-// gh serialises a missing time as the Go zero time 0001-01-01T00:00:00Z, which Date.parse accepts: any year before 2000 is "unknown".
-const realTime = s => { const t = Date.parse(s || ''); return Number.isFinite(t) && new Date(t).getUTCFullYear() >= 2000 ? t : null; };
-const hasResult = c => !!c.conclusion && realTime(c.completedAt) !== null;
-const checkDone = c => (c.status ? c.status === 'COMPLETED' || hasResult(c) : !!c.state && c.state !== 'PENDING' && c.state !== 'EXPECTED');
 // A check whose state contradicts itself (a conclusion but no real completed time) for longer than this is "stuck".
 export const STUCK_CHECK_MS = 10 * 60000;
 // A done check is never listed as unfinished, so only an unfinished check holding a conclusion (but no real completed time) can be inconsistent.
 const inconsistent = c => !checkDone(c) && !!c.conclusion;
-const checkLabel = c => { const n = c.name || c.context; return typeof n === 'string' && /^[A-Za-z0-9 ._:()\/-]{1,80}$/.test(n) ? n : 'a check'; };
 // Checks not finished on this rollup, with age from their start (null when unknown) and whether their state is inconsistent.
 export function unfinishedChecks(rollup, now = Date.now()) {
   return latestChecks(rollup).filter(c => !checkDone(c)).map(c => {
@@ -170,47 +163,10 @@ export function waitingOnText(rollup, now = Date.now()) {
   const age = ms => (ms === null ? 'unknown time' : ms < 90000 ? 'under 2 minutes' : `${Math.round(ms / 60000)} min`);
   return `waiting on CI: ${u.slice(0, 3).map(c => `${c.name} unfinished for ${age(c.ageMs)}`).join(', ')}${u.length > 3 ? `, and ${u.length - 3} more` : ''}`;
 }
-// Issue #163: a timed-out run is retried like a cancelled one. After the one rerun (`retried`) a further timeout is a real failure.
-const isCancelled = (c, retried = false) => c.conclusion === 'CANCELLED' || (!retried && c.conclusion === 'TIMED_OUT');
-const checkTime = c => { const t = Date.parse(c.startedAt || c.completedAt || ''); return Number.isFinite(t) ? t : null; };
 const CANCELLED_WAIT_MS = 5 * 60000;
-const RERUN_SETTLE_MS = 60000;
-// The identity of a check on a head: workflow plus name (or status context). Two workflows can each have a check called 'test'.
-const checkKey = (c, i) => `${c.workflowName || ''}\u0000${c.name || c.context || `#${i}`}`;
-export function latestChecks(rollup) {
-  if (!Array.isArray(rollup)) return [];
-  const latest = new Map();
-  rollup.forEach((c, i) => {
-    const key = checkKey(c, i);
-    const prev = latest.get(key), t = checkTime(c), pt = prev && checkTime(prev);
-    if (!prev || (t !== null && pt !== null ? t >= pt : true)) latest.set(key, c);   // no timestamps: the later list entry wins
-  });
-  return [...latest.values()];
-}
-// A cancelled check that nothing superseded: pending (not red) until the dispatcher reruns it once. Must equal the --limit of listPulls in github.mjs.
-const OPEN_PULLS_CAP = 100;
 // Issue #188: the one-rerun-settled flag from a cancelWatch map, so status views agree with the dispatcher.
 export function retriedIn(cancelWatch, pr, now) { const w = cancelWatch?.[`${pr.number}:${pr.headRefOid}`], at = w?.rerunAt ?? w?.timeoutAt; return !!at && now - at >= RERUN_SETTLE_MS; }
 export function loneCancelled(rollup, retried = false) { return latestChecks(rollup).filter(c => checkDone(c) && isCancelled(c, retried)); }
-export function checksState(rollup, retried = false) {
-  if (!Array.isArray(rollup) || !rollup.length) return 'none';
-  let pending = false;
-  for (const c of latestChecks(rollup)) {
-    if (!checkDone(c) || isCancelled(c, retried)) { pending = true; continue; }
-    if (!CHECK_OK.includes(c.conclusion || c.state)) return 'red';
-  }
-  return pending ? 'pending' : 'green';
-}
-// Names of completed, non-successful checks, safe to quote in a prompt (GitHub-supplied text is never interpolated unvalidated).
-export function failingChecks(rollup, retried = false) {
-  const names = [];
-  for (const c of latestChecks(rollup)) {
-    if (!checkDone(c) || isCancelled(c, retried) || CHECK_OK.includes(c.conclusion || c.state)) continue;
-    const name = c.name || c.context;
-    if (typeof name === 'string' && /^[A-Za-z0-9 ._:()\/-]{1,80}$/.test(name) && !names.includes(name)) names.push(name);
-  }
-  return names.slice(0, 8);
-}
 // Third-party check output (issue #142). The cifix job cannot read a non-Actions check (GitGuardian, other apps) with gh run view, so the
 // dispatcher reads the check-runs API and hands the job the check name, conclusion and output title/summary/text as bounded, redacted
 // task data. Free text from the check is never interpolated unvalidated: it is JSON-encoded, truncated and passed through redact().
@@ -219,7 +175,6 @@ const CHECK_LIMITS = { checks: 8, title: 200, summary: 800, text: 1500 };
 export const REQUIREMENTS_MAX = 30000;
 const cleanText = (value, max) => redact(value, max).replace(/\s+/g, ' ').trim();
 export { isSecretScanner };
-export const scannerOnly = names => names.length > 0 && names.every(name => isSecretScanner({ name }));
 export function checkDetails(runs, names) {
   const want = new Set(names), out = [];
   // After a rerun the API lists several runs of one name: describe one that did not succeed before a passing one (issue #205).
@@ -538,7 +493,7 @@ export class Team {
   // The check state of a PR's current head: after the one automatic rerun (issue #163) a timeout counts as a failure.
   // Only once the rerun has had time to replace the old result in the rollup (GitHub updates it a few seconds after `gh run rerun`).
   retried(pr) { return retriedIn(this.s.cancelWatch, pr, this.clock.now()); }
-  ciState(pr) { return checksState(pr.statusCheckRollup, this.retried(pr)); }
+  ciState(pr) { return heldCiState(this, pr); }   // issue #1375: waiting for CI while the one rerun of a failed head runs
   agents() { return Object.entries(this.c.agents); }
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
   issuesOf(agent) { return withRequiredPins(this.c, agent, [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]); }
@@ -1582,7 +1537,7 @@ export class Team {
     this.save();
     if (applied.length) report.selfChecked = applied.map(f => f.what);
   }
-  selfCheckItems() { return [...Object.values(this.s.selfcheck?.items || {}), ...planItems(this.s)]; }
+  selfCheckItems() { return [...Object.values(this.s.selfcheck?.items || {}), ...planItems(this.s), ...mainCiItems(this.s)]; }
   // Issue #995 part 1: every running job has a heartbeat taken from its transcript, progress stamp or record. No growth for
   // limits.job_idle_minutes cancels it through the normal stop path (the reason is recorded) and the item is planned again. The limit and
   // each job's last activity are kept in state.liveness for the dashboard and `team status`.
@@ -2856,6 +2811,7 @@ export class Team {
         });
       }
     }
+    await watchCi(this, report, guard, pulls);   // issue #1375: the failed-check rerun and main's CI
     this.save();
   }
   // Issue #142: read the failing checks of the head from the check-runs API (any app). A failure to read is not fatal: the job runs
