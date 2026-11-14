@@ -1,29 +1,18 @@
 // Issue #1313: the pure side of ball travel on the live board. It compares two liveboard replies and returns the events between them
 // (launch, land, return), and plans the path of each travel from the geometry of boardlayout.mjs. No DOM, no clock, no random numbers:
 // the path of a land is a function of the lane, the box and the job id, so the same job always takes the same path.
+// Issue #1315: the path itself is planned by the board style in use (boardstyle-<name>.mjs); this module finds the points and the events.
 import { LAYOUT, boardGeometry, hopperBalls, boxBalls, runningBalls, boxOf } from './boardlayout.mjs';
+import { MOTION, hashOf } from './boardtiming.mjs';
+import * as pegStyle from './boardstyle-peg.mjs';
 
-export const MOTION = Object.freeze({
-  maxEvents: 12,       // more events than this in one change are shown at once, with a count
-  launchMs: 900,
-  returnMs: 1800,
-  closeUpMs: 400,
-  landMinMs: 1500,
-  landMaxMs: 3000,
-  landBaseMs: 1600,
-  landSpreadMs: 1000,
-  contacts: 5,         // pegs a land touches, fewer only when the peg board is too small for more
-});
-
-// The pegs of the peg board as boardsvg.mjs draws them: a pattern anchored at the origin of the drawing.
-export const PEG = Object.freeze({ pitch: 28, radius: 2.5, spots: Object.freeze([[7, 7], [21, 21]]) });
+export { MOTION, hashOf };
 
 // The newest landing of an item decides: a ball that landed in one of these boxes and is waiting again has gone round once more.
 const RETURN_BOXES = new Set(['changes_asked', 'failed', 'out_of_allowance']);
 
 const quiet = () => {};
 const identOf = entry => `${entry.job_type}:${entry.number}`;
-const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const isEmpty = data => !data.waiting.length && !data.running.length && !data.landed.length;
 
 // The events between two replies. A first reply that is empty is the open case and gives nothing.
@@ -72,73 +61,6 @@ export function carryLaps(carry, events, next) {
 export const withLaps = (data, carry) => (carry.size === 0 ? data
   : { ...data, waiting: data.waiting.map(item => (carry.has(identOf(item)) ? { ...item, laps: carry.get(identOf(item)) } : item)) });
 
-// A 32 bit hash of the job id: the only source of variety in a path.
-export function hashOf(text) {
-  let hash = 0x811c9dc5;
-  for (const char of String(text)) hash = Math.imul(hash ^ char.codePointAt(0), 0x01000193) >>> 0;
-  return hash;
-}
-
-const touchDistance = LAYOUT.ballRadius + PEG.radius;
-const margin = touchDistance;
-
-// Every peg of a peg board rectangle, top row first.
-export function pegPoints(pegs) {
-  const found = [];
-  for (const [ox, oy] of PEG.spots) {
-    for (let x = ox; x < pegs.x + pegs.w; x += PEG.pitch) {
-      for (let y = oy; y < pegs.y + pegs.h; y += PEG.pitch) {
-        if (x >= pegs.x + margin && x <= pegs.x + pegs.w - margin && y >= pegs.y + margin && y <= pegs.y + pegs.h - margin) found.push({ x, y });
-      }
-    }
-  }
-  return found.sort((a, b) => a.y - b.y || a.x - b.x);
-}
-
-const inside = (point, rect) => ({
-  x: clamp(point.x, rect.x + LAYOUT.ballRadius, rect.x + rect.w - LAYOUT.ballRadius),
-  y: clamp(point.y, rect.y + LAYOUT.ballRadius, rect.y + rect.h - LAYOUT.ballRadius),
-});
-
-// The ball is tangent to the peg, up and to the side it is heading for.
-const contactAt = (peg, side) => ({ x: peg.x + side * touchDistance * Math.SQRT1_2, y: peg.y - touchDistance * Math.SQRT1_2 });
-
-// The path of a land: from start, bouncing off pegs towards the box, ending at end inside the box. Returns the points, the pegs touched
-// (with the point of contact) and the duration, all from the job id and the geometry.
-export function planLand({ jobId, start, box, end, geometry }) {
-  const seed = hashOf(jobId);
-  const pegs = geometry.pegs;
-  const all = pegPoints(pegs);
-  const rows = [...new Set(all.map(peg => peg.y))];
-  const count = Math.min(MOTION.contacts, rows.length);
-  const stride = count > 0 ? rows.length / count : 1;
-  const left = pegs.x + margin;
-  const right = pegs.x + pegs.w - margin;
-  const target = inside(end, box);
-  const aim = clamp(target.x, left, right);
-  const entry = clamp(start.x, left, right);
-  const touches = [];
-  for (let index = 0; index < count; index += 1) {
-    const row = all.filter(peg => peg.y === rows[Math.floor(index * stride + stride / 2)]);
-    const fraction = (index + 1) / count;
-    const sway = (((seed >>> (index * 4)) & 15) - 7.5) * 12 * (1 - fraction);
-    const want = entry + (aim - entry) * fraction + sway;
-    const peg = row.reduce((best, candidate) => (Math.abs(candidate.x - want) < Math.abs(best.x - want) ? candidate : best));
-    touches.push({ peg, at: contactAt(peg, want >= peg.x ? 1 : -1) });
-  }
-  const points = [start];
-  for (const { at } of touches) {
-    const last = points[points.length - 1];
-    if (points.length > 1) points.push({ x: (last.x + at.x) / 2, y: Math.max(0, Math.min(last.y, at.y) - 6) });
-    points.push(at);
-  }
-  const lastTouch = touches.length ? touches[touches.length - 1].at : start;
-  points.push({ x: clamp(lastTouch.x, left, right), y: pegs.y + pegs.h }, target);
-  const bounded = points.map(point => ({ x: clamp(point.x, 0, geometry.width), y: clamp(point.y, 0, geometry.height) }));
-  const durationMs = clamp(MOTION.landBaseMs + (seed % MOTION.landSpreadMs) + touches.length * 20, MOTION.landMinMs, MOTION.landMaxMs);
-  return { points: bounded, touches, durationMs };
-}
-
 // Distance along the path of each point as a fraction of the whole path, so a ball moves at one speed.
 export function offsetsOf(points) {
   const lengths = points.map((point, index) => (index === 0 ? 0 : Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y)));
@@ -155,21 +77,25 @@ const slotsByKey = (placed, keyOf) => new Map(placed.map(entry => [keyOf(entry.i
 const firstSlot = geometry => ({ x: geometry.hopper.x + 8 + LAYOUT.ballRadius, y: geometry.hopper.y + 6 + LAYOUT.ballRadius });
 const boxCentre = box => ({ x: box.x + box.w / 2, y: box.y + box.h * 0.6 });
 
+const laneOf = (geometry, laneId) => geometry.groups.flatMap(group => group.lanes).find(entry => entry.lane.id === laneId);
+
 function launchTravel(event, ctx) {
   const rest = runningBalls(ctx.next.running, ctx.gNext, ctx.now).find(ball => ball.job.job_id === event.job_id);
   if (!rest) return null;
   const from = ctx.prevHopper.get(identOf(event)) ?? firstSlot(ctx.gPrev);
-  return { target: { kind: 'running', id: event.job_id }, kind: 'launch', points: [from, { x: rest.x, y: rest.y }], durationMs: MOTION.launchMs };
+  const lane = laneOf(ctx.gNext, event.lane_id);
+  const planned = ctx.style.plan({ kind: 'launch', jobId: event.job_id, lane, box: null, from, to: { x: rest.x, y: rest.y }, geometry: ctx.gNext });
+  return { target: { kind: 'running', id: event.job_id }, kind: 'launch', points: planned.points, durationMs: planned.durationMs };
 }
 
 function landTravel(event, ctx) {
   const box = ctx.gNext.boxes.find(candidate => candidate.id === event.box);
   const end = ctx.nextBoxes.get(event.job_id);
   if (!box || !end) return null;
-  const lane = ctx.gNext.groups.flatMap(group => group.lanes).find(entry => entry.lane.id === event.lane_id);
-  const x = lane ? lane.x + lane.w / 2 : ctx.gNext.pegs.x + margin;
+  const lane = laneOf(ctx.gNext, event.lane_id);
+  const x = lane ? lane.x + lane.w / 2 : ctx.gNext.pegs.x + LAYOUT.ballRadius;
   const start = { x, y: event.from === 'lane_top' ? LAYOUT.laneTop + LAYOUT.ballRadius : LAYOUT.laneBottom - LAYOUT.ballRadius };
-  const plan = planLand({ jobId: event.job_id, start, box, end, geometry: ctx.gNext });
+  const plan = ctx.style.plan({ kind: 'land', jobId: event.job_id, lane, box, from: start, to: end, geometry: ctx.gNext });
   return { target: { kind: 'landed', id: event.job_id }, kind: 'land', points: plan.points, durationMs: plan.durationMs, touches: plan.touches };
 }
 
@@ -178,9 +104,9 @@ function returnTravel(event, ctx) {
   if (!to) return null;
   const box = ctx.gPrev.boxes.find(candidate => candidate.id === event.box);
   const from = ctx.prevBoxes.get(event.job_id) ?? ctx.nextBoxes.get(event.job_id) ?? (box ? boxCentre(box) : firstSlot(ctx.gPrev));
-  const floor = ctx.gNext.height - LAYOUT.bottomPad - LAYOUT.ballRadius;
-  return { target: { kind: 'waiting', ident: identOf(event) }, kind: 'return', points: [from, { x: from.x, y: floor }, { x: to.x, y: floor }, to],
-    durationMs: MOTION.returnMs, delayMs: ctx.landMs.get(event.job_id) ?? 0, laps: { from: event.laps_from, to: event.laps_to } };
+  const planned = ctx.style.plan({ kind: 'return', jobId: event.job_id, lane: null, box, from, to, geometry: ctx.gNext });
+  return { target: { kind: 'waiting', ident: identOf(event) }, kind: 'return', points: planned.points,
+    durationMs: planned.durationMs, delayMs: ctx.landMs.get(event.job_id) ?? 0, laps: { from: event.laps_from, to: event.laps_to } };
 }
 
 // The remaining hopper balls close up when one of them has left.
@@ -197,13 +123,13 @@ function closeUps(events, ctx) {
 }
 
 // What travels for a change from prev to next at a drawn width: the events, the travels they make and how many changed at once.
-export function planChange(prev, next, { width, now }, warn = quiet) {
+export function planChange(prev, next, { width, now, style = pegStyle }, warn = quiet) {
   const events = diffBoard(prev, next, warn);
   const gNext = boardGeometry(next, width);
   if (!events.length || !gNext.drawn) return { events, travels: [], changed: 0 };
   const { animate, changed } = splitEvents(events);
   const gPrev = boardGeometry(prev, width);
-  const ctx = { next, now, gPrev, gNext,
+  const ctx = { next, now, gPrev, gNext, style,
     prevHopper: slotsByKey(hopperBalls(prev.waiting, gPrev).placed, identOf), nextHopper: slotsByKey(hopperBalls(next.waiting, gNext).placed, identOf),
     prevBoxes: slotsByKey(boxBalls(prev.landed, gPrev, warn).flatMap(entry => entry.placed), job => job.job_id),
     nextBoxes: slotsByKey(boxBalls(next.landed, gNext, warn).flatMap(entry => entry.placed), job => job.job_id) };
