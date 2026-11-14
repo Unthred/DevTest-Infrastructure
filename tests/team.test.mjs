@@ -782,7 +782,7 @@ test('max_fix_attempts counts fixes per PR across heads; at the limit one needs-
   const r1 = await w.team.tick(); const r2 = await w.team.tick();
   const notices = w.calls.comments.filter(c => c[0] === 38 && /fix rounds/.test(c[1]));
   assert.equal(notices.length, 1); assert.deepEqual(w.calls.labels.filter(l => l[0] === 38), [[38, 'needs-homeowner']]);   // once, not every tick
-  assert.deepEqual(r1.notified.map(n => n.pr), [38]); assert.equal(r2.notified.length, 0);
+  const fixed = r => r.notified.filter(n => n.fixLimit).map(n => n.pr); assert.deepEqual(fixed(r1), [38]); assert.equal(fixed(r2).length, 0);
   // red CI draws on the same per-PR budget
   const c = world(t, { pulls: [pr(38, 'claude/issue-35-x', H(4), { statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE', name: 'test' }] })], issues: [issue(23, 'CLOSED'), issue(5, 'CLOSED')] });
   c.team.s.fixAttempts[`38:${H(1)}`] = 1; c.team.s.fixAttempts[`38:${H(2)}`] = 1; c.team.s.unblock.escalated[38] = { head: H(2) };

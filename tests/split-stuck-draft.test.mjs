@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { bodyFault, checkStuckDraft, itemBody } from '../supervisor/splitstuck-draft.mjs';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/split-stuck/pr1139.json', import.meta.url), 'utf8'));
-const ordinarySplitSource = fs.readFileSync(new URL('../supervisor/team.mjs', import.meta.url), 'utf8');
+const ordinarySplitSource = fs.readFileSync(new URL('../supervisor/splitaccept.mjs', import.meta.url), 'utf8');
 const item = (title, files, extra = {}) => ({
   title,
   scope: `${title} scope`,
