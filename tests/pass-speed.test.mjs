@@ -58,7 +58,7 @@ test('wakeView shows the cap use, the waiting reasons with their age and how lon
   const release = wakePassLock(root, now - 7000);
   t.after(() => release?.());
   const v = wakeView(root, now);
-  assert.equal(v.acceptedLastHour, 2); assert.equal(v.cap, 40);
+  assert.equal(v.acceptedLastHour, 0, 'an approve is never counted and the job end merged'); assert.equal(v.mergedLastHour, 1); assert.equal(v.cap, 40);
   assert.deepEqual(v.pending.reasons, ['approve', 'job-end']);
   assert.equal(v.pending.ageSeconds, 20);
   assert.equal(v.passRunningSeconds, 7);

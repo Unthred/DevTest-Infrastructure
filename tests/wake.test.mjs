@@ -26,13 +26,14 @@ const sleepMs = ms => new Promise(r => setTimeout(r, ms));
 const waitFor = async (fn, ms = 40000) => { const end = Date.now() + ms; while (!fn() && Date.now() < end) await sleepMs(150); return fn(); };
 
 // ---- the request flag
-test('a request sets one merged flag, spawns a runner, and is counted', t => {
+test('a request sets one merged flag and spawns a runner; only the one that set the flag is counted', t => {
   const root = tmp(t), s = spawner();
   assert.equal(requestWake({ root, reason: 'job-end', now: 1000, ...s }).requested, true);
   requestWake({ root, reason: 'approve', now: 2000, ...s });
   requestWake({ root, reason: 'job-end', now: 3000, ...s });
   assert.deepEqual(pendingRequest(root).reasons.sort(), ['approve', 'job-end'], 'any number of requests are one flag');
-  assert.equal(wakeStatus(root, 4000).acceptedLastHour, 3);
+  assert.equal(wakeStatus(root, 4000).acceptedLastHour, 1, 'the two that merged are not counted');
+  assert.equal(wakeStatus(root, 4000).mergedLastHour, 2);
   assert.equal(labelOf(pendingRequest(root).reasons), 'approve', 'the pass is labelled by the most important reason');
   assert.deepEqual(takeRequest(root).sort(), ['approve', 'job-end']);
   assert.equal(pendingRequest(root), null, 'taking the flag clears it');
@@ -40,11 +41,15 @@ test('a request sets one merged flag, spawns a runner, and is counted', t => {
 });
 test('the hourly cap drops event requests, records the drop for the dashboard, and expires', t => {
   const root = tmp(t), s = spawner();
-  for (let i = 0; i < 5; i++) assert.equal(requestWake({ root, reason: 'job-end', now: 1000 + i, cap: 5, ...s }).requested, true);
+  for (let i = 0; i < 5; i++) {
+    assert.equal(requestWake({ root, reason: 'job-end', now: 1000 + i, cap: 5, ...s }).requested, true);
+    takeRequest(root); // each pass starts, so the next request sets the flag again
+  }
   const dropped = requestWake({ root, reason: 'inbox', now: 5000, cap: 5, ...s });
   assert.equal(dropped.requested, false); assert.equal(dropped.capped, true); assert.match(dropped.why, /scheduled pass is the fallback/);
   assert.equal(s.calls.length, 5, 'a dropped request spawns nothing');
   const st = wakeStatus(root, 6000, 5); assert.equal(st.capHit, true); assert.equal(st.droppedLastHour, 1); assert.equal(st.acceptedLastHour, 5);
+  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 0, inbox: 1, approve: 0 });
   assert.equal(wakeStatus(root, 1000 + 3700000, 5).capHit, false, 'the drop is forgotten after the hour');
   assert.equal(requestWake({ root, reason: 'job-end', now: 1000 + 3700000, cap: 5, ...s }).requested, true, 'the cap expires');
   assert.equal(WAKE_MAX_PER_HOUR, 40);
@@ -63,6 +68,55 @@ test('a corrupt wake.json reads as empty and is replaced by the next request', t
   const root = tmp(t); fs.mkdirSync(path.join(root, 'team')); fs.writeFileSync(path.join(root, 'team', 'wake.json'), '{nope');
   assert.equal(pendingRequest(root), null);
   assert.equal(requestWake({ root, reason: 'install', ...spawner() }).requested, true);
+});
+
+// ---- issue #1357: the cap counts passes started, never a homeowner action
+const reqs = (root, list, cap, s) => list.map(([reason, now]) => requestWake({ root, reason, now, cap, ...s }));
+test('the burst of 13 Nov 2026: 49 requests, runs arriving before the flag is taken, count only the flag setters and none is dropped', t => {
+  const root = tmp(t), s = spawner();
+  let at = 1000, setters = 0;
+  for (let run = 0; run < 7; run++) {
+    const burst = [['inbox', at++], ...Array.from({ length: 6 }, () => ['approve', at++])];
+    const results = reqs(root, burst, 40, s);
+    assert.ok(results.every(r => r.requested), 'nothing is dropped');
+    setters++; takeRequest(root);
+  }
+  const st = wakeStatus(root, at, 40);
+  assert.equal(st.acceptedLastHour, setters); assert.equal(st.mergedLastHour, 42); assert.equal(st.droppedLastHour, 0); assert.equal(st.capHit, false);
+  assert.equal(s.calls.length, 49);
+});
+test('at exactly the cap a job end that would set the flag is dropped, a merging inbox request is taken, an approve starts a pass', t => {
+  const root = tmp(t), s = spawner();
+  for (let i = 0; i < 40; i++) { requestWake({ root, reason: 'job-end', now: 1000 + i, spawnPass: s.spawnPass }); takeRequest(root); }
+  assert.equal(wakeStatus(root, 2000).acceptedLastHour, 40);
+  const dropped = requestWake({ root, reason: 'job-end', now: 2000, ...s });
+  assert.equal(dropped.requested, false); assert.equal(dropped.capped, true); assert.equal(pendingRequest(root), null);
+  const before = s.calls.length;
+  const approve = requestWake({ root, reason: 'approve', now: 2001, ...s });
+  assert.equal(approve.requested, true); assert.equal(s.calls.length, before + 1, 'the approve starts a pass');
+  assert.equal(requestWake({ root, reason: 'inbox', now: 2002, ...s }).requested, true, 'a merging inbox request is taken at the cap');
+  assert.deepEqual(pendingRequest(root).reasons.sort(), ['approve', 'inbox']);
+  const st = wakeStatus(root, 2003);
+  assert.equal(st.acceptedLastHour, 40, 'neither the approve nor the merge is counted'); assert.equal(st.mergedLastHour, 1);
+  assert.equal(st.droppedLastHour, 1); assert.deepEqual(st.droppedByReason, { 'job-end': 1, install: 0, inbox: 0, approve: 0 });
+});
+test('past the cap install and inbox requests that would set the flag are dropped, with their reason; approve never', t => {
+  const root = tmp(t), s = spawner();
+  for (let i = 0; i < 2; i++) { requestWake({ root, reason: 'job-end', now: 1000 + i, cap: 2, ...s }); takeRequest(root); }
+  assert.equal(requestWake({ root, reason: 'install', now: 1100, cap: 2, ...s }).requested, false);
+  assert.equal(requestWake({ root, reason: 'inbox', now: 1101, cap: 2, ...s }).requested, false);
+  for (let i = 0; i < 3; i++) { assert.equal(requestWake({ root, reason: 'approve', now: 1200 + i, cap: 2, ...s }).requested, true); takeRequest(root); }
+  const st = wakeStatus(root, 1300, 2);
+  assert.deepEqual(st.droppedByReason, { 'job-end': 0, install: 1, inbox: 1, approve: 0 }); assert.equal(st.droppedLastHour, 2); assert.equal(st.acceptedLastHour, 2);
+});
+test('merged and dropped-by-reason expire after the hour; an unknown reason is refused', t => {
+  const root = tmp(t), s = spawner();
+  requestWake({ root, reason: 'job-end', now: 1000, cap: 1, ...s }); requestWake({ root, reason: 'inbox', now: 1001, cap: 1, ...s }); takeRequest(root);
+  requestWake({ root, reason: 'job-end', now: 1002, cap: 1, ...s });
+  assert.equal(wakeStatus(root, 1003, 1).mergedLastHour, 1); assert.equal(wakeStatus(root, 1003, 1).droppedLastHour, 1);
+  const later = wakeStatus(root, 1000 + 3700000, 1);
+  assert.equal(later.mergedLastHour, 0); assert.equal(later.droppedLastHour, 0); assert.deepEqual(Object.values(later.droppedByReason), [0, 0, 0, 0]);
+  assert.throws(() => requestWake({ root, reason: 'bogus', ...s }), /unknown wake reason/);
 });
 
 // ---- the lock
@@ -328,6 +382,10 @@ test('the cap on real wakes: past it a job end requests nothing, the dashboard r
   const st = () => JSON.parse(fs.readFileSync(path.join(w.root, 'team', 'wake.json'), 'utf8'));
   assert.equal(st().capped.length, 1, 'the second wake was dropped and recorded');
   assert.match(w.run(['team', 'idle-report', '--hours', '1'], env).stdout, /CAP REACHED: 1 request/);
+  for (const bad of ['-3', 'abc']) {
+    const report = JSON.parse(w.run(['team', 'idle-report', '--hours', '1', '--json'], { AI_SUPERVISOR_WAKE_MAX_PER_HOUR: bad }).stdout);
+    assert.equal(report.wake.cap, WAKE_MAX_PER_HOUR, `a cap of ${bad} from the environment falls back to the default`);
+  }
   const before = w.snapshots().length; await sleepMs(1500);
   assert.equal(w.run(['reconcile']).status === 0 || true, true);
   assert.ok(await waitFor(() => w.snapshots().length > before, 40000), 'the schedule is the fallback and still runs');
