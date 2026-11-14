@@ -73,3 +73,14 @@ test('the breaker replay report honours the configured rate (host override) and 
   assert.match(run(null), /£3\.00/);                              // default 0.75
   assert.match(run({ display: { gbp_per_usd: 0.5 } }), /£2\.00/);  // host override
 });
+
+// Issue #1433: a half-penny tie rounds away from zero for either sign, so the dashboard and the MCP card agree.
+test('gbpAmount: a half-penny tie rounds away from zero for positive and negative amounts', t => {
+  t.after(() => configureDisplay(undefined));
+  assert.equal(gbpAmount(2.82, 0.75), 2.12);
+  assert.equal(gbpAmount(-2.82, 0.75), -2.12);
+  assert.equal(gbpAmount(0, 0.75), 0);
+  assert.ok(Object.is(gbpAmount(-0.001, 0.75), 0));
+  configureDisplay({ gbp_per_usd: 0.75 });
+  assert.equal(formatCost(2.82), '£2.12');
+});

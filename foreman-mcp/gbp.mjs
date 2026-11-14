@@ -5,5 +5,7 @@
 // Issue #1379: the product is trimmed to 12 significant digits before rounding, so 2.82 x 0.75 rounds up to 2.12.
 export function gbpAmount(usd, rate) {
   if (typeof usd !== 'number' || !Number.isFinite(usd) || !Number.isFinite(rate)) return null;
-  return Math.round(Number((usd * rate * 100).toPrecision(12))) / 100;
+  // Issue #1433: a tie rounds away from zero for either sign, so a negative amount mirrors the positive one.
+  const pence = Math.round(Math.abs(Number((usd * rate * 100).toPrecision(12))));
+  return (Math.sign(usd * rate) * pence) / 100 || 0;
 }

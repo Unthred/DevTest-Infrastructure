@@ -321,7 +321,8 @@ test('foreman_headline: with a rate the cost card and its previous period are in
   const { cost, waste } = await headlineOf(headlineView(0.75));
   assert.deepEqual([cost.value, cost.totalCostGbp, cost.unit], [3.89, 7.79, 'GBP equivalent']);
   assert.deepEqual([cost.previous.value, cost.previous.totalCostGbp, cost.previous.unit, cost.previousValue], [2.12, 4.23, 'GBP equivalent', 2.12]);
-  assert.equal(cost.delta, 1.78);
+  assert.equal(cost.delta, 1.77);
+  assert.equal(Math.round((cost.value - cost.previousValue) * 100) / 100, cost.delta);
   assert.ok(!('totalCostUsd' in cost) && !('totalCostUsd' in cost.previous) && !('items' in cost) && !('rateNote' in cost));
   assert.deepEqual([waste.costGbpEquivalent, waste.previous.costGbpEquivalent, 'costUsdEquivalent' in waste], [1.5, 0.75, false]);
 });
