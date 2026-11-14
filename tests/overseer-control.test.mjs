@@ -105,6 +105,16 @@ test('records: who, when, why and result are readable through foreman_why_blocke
   assert.equal(jobs.jobs[0].controls[0].reason, 'runaway rebase'); assert.match(jobs.jobs[0].controls[0].result, /stopped/);
   assert.deepEqual(controlsFor(undefined, { number: 1 }), []);
 });
+test('a secret-shaped control reason is redacted and the answer stays valid JSON', async t => {
+  const w = world(t);
+  const secret = ['gh', 'p_'].join('') + 'A'.repeat(30);
+  const controls = [{ action: 'park', target: '23', by: 'overseer', at: 1, reason: `token: "${secret}" leaked`, state: 'done', result: 'parked' }];
+  const view = { controls, jobs: [], attention: [], queues: {}, issues: [{ number: 23, title: 'T', state: 'OPEN', labels: [] }], prs: [], excluded: [], panels: {}, display: {} };
+  const tools = createTools({ source: { get: async () => ({ view, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 0 });
+  const out = (await tools.call('foreman_why_blocked', { kind: 'issue', number: 23 })).text;
+  assert.ok(!out.includes(secret));
+  assert.match(JSON.parse(out).controls[0].reason, /redacted/);
+});
 test('a refusal is recorded with its reason, and the tools wait for and return the result', async t => {
   const w = world(t);
   const tools = createTools({ source: { get: async () => ({ view: {}, ageMs: 0 }) }, readHost: () => ({}), inbox: w.mcp, controlWaitMs: 5000 });

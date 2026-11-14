@@ -3,7 +3,7 @@
 import { createTools, CALLS_PER_MINUTE, MAX_TEXT } from './tools.mjs';
 import { controlTools } from './controltools.mjs';
 import { withControls } from './controlview.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactDeep } from './redact.mjs';
 import { STALE_TEXT, markStale, markStatus } from './selfcheck.mjs';
 import { stopRecordTool, viewReasons, DEFAULT_STOP_DIRS } from './stoprecord.mjs';
 
@@ -40,8 +40,8 @@ export function createToolset(options) {
       const out = await base.call(name, args);
       if (out.isError || !WITH_CONTROLS.has(name)) return out;
       const view = await options.source.get().then(r => r.view, () => null);
-      // The controls are added after the answer was redacted, so the combined text is redacted once more before it is bounded.
-      return { ...out, text: redact(withControls(name, args, out.text, view?.controls)).slice(0, MAX_TEXT + 4000) };
+      // The controls are added after the answer was redacted, so the combined answer is redacted once more before it is bounded.
+      return { ...out, text: redactAnswer(withControls(name, args, out.text, view?.controls)).slice(0, MAX_TEXT + 4000) };
     }
     const t = now(); while (calls.length && t - calls[0] > 60000) calls.shift();
     if (calls.length >= CALLS_PER_MINUTE) return { isError: true, text: `rate limit: more than ${CALLS_PER_MINUTE} calls in a minute; try again shortly` };
@@ -49,4 +49,9 @@ export function createToolset(options) {
     try { return { isError: false, text: redact(JSON.stringify(await def.run(args && typeof args === 'object' ? args : {}), null, 1)).slice(0, MAX_TEXT) }; }
     catch (error) { return { isError: true, text: redact(JSON.stringify({ error: String(error?.message || error).slice(0, 400) })) }; }
   }
+}
+
+// Redacts the values of a JSON answer so it stays parseable; text that is not JSON is redacted as plain text.
+function redactAnswer(text) {
+  try { return JSON.stringify(redactDeep(JSON.parse(text)), null, 1); } catch { return redact(text); }
 }
