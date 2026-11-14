@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Team } from '../supervisor/team.mjs';
-import { appendToBatch, makeFindingSafe, rejectedSink } from '../supervisor/followups.mjs';
+import { appendToBatch, batchMarker, makeFindingSafe, rejectedSink } from '../supervisor/followups.mjs';
 import { parseDependsOn } from '../foreman-mcp/dependency-parser.mjs';
 
 // Real finding from issue #1143, review of PR #1245.
@@ -135,4 +135,23 @@ test('invalid: the rejected sink puts a finding with its reason in the tick repo
   rejectedSink(report, 'job1', { pr: 9 }, t => t)([{ text: 'x', reason: 'because' }]);
   assert.deepEqual(report.followUpsRejected, [{ job: 'job1', pr: 9, reason: 'because', text: 'x' }]);
   rejectedSink(null, 'job1', { pr: 9 }, t => t)([{ text: 'x', reason: 'because' }]);
+});
+
+test('valid: a duplicate-only review on an already-held batch repairs it before writing', async () => {
+  const marker = '<!-- devtest-followup-batch v1 area=supervisor -->';
+  const held = `${marker}\nBatch.\n- bodyFault('Depends on: not-an-issue')\n- ${PLAIN}\n`;
+  assert.equal(clean(held), false, 'the starting body is held');
+  const { run } = writer(held);
+  const { body, report } = await run([PLAIN]);
+  assert.ok(clean(body), body);
+  assert.equal(report.followUpsRejected, undefined);
+});
+
+test('invalid: an all-rejected review on a held batch never writes a held body', () => {
+  const held = `${batchMarker('supervisor')}\nBatch.\nDepends on: #1\nDepends on: #2\nDepends on: #3\n`;
+  const stubborn = text => (text.includes('STUCK') ? { malformed: 'forced', line: 'STUCK' } : parseDependsOn(text).line ? parseDependsOn(text) : null);
+  const out = appendToBatch(held, { job: 'j', pr: 1, head: 'h', items: ['STUCK finding'] }, stubborn);
+  assert.equal(out.body, held);
+  assert.equal(out.added, 0);
+  assert.equal(out.rejected.length, 1);
 });

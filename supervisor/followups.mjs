@@ -70,7 +70,7 @@ export function appendToBatch(body, { job, pr, head, items, onRejected }, check 
   }
   const section = `${marker}\nFrom PR #${pr} at head \`${head}\`:\n${fresh.length ? fresh.map(t => `- ${t}`).join('\n') : '- _nothing new: every finding was already listed above_'}`;
   let next = `${String(body).replace(/\s+$/, '')}\n\n${section}\n`;
-  let bad = fresh.length ? check(next) : null;
+  let bad = check(next);
   // A batch already held by an older line is repaired, not left to refuse every later finding: the line the parser names is neutralised and the check runs once more.
   if (bad?.line) { next = neutraliseLine(next, bad.line); bad = check(next); }
   if (bad) return done({ body: String(body), added: 0, rejected: [...rejected, ...fresh.map(text => ({ text, reason: 'the batch body would be held by the dependency parser' }))] });
