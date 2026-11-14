@@ -1,6 +1,7 @@
 // Data layer of the team dashboard (issue #32). The tick WRITES a compact cache and history here; the dashboard server
 // only READS. Nothing in this file calls GitHub or a model. All persisted values are already redacted: no prompts, no raw
 // provider output, no session ids, no tokens, no account details.
+import { keptPullLabels } from './parkedpr.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,7 +112,7 @@ export const compactPulls = prs => (prs || []).map(p => ({ number: p.number, tit
   ...(typeof p.createdAt === 'string' && Number.isFinite(Date.parse(p.createdAt)) ? { createdAt: p.createdAt } : {}),
   // Issue #430: only the numbers of the issues a PR closes, so a watched issue is followed to a PR whose branch has no issue-<n>.
   closingIssuesReferences: (p.closingIssuesReferences || []).map(r => ({ number: r?.number })).filter(r => Number.isSafeInteger(r.number) && r.number > 0).slice(0, 10),
-  labels: (p.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).includes('needs-homeowner') ? ['needs-homeowner'] : [],
+  labels: keptPullLabels(p.labels),
   statusCheckRollup: (p.statusCheckRollup || []).slice(0, 40).map(c => ({ name: redact(c.name || c.context || '', 80), status: c.status, conclusion: c.conclusion, state: c.state })) }));
 // The issue a merged PR closed: its closing reference, else the issue-<n> in its branch name (issue #147).
 const issueOfMerged = m => { const n = m.closingIssuesReferences?.[0]?.number ?? Number(/\/issue-(\d+)(\D|$)/.exec(m.headRefName || '')?.[1]); return Number.isSafeInteger(n) && n > 0 ? n : null; };

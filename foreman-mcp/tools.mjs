@@ -146,7 +146,7 @@ export function createTools({ source, readHost, readActivity = hostActivity, get
       }) },
     { name: 'foreman_plan', description: 'What the planner would do, as the dashboard recomputes it per request from the last tick\'s cached GitHub data (not a live dry run, and before the circuit breaker is applied): planned actions, why work waits, the open-PR cap and the next tick time. breakerHalt says when the breaker has halted jobs, in which case plannedActions may list actions a real tick would drop.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: () => withView(v => ({ plannedActions: withReasons(v.plan, v.planned), breakerHalt: breakerHaltOf(v.breaker),
-        nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [],
+        parked: v.parked ?? [], nextTickAt: v.nextTickAt ?? null, nextWhy: v.panels?.nextWhy ?? null, capNotes: v.capNotes ?? [], next: v.panels?.next ?? [],
         note: PLAN_NOTE, skippedForDependencies: dependencySkips(v.excluded) })) },
     { name: 'foreman_host', description: 'Tower load average, memory and swap, plus (sampled over about half a second) swap in and out per second, disk wait (CPU iowait, blocked processes, busy percent per disk) and the top processes by memory with their swap, all from /proc. Short process names only, never command lines.', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       run: async () => { const base = readHost(); return { ...base, activity: await Promise.resolve().then(() => readActivity()).catch(() => null), readAt: iso(now()) }; } },
