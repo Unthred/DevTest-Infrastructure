@@ -10,7 +10,8 @@ const highlighted = (text, query, esc) => highlightInboxText(text, query)
   .join('');
 
 export function inboxCard(card, query, { esc, tag, form }) {
-  const title = highlighted(card.title || 'An inbox item that cannot be shown', query, esc);
+  const reference = card.reference ? `<span class="inbox-ref">${highlighted(card.reference, query, esc)}</span> ` : '';   // issue #1414
+  const title = reference + highlighted(card.title || 'An inbox item that cannot be shown', query, esc);
   const why = card.why ? `<div class="sub">Why: ${highlighted(card.why, query, esc)}</div>` : '';
   const body = highlighted(card.text || '', query, esc);
   const { approve, reject } = decisionForms(card, form);

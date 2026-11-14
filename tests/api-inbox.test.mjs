@@ -112,8 +112,8 @@ test('valid: the state names are served as the contract names, attention, propos
   assert.equal(by(2).proposed_by, 'overseer');
   assert.equal(by(3).will_text, null, 'a waiting item whose content is no longer kept has null text');
   assert.deepEqual(Object.keys(by(1)).sort(), [
-    'actions', 'attention', 'body_text', 'created_at', 'decided_at', 'full_id', 'id', 'job_id', 'kind', 'parked', 'proposed_by', 'reason_code',
-    'reason_text', 'result_text', 'state', 'target', 'title', 'undo_until', 'why', 'will_text',
+    'actions', 'attention', 'body_text', 'created_at', 'decided_at', 'full_id', 'id', 'job_id', 'kind', 'number', 'parked', 'proposed_by', 'reason_code',
+    'reason_text', 'reference', 'result_text', 'state', 'target', 'title', 'undo_until', 'why', 'will_text',
   ]);
 });
 

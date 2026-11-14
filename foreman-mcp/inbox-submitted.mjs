@@ -2,6 +2,8 @@
 // createInbox() so that factory does not grow. Takes the inbox folder; imports nothing from supervisor/.
 import fs from 'node:fs';
 import path from 'node:path';
+import { referenceOf } from './inbox-reference.mjs';
+import { reservations } from './inbox-reserve.mjs';
 
 const readJson = file => {
   try {
@@ -29,6 +31,7 @@ export function submittedItems(dir) {
   } catch {
     throw new Error('the inbox directory is not available');
   }
+  const reserved = new Map(reservations(dir).map(r => [r.id, r.number]));
   const found = [];
   for (const name of names.sort()) {
     const match = /^([a-f0-9]{32})\.json$/.exec(name);
@@ -40,6 +43,8 @@ export function submittedItems(dir) {
     found.push({
       id: match[1],
       shortId: match[1].slice(0, 8),
+      number: reserved.get(match[1]) ?? null,
+      reference: referenceOf(reserved.get(match[1])),
       kind: item.kind ?? null,
       title: item.title ?? null,
       prompt: item.prompt ?? null,
