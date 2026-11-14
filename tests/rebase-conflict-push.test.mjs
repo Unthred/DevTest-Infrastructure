@@ -262,3 +262,38 @@ test('a review of a head with no conflict hunks gets no such file and no such re
   assert.ok(spec);
   assert.doesNotMatch(spec.prompt, /conflict-hunks/);
 });
+
+test('more than 50 conflict hunks never hide a loss outside a conflict: refused, with the conflict list bounded and its total kept', t => {
+  const N = 55;
+  const plain = i => `row ${i}`;
+  const text = f => Array.from({ length: N * 2 }, (_, i) => (i % 2 === 1 ? f(i) : plain(i))).join('\n') + '\n';
+  const r = scratch(t, {
+    base: { 'a.txt': text(plain), 'b.txt': 'x\ny\n' },
+    mainEdit: { 'a.txt': text(i => `main ${i}`) },
+    featCommits: [{ msg: 'edit both', files: { 'a.txt': text(i => `pr ${i}`), 'b.txt': 'x\ny\nthree\nfour\n' } }],
+  });
+  const before = remoteHead(r);
+  const oldHead = rebase(r, { 'a.txt': text(i => `settled value ${i * 7}`) }, { 'b.txt': 'x\ny\nthree\n' });
+  const res = push(r, oldHead);
+  assert.equal(res.pushed, false, JSON.stringify(res).slice(0, 300));
+  assert.equal(res.reason, 'lost-changes');
+  assert.deepEqual(res.lostChanges.map(h => h.file), ['b.txt']);
+  assert.equal(res.conflictHunks.length, 50);
+  assert.equal(res.conflictTotal, N);
+  assert.equal(remoteHead(r), before);
+});
+
+test('a truncated conflict list says so in the stored record, the pull request comment and the reviewer file', async t => {
+  const { recordConflictHunks, conflictNotice, writeConflictHunks } = await import('../supervisor/rebaseconflicts.mjs');
+  const one = { commit: H(3), file: 'a.txt', hunk: '@@ -1 +1 @@', kind: 'missing', text: '+ x' };
+  const rebase = {};
+  const hunks = recordConflictHunks(rebase, { conflictHunks: [one], conflictTotal: 80 });
+  assert.equal(rebase.conflictHunksTotal, 80);
+  assert.match(conflictNotice({ jobText: 'job', from: 'a', to: 'b', hunks, total: 80 }), /80 changed hunk.*first 1 of 80.*truncated/s);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rcp-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeConflictHunks(dir, Object.assign([...hunks], { total: 80 }));
+  const data = JSON.parse(fs.readFileSync(path.join(dir, 'conflict-hunks.json'), 'utf8'));
+  assert.equal(data.total, 80);
+  assert.equal(data.truncated, true);
+});

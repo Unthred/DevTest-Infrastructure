@@ -180,7 +180,7 @@ function compareCommit(oldHunks, newHunks, readMain, id) {
   });
 }
 
-// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ; extra: shas of new commits no old commit pairs with. Returns the findings, newest bounded to MAX_FINDINGS.
+// pairs: [{ old: { sha, subject }, now: { sha } }] whose patches differ; extra: shas of new commits no old commit pairs with. Returns every finding: the bound is applied after the sort into hard and conflict, or a loss outside a conflict could be cut away behind conflict hunks.
 export function compareChangedPairs(run, { pairs, base, oldHead, extra = [] }) {
   if (!pairs.length) return [];
   const mergeBase = run(['merge-base', base, oldHead]).trim();
@@ -192,7 +192,7 @@ export function compareChangedPairs(run, { pairs, base, oldHead, extra = [] }) {
     const id = { commit: old.sha, subject: old.subject };
     out.push(...compareCommit(show(old.sha), [...show(now.sha), ...spare], readMain, id));
   }
-  return out.slice(0, MAX_FINDINGS);
+  return out;
 }
 
 // The shape kept in the job record and shown on the dashboard.
@@ -254,9 +254,10 @@ export function mergeTouched(run, base, oldHead) {
 
 // Total change (old merge base to old head, against new base to new head) for the files a merge commit touched, compared like one commit.
 function compareTotalChange(run, { base, oldHead, newHead, touched }) {
-  const files = [...touched.files];
-  const old = parseHunks(run(['diff', ...DIFF, touched.mergeBase, oldHead, '--', ...files]));
-  const now = parseHunks(run(['diff', ...DIFF, base, newHead, '--', ...files]));
+  // Filtered after the diff, not by path arguments: a merge of a large base touches too many files for one command line.
+  const inTouched = hunks => hunks.filter(h => touched.files.has(h.file));
+  const old = inTouched(parseHunks(run(['diff', ...DIFF, touched.mergeBase, oldHead])));
+  const now = inTouched(parseHunks(run(['diff', ...DIFF, base, newHead])));
   const id = { commit: oldHead, subject: 'merge of the base: total change', total: true };
   return compareCommit(old, now, mainReader(run, touched.mergeBase, base), id);
 }
@@ -276,5 +277,10 @@ export function classifyChanges(run, { pairs, base, oldHead, newHead, extra = []
     : { replayBase: `${f.commit}^`, theirs: f.commit, onto: parentOf.get(f.commit) || base });
   const { hard, conflict } = splitByConflict(run, findings, replayOf);
   const clean = ({ total, ...rest }) => rest;
-  return { lostChanges: hard.map(clean), conflictHunks: conflict.map(clean) };
+  // Bounded per class, so a long conflict list never hides a hard refusal; the conflict total is kept for the reviewer.
+  return {
+    lostChanges: hard.slice(0, MAX_FINDINGS).map(clean),
+    conflictHunks: conflict.slice(0, MAX_FINDINGS).map(clean),
+    conflictTotal: conflict.length,
+  };
 }

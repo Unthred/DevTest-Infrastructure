@@ -2309,7 +2309,7 @@ export class Team {
     if (changes.length) j.rebase.lostChanges = changes;
     const hunks = recordConflictHunks(j.rebase, check);   // issue #1422: pushed, and judged by the review of the new head
     this.save();
-    if (hunks.length) await this.postNotice(j.pr, `rebase-conflict-hunks job=${id}`, conflictNotice({ jobText: this.names().job({ id, kind: 'rebase', pr: j.pr }).text, from: this.commitRef(j.head), to: this.commitRef(pr.headRefOid), hunks }));
+    if (hunks.length) await this.postNotice(j.pr, `rebase-conflict-hunks job=${id}`, conflictNotice({ jobText: this.names().job({ id, kind: 'rebase', pr: j.pr }).text, from: this.commitRef(j.head), to: this.commitRef(pr.headRefOid), hunks, total: j.rebase.conflictHunksTotal }));
     if (changes.length) {
       (report.lostChanges ||= []).push({ pr: j.pr, job: id, changes: changes.length });
       await this.postNotice(j.pr, `rebase-lost-changes job=${id}`, `**Needs the homeowner.** ${this.names().job({ id, kind: 'rebase', pr: j.pr }).text} moved this PR from ${this.commitRef(j.head)} to ${this.commitRef(pr.headRefOid)}. The commit list is ${check.missing.length ? 'incomplete' : 'complete'}, but ${changes.length} change(s) the PR added at the old head are gone from the new head and are not on \`${j.base || 'main'}\` :\n\n${changes.map(c => `- commit ${c.commit.slice(0, 8)}, \`${c.file}\`, hunk ${c.hunk}: ${c.kind} \`${c.text}\``).join('\n')}\n\nThis is not a conflict-only rebase, and no verdict carries to the new head. Required: restore the lost changes (the old head is still reachable by its id), or confirm each removal is intended, before anything is reviewed or merged.`);
