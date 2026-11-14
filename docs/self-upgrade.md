@@ -15,7 +15,7 @@ The supervisor installs main after a reviewed merge. The installer runs the vali
 
 ## The Needs you item
 
-After the fourth refusal Foreman makes no further attempt for that commit and raises **one** Needs you item, `upgrade-blocked`, of attention class **fault**. It names the failing tests, says how many attempts were made and when, and offers one control, **Retry install now**. It clears by itself when the commit installs or main moves to a commit that installs.
+After the fourth refusal Foreman makes no further attempt for that commit and raises **one** Needs you item, `upgrade-blocked`, of attention class **fault**. It names the failing tests, says how many attempts were made and when, and offers one control, **Retry install now**, a button on the dashboard card that sends `upgrade.retry_install`. It clears by itself when the commit installs or main moves to a commit that installs.
 
 Until then nothing appears: a commit that installs on a later attempt never raises the item.
 

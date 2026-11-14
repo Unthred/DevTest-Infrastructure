@@ -227,3 +227,10 @@ test('the card of closed-noreason has a text box and a Record reason button nami
   assert.match(html, />Record reason<\/button>/);
   assert.doesNotMatch(decisionHtml({ id: 'closed-noreason-unreadable', card: decisionCard({ id: 'closed-noreason-unreadable', text: 'x' }) }), /close-reason-form/);
 });
+
+test('the card of upgrade-blocked has a Retry install now form that sends upgrade.retry_install; other upgrade cards have none', () => {
+  const html = decisionHtml({ id: 'upgrade-blocked', card: decisionCard({ id: 'upgrade-blocked', text: 'x' }) });
+  assert.match(html, /<form method="post" action="\/api\/v1\/commands\/upgrade\.retry_install" class="retry-install-form">/);
+  assert.match(html, />Retry install now<\/button>/);
+  assert.doesNotMatch(decisionHtml({ id: 'upgrade-refused', card: decisionCard({ id: 'upgrade-refused', text: 'x' }) }), /retry-install-form/);
+});
