@@ -1147,7 +1147,7 @@ export class Team {
     // Allowance (issue #56): the agent's mode must allow the job type and its estimated cost must fit before the weekly limit,
     // keeping a reserve for the reviews it still owes. A type that does not fit is skipped, so a smaller job further down is
     // chosen instead. The reason is kept for the dashboard and `team status`.
-    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, prs) : 0;
+    const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0, owed = B ? this.pendingReviews(agent, up) : 0;
     const allow = type => { const r = admits(B, type, owed); if (!r.ok) this.hold(agent, type, r.why); return r.ok; };
     // Issue #971: an approved overseer prompt has its own lane. It is planned only for the inbox role (or an unscoped probe), never from the
     // implementer slot, and it does not wait for the open-PR cap. Allowance, usage-limit, model and breaker rules still apply.
@@ -1419,7 +1419,7 @@ export class Team {
   // no side effects (choose() records the reason in this.held).
   admitsNow(agent, type, prs) {
     const B0 = this.modes?.[agent] || null, B = B0 && B0.known && this.plannedUse?.[agent] ? { ...B0, used: B0.used + this.plannedUse[agent], planned: this.plannedUse[agent] } : B0;
-    return admits(B, type, B ? this.pendingReviews(agent, prs) : 0);
+    return admits(B, type, B ? this.pendingReviews(agent, unparkedPulls(prs)) : 0);
   }
 
   // Why `agent` cannot take new implement work now, or null when it can: its mode is not normal, or its latest job hit a usage limit.

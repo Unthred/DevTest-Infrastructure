@@ -14,7 +14,7 @@ import { redact } from './redact.mjs';
 const PARKED = 'parked';
 const TERMINAL = new Set(['completed', 'failed', 'blocked', 'stopped', 'waiting_on']);
 // The planner reads pull requests through this, so a parked one gets no rebase, fix, review or merge.
-export const unparkedPulls = prs => (Array.isArray(prs) ? prs.filter(p => !p.labels?.includes(PARKED)) : prs);
+export { unparkedPulls } from './parkedpr.mjs';   // issue #1407: one shared test of whether a pull request is parked
 // Free text of a control record as shown: null when missing, otherwise redacted and cut to 300 characters.
 const displayText = value => (value == null ? null : redact(value, 300));
 const done = (changed, text) => ({ outcome: 'done', changed, text });

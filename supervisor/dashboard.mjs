@@ -15,6 +15,7 @@ import { robustnessView } from './robustview.mjs';
 export { robustnessView };   // issue #1375: moved to its own module
 import { homeownerQuestion } from './homeowner-question.mjs';
 import { stoppedAttention, endNote, withEndNote } from './faultview.mjs';
+import { unparkedPulls, parkedPullList, isParked, PARKED_PLAN_REASON } from './parkedpr.mjs';
 import { keptText, CAUSE_TEXT, Team, overallCap, capNotes, FIX_LIMIT_OPTIONS, CARRIED_HOLD_OPTIONS, ROLES, decisionInfo, INDEPENDENCE_DECISION, agentOfBranch, checksState, retriedIn, waitingOnText, waitingOnRefs, stuckChecks, carryRecordOf, loneCancelled, prerequisites, roleOfType, roleCount } from './team.mjs';
 import { transcriptExists } from './transcript.mjs';
 import { describeWatch, historyOf, resolve as resolveWatch } from './watchlist.mjs';
@@ -164,7 +165,8 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     const checks = team.ciState(pr);
     if (!author) continue;
     let reason;
-    if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
+    if (isParked(pr)) reason = PARKED_PLAN_REASON;   // issue #1407: listed as held, never planned, never next, never queued for review
+    else if (pr.isDraft) reason = planned.has(`${author}:continue:${pr.number}`) ? 'draft; the agent continues it next' : (S.continueAttempts?.[pr.number] || 0) >= c.limits.max_fix_attempts ? 'draft; continue limit reached, needs the homeowner' : 'draft';
     else if (team.carryPending(pr)) reason = 'the rebase carry is waiting for CI; no review starts for this head until it is recorded or refused';
     else if (checks === 'pending') reason = waitingOnText(pr.statusCheckRollup, now);
     else if (checks === 'red') reason = 'CI failing';
@@ -176,7 +178,7 @@ function reasons(team, cache, jobs, plan, states, names, now = Date.now()) {
     else if (v?.verdict === 'PASS') reason = pr.mergeable === 'MERGEABLE' ? (c.second_opinion && team.secondOpinionPending(pr) ? `PASS from ${v.reviewer}; ${team.secondOpinionWaitText(pr) || 'waiting for the second-opinion review'}` : `PASS from ${v.reviewer}${v.carry ? ` (${carryText(v.carry)})` : ''}; merges on the next tick`) : `PASS from ${v.reviewer} but not mergeable (${String(pr.mergeable || 'unknown').toLowerCase()})`;
     else reason = `waiting for a reviewer on a different model: review of ${sha7(pr.headRefOid)}${noReviewer.get(pr.number) ? `; no reviewer can take it: ${noReviewer.get(pr.number)}` : ''}`;
     queues[author].push({ type: 'pr', ref: pr.number, title: titleOfPr(pr), reason, next: planned.has(`${author}:fix:${pr.number}`) || planned.has(`${author}:continue:${pr.number}`), url: pr.url });
-    if (!pr.isDraft && checks === 'green' && !v && !team.carryPending(pr)) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
+    if (!isParked(pr) && !pr.isDraft && checks === 'green' && !v && !team.carryPending(pr)) for (const reviewer of Object.keys(c.agents).filter(n => !team.reviewRefusal(n, pr, `${key}:${n}`))) {   // agents whose review model is not a model that wrote the head
       const isNext = planned.has(`${reviewer}:review:${pr.number}`);
       const attempts = S.reviewAttempts?.[`${key}:${reviewer}`] || 0;
       queues[reviewer].push({ type: 'review', ref: pr.number, title: titleOfPr(pr), reason: `review ${label(pr)} at ${sha7(pr.headRefOid)}${isNext ? ' (next)' : attempts >= c.limits.max_review_attempts ? ' (attempt limit reached)' : (team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held?.[reviewer]?.review) ? ` (held: ${team.heldPr?.[`${reviewer}:review:${pr.number}`] || team.held[reviewer].review})` : busy(reviewer) ? ' (after the running job)' : ''}`, next: isNext, url: pr.url });
@@ -241,7 +243,7 @@ export function idleReason({ agent, config, team, cache, plan, state, now = Date
   const m = team.modes?.[agent];
   if (m && m.mode !== 'normal') parts.push({ rank: 0, text: `${MODE_LABEL[m.mode]}: ${m.reason}` });
   const part = (rank, text, kind, n) => { parts.push({ rank, text }); links.push({ text: (kind === 'pull' ? names.pr(n) : names.issue(n)).text, url: url(kind, n) }); };
-  const mine = prs.filter(p => agentOfBranch(c, p.headRefName) === agent);
+  const mine = unparkedPulls(prs).filter(p => agentOfBranch(c, p.headRefName) === agent);   // issue #1407: a parked PR is not named as this agent's work
   for (const p of mine) {
     const v = S.verdicts?.[`${p.number}:${p.headRefOid}`], checks = team.ciState(p);
     if (p.isDraft) {
@@ -765,7 +767,7 @@ export function buildView({ config, root, jobs, events, state, cache, snapshots,
       watching: watchingView({ items: watchlist?.items || [], cache: c, state, prs: extra.prs, issues: extra.issues, jobs: extra.jobs, names, now }),
       generatedAt: now, tz, repository: config.repository, teamEnabled: config.enabled !== false,
       tick: cache?.tick || null, cacheFetchedAt: cache?.fetchedAt || null,
-      agents, queues, plan, capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
+      agents, queues, plan, parked: parkedPullList(c.pulls), capacity: overallCap(config.limits), capNotes: capNotes(config.limits, team.pauseText(c.pulls || [], c.issues || [])).map(t => redact(t, 300)),
       budget, resetAdvice: resetAdvice.byId, budgetLimits: budgetThresholds(budgetSettings(config)), hostPressure: hostPressureView(state, config, now),   // issue #1151
       attention,
       robustness: robustnessView(state, team, jobs, now),
