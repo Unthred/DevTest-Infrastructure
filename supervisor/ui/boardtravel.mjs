@@ -2,6 +2,7 @@
 // one back on its ball at the point it has reached, using the Web Animations API on the ball's own element. Nothing here starts a travel by
 // itself: board.mjs hands it the plan made from a change event, and an empty hand means nothing moves.
 import { targetKey, offsetsOf } from './boardmotion.mjs';
+import { showTrail } from './boardtrail.mjs';
 
 const sameTarget = (a, b) => a.kind === b.kind && a.id === b.id && a.ident === b.ident;
 
@@ -38,12 +39,13 @@ export class Travels {
 
   move(node, travel, elapsed, root) {
     const rest = travel.points[travel.points.length - 1];
-    const offsets = offsetsOf(travel.points);
+    const offsets = travel.offsets ?? offsetsOf(travel.points);
     const frames = travel.points.map((point, index) => ({ transform: `translate(${point.x - rest.x}px, ${point.y - rest.y}px)`, offset: offsets[index] }));
     const animation = node.animate(frames, { duration: travel.durationMs, delay: travel.delayMs ?? 0, fill: 'backwards', easing: 'linear' });
     animation.currentTime = elapsed;
     if (travel.laps) this.showLaps(node, travel.laps, animation);
     this.playEffects(root, travel, offsets, elapsed);
+    if (travel.trail) showTrail(node.ownerSVGElement, travel, elapsed);
   }
 
   // Issue #1318: a style may ask for other parts of its scenery to change while a ball travels (a gate opening). An effect names an element

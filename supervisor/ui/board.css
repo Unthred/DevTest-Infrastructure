@@ -107,3 +107,5 @@
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .legend-types { color: var(--muted); }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--family); flex: none; }
+.board-svg .launch-pad, .board-svg .landing-pad { fill: var(--muted); }
+.board-svg .flight-trail { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 1 6; pointer-events: none; }
