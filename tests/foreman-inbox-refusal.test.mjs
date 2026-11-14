@@ -11,7 +11,9 @@ import { reasonCodeOf } from '../supervisor/api/inbox-reasons.mjs';
 import { SECRET_RULES, MASK_ADVICE } from '../supervisor/inbox-refusal.mjs';
 import { MASK_RULES } from '../supervisor/redact.mjs';
 import { createTools } from '../foreman-mcp/tools.mjs';
-import { createInbox } from '../foreman-mcp/inbox.mjs';
+import { createInbox, checkProposal } from '../foreman-mcp/inbox.mjs';
+import { RULE_NAMES } from '../foreman-mcp/refusal-reason.mjs';
+import { RULES as MCP_RULES } from '../foreman-mcp/redact.mjs';
 const hex = n => crypto.randomBytes(n).toString('hex');
 const TOKEN = 'gh' + 'p_' + hex(12);
 const GOOD = { kind: 'prompt', title: 'Tidy the docs index', prompt: 'Fix the broken link in docs/README.md.' };
@@ -81,4 +83,35 @@ test('#1372: every credential rule and every masking rule has a name and a rewor
   assert.equal(new Set(SECRET_RULES.map(r => r.name)).size, SECRET_RULES.length);
   for (const rule of MASK_RULES) { assert.ok(rule.name, 'a masking rule is named'); assert.ok(MASK_ADVICE[rule.name], `${rule.name} has advice`); }
   assert.equal(new Set(MASK_RULES.map(r => r.name)).size, MASK_RULES.length);
+});
+// ---- the submit-time check of foreman_propose gives the same kind of reason (it has its own redactor and never imports supervisor/)
+const SUBMIT_CASES = [
+  ['private key block', '-----BEGIN PRIV' + 'ATE KEY-----'],
+  ['service key prefix', 'gh' + 'p_' + hex(12)],
+  ['cloud key prefix', 'AK' + 'IA' + 'ABCDEFGHIJKLMNOP'],
+  ['bearer scheme', 'Bear' + 'er ' + hex(8), 'x'],
+  ['address with password', 'ht' + 'tp://alice:' + hex(4) + '@host.example'],
+  ['word then separator', 'the colour tok' + 'en: crimson'],
+  ['word then separator', 'reset the pass' + 'word: required'],
+];
+test('#1372: the submit-time check names the field, the rule and the line, and quotes none of the text', () => {
+  for (const [rule, text, ...skipWord] of SUBMIT_CASES) {
+    const r = checkProposal({ ...DRAFT, body: `One.\nTwo.\nSee ${text} here.` });
+    assert.equal(r.ok, false, rule);
+    assert.match(r.error, new RegExp(`^body contains secret-shaped text: rule "${rule}" matched on line 3\\. \\S.*\\.$`), rule);
+    assert.ok(quotesNone(r.error, skipWord.length ? text.slice(7) : text), `${rule}: no run of the matched text`);   // the scheme word is the rule's own name
+    assert.equal(reasonCodeOf(r.error, { state: 'refused', kind: 'issue_draft' }), 'secret_shaped');
+  }
+});
+test('#1372: the submit-time rule names are ones the Inbox uses, and each has a sentence', () => {
+  const known = new Set(SECRET_RULES.map(r => r.name));
+  assert.equal(RULE_NAMES.length, MCP_RULES.length);
+  for (const r of RULE_NAMES) { assert.ok(known.has(r.name), r.name); assert.match(r.advice, /^[A-Z].*\.$/); }
+});
+test('#1372: foreman_propose itself refuses a submit-time match naming the rule and the line', async t => {
+  const dir = makeInbox(t);
+  const r = await propose(dir, { ...DRAFT, body: `A.\nB.\nthe colour tok${'en'}: crimson` });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /rule \\"word then separator\\" matched on line 3\./);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'items')), [], 'nothing was written');
 });

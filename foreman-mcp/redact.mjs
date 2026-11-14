@@ -1,5 +1,5 @@
 // Redaction of secret-shaped text, applied to every tool result and every logged argument (D-008). Pure; no I/O.
-const RULES = [
+export const RULES = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[redacted private key]'],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[redacted token]'],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[redacted token]'],
