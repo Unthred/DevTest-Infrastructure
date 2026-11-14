@@ -48,10 +48,10 @@ test('a waiting, a done and a failed item each show their state, marker and the 
   assert.doesNotMatch(tableRow(done, ctx), /Second line/, 'the table shows the first line only');
   assert.match(compactRow(failed, ctx), /data-state="failed"/);
 });
-test('the table has the six columns and the compact list has the marker, title, kind and age', () => {
-  assert.deepEqual(COLUMNS.map(c => c.label), ['Title', 'Kind', 'State', 'Age', 'Source', 'Result']);
+test('the table has the six columns and the compact list has the chips, title and the age and source text', () => {
+  assert.deepEqual(COLUMNS.map(c => c.label), ['Kind', 'State', 'Title', 'Age', 'Source', 'Result']);
   const html = compactRow(rowOf(rec(), NOW), ctx);
-  assert.match(html, /class="iv-mark"[\s\S]*class="iv-title"[\s\S]*class="iv-kind"[\s\S]*class="iv-age"/);
+  assert.match(html, /class="iv-chips"[\s\S]*class="iv-title"[\s\S]*class="iv-age"[\s\S]*class="iv-source"/);
 });
 test('sorting by Age puts the newest first ascending and the oldest first descending; a missing age is last either way', () => {
   const rows = [rec({ id: 'o', createdAt: 1000 }), rec({ id: 'n', createdAt: 9000 }), rec({ id: 'x', createdAt: null })].map(r => rowOf(r, 10000));

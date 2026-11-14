@@ -21,13 +21,24 @@ export function pendingClicks(inboxDir) {
   return out;
 }
 
+// Issue #1416: card id -> { action: time of the click }, so the Inbox row can say what was decided and when.
+export function pendingClickTimes(inboxDir) {
+  const out = new Map();
+  if (!inboxDir) return out;
+  for (const s of allStatuses(inboxDir)) {
+    if (!LIVE.has(s.state) || !s.click?.card) continue;
+    out.set(s.click.card, { ...(out.get(s.click.card) || {}), [s.click.action]: Number.isFinite(s.decidedAt) ? s.decidedAt : null });
+  }
+  return out;
+}
+
 export function withDecisionCards(view, config, cache) {
   if (!view?.panels?.needsYou) return view;
   const ctx = { parked: parkedNumbers(cache), appConfigured: appConfigured(config) };
-  const pending = pendingClicks(config?.inbox?.dir);
+  const pending = pendingClicks(config?.inbox?.dir), times = pendingClickTimes(config?.inbox?.dir);
   view.panels.needsYou = view.panels.needsYou.map(a => {
     const card = decisionCard(a, ctx);
-    return { ...a, card: pending.has(a.id) && !card.error ? { ...card, pending: pending.get(a.id) } : card };
+    return { ...a, card: pending.has(a.id) && !card.error ? { ...card, pending: pending.get(a.id), pendingAt: times.get(a.id) } : card };
   });
   return view;
 }

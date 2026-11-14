@@ -598,3 +598,20 @@ dl.reset-figures dt { font-size: 12px; opacity: .75; }
 dl.reset-figures dd { margin: 0 8px 0 4px; }
 dl.reset-figures > * { display: inline; }
 li[data-reset] details form { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+/* Issue #1416: the title takes the width the other cells do not need; Kind and State are the Now card's badges at the start of the row; Age and Source are small
+   secondary text. Only the title column has no width, so the fixed table layout gives it everything left over. */
+.iv-table col[data-col=kind],.iv-table col[data-col=state]{width:8rem}.iv-table col[data-col=age]{width:4.5rem}.iv-table col[data-col=source]{width:7rem}.iv-table col[data-col=result]{width:12rem}
+.iv-table col[data-col=actions]{width:13rem}
+.iv-table td[data-col=age],.iv-table td[data-col=source],.iv-meta{color:var(--mut);font-size:var(--fs-sm)}
+.iv-table .iv-title,.iv-crow .iv-title{overflow-wrap:anywhere;white-space:normal}.iv-decided{display:block;color:var(--mut);font-size:var(--fs-sm)}
+.iv-crow summary{flex-wrap:wrap}.iv-crow .iv-chips{display:inline-flex;flex-wrap:wrap;gap:var(--sp1);flex:none}.iv-crow .iv-body{flex:1 1 16rem;min-width:0}
+.iv-crow .iv-title{overflow:visible;text-overflow:clip;flex:none}.iv-crow .iv-meta{flex:none}.iv-crow .badge{font-size:var(--fs-xs)}
+@media(max-width:640px){
+  .iv-table{display:block;min-width:0}.iv-table colgroup{display:none}.iv-table thead{display:block}.iv-table thead tr{display:flex;flex-wrap:wrap;gap:var(--sp1) var(--sp2);padding:var(--sp1) 0}.iv-table th{display:block;border:0;padding:0}.iv-table .iv-grip,.iv-table th[data-col=actions],.iv-table th[hidden]{display:none}.iv-table tbody{display:block}
+  .iv-table tr{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp1) var(--sp2);padding:var(--sp2) 0;border-bottom:1px solid var(--line)}
+  .iv-table td{display:block;border:0;padding:0;min-width:0}.iv-table td[data-col=kind]{order:1}.iv-table td[data-col=state]{order:2}
+  .iv-table td[data-col=title]{order:3;flex:1 1 100%}.iv-table td[data-col=age]{order:4}.iv-table td[data-col=source]{order:5}
+  .iv-table td[data-col=result]{order:6;flex:1 1 100%}.iv-table td[data-col=actions]{order:7;flex:1 1 100%}
+  .iv-table td[data-col=actions]:empty{display:none}.iv-table td[hidden]{display:none}
+  .iv-crow .iv-body{flex:1 1 100%;order:3}.iv-crow .iv-meta{order:4}
+}

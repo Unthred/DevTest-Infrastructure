@@ -5,8 +5,9 @@ import { sanitizeColumns } from './table-columns.mjs';
 
 export const VIEWS = ['cards', 'table', 'compact'];
 export const VIEW_LABELS = { cards: 'Cards', table: 'Table', compact: 'Compact list' };
+// Issue #1416: the two chips lead the row, then the title (the one wide column), then the small Age and Source text, then the Result.
 export const COLUMNS = [
-  { key: 'title', label: 'Title' }, { key: 'kind', label: 'Kind' }, { key: 'state', label: 'State' },
+  { key: 'kind', label: 'Kind' }, { key: 'state', label: 'State' }, { key: 'title', label: 'Title' },
   { key: 'age', label: 'Age' }, { key: 'source', label: 'Source' }, { key: 'result', label: 'Result' },
 ];
 export const COLUMN_KEYS = COLUMNS.map(c => c.key);
@@ -14,6 +15,30 @@ export const STORE_KEY = 'dash.inbox.views';
 
 const STATE_MARK = { pending: ['◔', 'waiting'], done: ['✓', 'done'], failed: ['✗', 'failed'], rejected: ['✗', 'rejected'], refused: ['✗', 'refused'] };
 export const stateMark = state => STATE_MARK[state] || ['•', String(state || 'unknown')];
+
+// Issue #1416: the chips use the Now card's own badge colours (.badge .sev-*); the word is always shown, colour is never the only signal.
+const STATE_SEV = { pending: 'warning', done: 'ok', failed: 'action', rejected: 'action', refused: 'action', approved: 'info', decided: 'info' };
+export const stateSeverity = state => STATE_SEV[state] || 'info';
+export const kindLabel = kind => { const t = String(kind || 'unknown').replace(/_/g, ' '); return t[0].toUpperCase() + t.slice(1); };
+const clock = ms => (Number.isFinite(ms) ? new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
+
+// What the homeowner already decided on an item that has not been carried out yet, from what the record holds: a decision card's recorded
+// clicks (card.pending, with their times in card.pendingAt) or an approved or rejected inbox item (decision and decidedAt). '' when nothing was decided.
+export function decidedOf(rec) {
+  const wait = ', waiting for the next pass';
+  const open = Array.isArray(rec.card?.pending) ? rec.card.pending : [];
+  if (open.length) {
+    return open.map(action => {
+      const label = (rec.card.controls || []).find(c => c.action === action)?.label || action;
+      const at = clock(rec.card.pendingAt?.[action]);
+      return `${label} pressed${at ? ` ${at}` : ''}${wait}`;
+    }).join('; ');
+  }
+  const word = ['approved', 'rejected', 'pending'].includes(rec.state) ? { approve: 'Approved', reject: 'Rejected' }[rec.decision] : '';   // a finished item is not waiting
+  if (!word) return '';
+  const at = clock(rec.decidedAt);
+  return `${word}${at ? ` ${at}` : ''}${rec.decision === 'approve' ? wait : ''}`;
+}
 
 // Pending items wait for the homeowner and have no result yet; every other item's stored text is its result.
 export const resultOf = rec => (rec.state === 'pending' ? '' : String(rec.reason || rec.text || ''));
@@ -23,7 +48,7 @@ export const firstLine = text => String(text ?? '').split(/\r?\n/).map(l => l.tr
 export function sourceOf(rec) {
   if (rec.pr) return `PR #${rec.pr}`;
   if (rec.issue) return `Issue #${rec.issue}`;
-  if (rec.decision) return 'Decision';
+  if (rec.decision === true) return 'Decision';   // a decision card; a string is the homeowner's answer on an inbox item (issue #1416)
   return 'Overseer';
 }
 
@@ -51,7 +76,7 @@ export function decisionForms(item, form) {
 export function rowOf(rec, now) {
   const created = Number.isFinite(rec.createdAt) ? rec.createdAt : null;
   return {
-    id: rec.id, reference: String(rec.reference || ''), decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'),
+    id: rec.id, reference: String(rec.reference || ''), decision: rec.decision, broken: rec.broken, title: String(rec.title || 'An inbox item that cannot be shown'), kind: String(rec.kind || 'unknown'), state: String(rec.state || 'unknown'), decided: decidedOf(rec),
     created, age: ageText(created, now), source: sourceOf(rec), result: firstLine(resultOf(rec)), full: resultOf(rec), prompt: promptOf(rec),
   };
 }

@@ -26,7 +26,7 @@ const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ivbrowser-'));
 for (const d of ['jobs', 'dashboard', 'team']) fs.mkdirSync(path.join(root, d), { recursive: true });
 fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: Date.now() - 60000, status: 'ok', lastOkAt: Date.now() - 60000 }, fetchedAt: Date.now() - 60000, pulls: [], issues: [] }));
-buildInbox(path.join(root, 'inbox'));
+buildInbox(path.join(root, 'inbox'), Date.now(), { layout: true });
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' }, inbox: { dir: path.join(root, 'inbox') },
   limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
 const HOST = '127.0.0.1', PORT = 8080;

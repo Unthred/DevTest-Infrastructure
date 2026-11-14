@@ -3,7 +3,10 @@
 import { COLUMN_KEYS, STORE_KEY, sanitizePrefs, sortRows } from './inbox-views.mjs';
 import { bindResize } from './table-columns.mjs';
 
-const textOf = (tr, key) => tr.querySelector(`[data-col="${key}"]`)?.textContent.trim() || '';
+const textOf = (tr, key) => {
+  const n = tr.querySelector(`[data-col="${key}"]`);
+  return n?.dataset.sort ?? (n?.textContent.trim() || '');
+};
 
 function tableRows(tbody) {
   return [...tbody.rows].map(tr => ({
@@ -63,7 +66,7 @@ export function initInboxViews(root = document, store = localStorage, phone = ma
   const showColumns = () => {
     for (const k of COLUMN_KEYS) {
       const off = prefs.hidden.includes(k);
-      for (const n of table.querySelectorAll(`[data-col="${k}"]`)) n.hidden = off;
+      for (const n of table.querySelectorAll(`[data-col="${k}"]`)) n.hidden = off || n.dataset.empty === '1';
       table.querySelector(`col[data-col="${k}"]`).style.width = prefs.widths[k] ? `${prefs.widths[k]}px` : '';
       const box = el.querySelector(`.iv-colmenu input[data-col="${k}"]`);
       if (box) box.checked = !off;
