@@ -57,16 +57,35 @@ export function beyondItemProblems({ body, diffFiles, issueBody }) {
   return out;
 }
 
-// "team.mjs is unchanged": the clause names a file and says it is unchanged. Clauses split at sentence ends, semicolons and "but".
+// Quoted text (a test name, a phrase) is not a claim; a backticked file name stays.
+const withoutQuoted = clause => clause.replace(/"[^"]*"/g, ' ').replace(/`([^`]*)`/g, (all, inner) => (/\s/.test(inner) ? ' ' : inner));
+
+// The files an unchanged word is about: the file named nearest before it, plus files joined to it by "and" or a comma.
+function claimSubjects(clause) {
+  const word = UNCHANGED.exec(clause);
+  const before = clause.slice(0, word.index);
+  const names = [...before.matchAll(new RegExp(FILE_NAME.source, 'g'))];
+  if (!names.length) return clause.slice(word.index).match(FILE_NAME)?.slice(0, 1) || [];
+  const subjects = [names.at(-1)[0]];
+  for (let i = names.length - 2; i >= 0; i--) {
+    const between = before.slice(names[i].index + names[i][0].length, names[i + 1].index);
+    if (!/^[\s,&]*(?:(?:and|or)[\s,&]*)?$/i.test(between)) break;
+    subjects.push(names[i][0]);
+  }
+  return subjects;
+}
+
+// "team.mjs is unchanged": the clause says a named file is unchanged. Clauses split at sentence ends, semicolons, table cells and "but".
 export function unchangedClaimProblems({ body, diffFiles }) {
   const out = [];
   const changed = [...diffFiles.keys()];
   for (const line of String(body || '').split('\n')) {
-    for (const clause of line.split(/\.\s+|;|\||\bbut\b/i)) {
+    for (const raw of line.split(/\.\s+|;|\||\bbut\b/i)) {
+      const clause = withoutQuoted(raw);
       if (!UNCHANGED.test(clause)) continue;
-      for (const name of clause.replace(/`/g, '').match(FILE_NAME) || []) {
-        const path = changed.find(file => file === name || file.endsWith(`/${name}`));
-        if (path) out.push({ row: 'description', cite: clause.trim().slice(0, 80), reason: `says ${name} is unchanged but the diff changes ${path}` });
+      for (const name of claimSubjects(clause)) {
+        const path = changed.find(file => file === name || file.endsWith('/' + name));
+        if (path) out.push({ row: 'description', cite: raw.trim().slice(0, 80), reason: 'says ' + name + ' is unchanged but the diff changes ' + path });
       }
     }
   }

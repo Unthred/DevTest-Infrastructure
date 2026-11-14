@@ -186,14 +186,15 @@ test('the mandated full-suite command is not read as a named test', () => {
 
 // Issue #1440: the claims of a description a script can test (files beyond the item, unchanged claims, measured totals).
 const diffOf = (...paths) => paths.map(p => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n@@ -1,1 +1,2 @@\n x\n+y`).join('\n');
-const ISSUE_1377 = '## Files this item edits\n- supervisor/api/attention.mjs\n- tests/api-attention.test.mjs\n- tests/api-overview.test.mjs\n';
+const ISSUE_1377 = '## Files this item edits\n- supervisor/api/attention.mjs\n- tests/api-attention.test.mjs\n';
 const DIFF_1420 = diffOf('supervisor/api/attention.mjs', 'supervisor/api/models/overview.mjs', 'tests/api-attention.test.mjs', 'tests/api-overview.test.mjs');
 const claims = (body, diff, issueBody = '') => requirementsCiteProblems({ body, diff, headFiles: new Map(), issueBody });
 
 test('PR 1420 for issue 1377: overview.mjs changed and not declared is reported; declared with a reason it passes', () => {
   const found = claims('Adds the thing.', DIFF_1420, ISSUE_1377);
-  assert.deepEqual(found.map(p => p.cite), ['supervisor/api/models/overview.mjs']);
-  const declared = 'Adds the thing.\n\n## Files beyond the item\n- `supervisor/api/models/overview.mjs`: two lines so the overview reads the new field\n';
+  assert.deepEqual(found.map(p => p.cite), ['supervisor/api/models/overview.mjs', 'tests/api-overview.test.mjs']);
+  const declared = 'Adds the thing.\n\n## Files beyond the item\n- `supervisor/api/models/overview.mjs`: two lines so the overview reads the new field\n'
+    + '- `tests/api-overview.test.mjs`: covers the overview field\n';
   assert.deepEqual(claims(declared, DIFF_1420, ISSUE_1377), []);
 });
 
@@ -211,6 +212,16 @@ test('an unchanged claim about a file the diff changes is reported; about a file
   assert.equal(claims('The file `supervisor/team.mjs` is untouched.', diff).length, 1);
   assert.deepEqual(claims('supervisor/other.mjs is unchanged; team.mjs changes the thing.', diff), []);
   assert.deepEqual(claims('| A file is unchanged | Met | `supervisor/team.mjs:2` |', diff), []);
+});
+
+test('an unchanged claim is bound to its own file; quoted test names are not claims (PR 1404 shapes)', () => {
+  const diff = diffOf('tests/team.test.mjs', 'supervisor/api/attention.mjs', 'supervisor/team.mjs');
+  const cell = '| 1. X | Met | `supervisor/other.mjs:2`; test "an idle slot leaves the queue unchanged" in tests/team.test.mjs |';
+  assert.deepEqual(claims(cell, diff), []);
+  assert.deepEqual(claims('| 2 | Met | test `a writer job is not edited` in `tests/team.test.mjs` |', diff), []);
+  assert.deepEqual(claims('`supervisor/needsyou.mjs` is not edited: items pass through and `supervisor/api/attention.mjs` has a row.', diff), []);
+  assert.deepEqual(claims('The behaviour of other.mjs is unchanged and team.mjs gains a helper.', diff), []);
+  assert.equal(claims('team.mjs and attention.mjs are unchanged.', diff).length, 2);
 });
 
 test('PR 1427 totals are reported, both lines; an issue number, a line cite and a version are not totals', () => {
