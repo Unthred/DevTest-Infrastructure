@@ -16,6 +16,7 @@ import { restoredIn, sinceLastReset } from './resetdetect.mjs';
 import { validateResetsConfig } from './resetsettings.mjs';
 import { validateChoiceConfig } from './choiceconfig.mjs';
 import { DEFAULT_READING_MAX_AGE_MINUTES, readingInfo } from './readingfresh.mjs';
+import { validateTierLine } from './tierline.mjs';
 
 export const HOUR = 3600000;
 export const DEFAULT_BUDGET = { enabled: true, high_water: 0.85, high_water_min_hours: 24, recent_hours: 24, exhausted_at: 0.995, probe: true, probe_age_hours: 2, probe_interval_minutes: 60 };
@@ -29,7 +30,7 @@ const EXHAUSTED_STATUS = ['rejected', 'blocked', 'exhausted', 'limit_reached'];
 // Issue #680: a projection never holds work back, so these settings do nothing now. They are still accepted (and range-checked as before) so an installed
 // team.local.json that sets them keeps loading.
 const LEGACY_KEYS = ['projected_limit', 'recent_min_window_hours', 'recent_min_samples'];
-const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin', 'resets', 'choice'];   // issue #1116; resets: issue #1162; choice: issue #1346
+const CAPACITY_KEYS = ['starting_capacity', 'capacity', 'reserve_margin', 'resets', 'choice', 'tier_line'];   // issue #1116; resets: issue #1162; choice: issue #1346
 const KEYS = ['enabled', 'high_water', 'high_water_min_hours', 'recent_hours', 'exhausted_at', 'can_take_over', 'probe', 'probe_age_hours', 'probe_interval_minutes'];
 KEYS.push('reading_max_age_minutes');   // issue #1163
 
@@ -46,6 +47,7 @@ export function validateBudgetConfig(b, agentNames) {
   validateCapacityKeys(b, agentNames);
   validateResetsConfig(b.resets);
   validateChoiceConfig(b.choice, agentNames);
+  validateTierLine(b.tier_line);   // issue #1417
   if ('probe' in b && typeof b.probe !== 'boolean') throw new SupervisorError('invalid budget config: probe');
   if ('can_take_over' in b && !(Array.isArray(b.can_take_over) && b.can_take_over.every(n => agentNames.includes(n))))
     throw new SupervisorError('invalid budget config: can_take_over must list configured agents');
