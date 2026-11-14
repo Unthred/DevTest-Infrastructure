@@ -25,9 +25,12 @@ const stateRoot = fs.mkdtempSync(path.join(base, 'ui-about-state-'));
 const emptyRoot = fs.mkdtempSync(path.join(base, 'ui-about-empty-'));
 const uid = process.getuid() === 0 ? 99 : process.getuid(), gid = process.getgid() === 0 ? 100 : process.getgid();
 const stage = stageProject(here, uid, gid), project = stage.project;
-const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: { cpus: 2, memoryMb: 2048, pids: 256, shmMb: 256, timeoutMs: 240000, diskMb: 256, cacheMb: 64 } };
+const cfg = { allowedProjects: [project], storageRoot, uid, gid, lock, limits: {
+    cpus: 2, memoryMb: 2048, pids: 256, shmMb: 256, timeoutMs: 240000, diskMb: 256, cacheMb: 64,
+  } };
 const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
-  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 }, agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
+  limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+  agents: { claude: { provider: 'claude', branch_prefix: 'claude/', issues: [10] } } };
 
 // 14 Nov 2026 12:00 UTC is "now" for the dashboard and, through the scenario, for the browser clock.
 const NOW = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -40,7 +43,10 @@ function seed(root, { installs }) {
   for (const d of ['jobs', 'dashboard', 'team', 'versions']) fs.mkdirSync(path.join(root, d), { recursive: true });
   fs.symlinkSync(`versions/${installs ? SHA.now : SHA.old}`, path.join(root, 'current'));
   fs.writeFileSync(path.join(root, 'team', 'state.json'), JSON.stringify({ jobs: {} }));
-  fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({ tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 }, fetchedAt: NOW - 60000, pulls: [], issues: [], delivered: [] }));
+  fs.writeFileSync(path.join(root, 'dashboard', 'cache.json'), JSON.stringify({
+    tick: { at: NOW - 60000, status: 'ok', lastOkAt: NOW - 60000 },
+    fetchedAt: NOW - 60000, pulls: [], issues: [], delivered: [],
+  }));
   if (!installs) return;
   const day13 = h => Date.UTC(2026, 10, 13, h, 0, 0), day12 = Date.UTC(2026, 10, 12, 8, 0, 0), at = Date.UTC(2026, 10, 14, 9, 18, 33);
   const lines = [
@@ -51,7 +57,8 @@ function seed(root, { installs }) {
   ];
   fs.writeFileSync(path.join(root, 'team', 'upgrades.jsonl'), `${lines.join('\n')}\n`);
   const items = [
-    issue(1424, 'Agent choice stalls V2-9 Roomgate', 'Tier: 0\n\nThe agent choice starts a job whenever a candidate actually has room left for it. More words follow.'),
+    issue(1424, 'Agent choice stalls V2-9 Roomgate', 'Tier: 0\n\nThe agent choice starts a job whenever a candidate actually has room left for it. '
+      + 'More words follow.'),
     pr(1425, 'Fix the agent choice', [1424]),
     issue(1427, 'Look of the board V2-10 Boardlook', 'Tier: 5\n\nThe live board shows a <b>bold</b> legend under the picture.'),
     pr(1426, 'Board legend', [1427]),
@@ -59,7 +66,9 @@ function seed(root, { installs }) {
     issue(1413, 'Menu V2-4 Menus', 'Tier: 1\n\nThe menu opens faster.'), pr(1411, 'Menu', [1413]),
     issue(1414, 'Cleanup V2-5 Tidyup', 'Tier: 6\n\nThe old settings files are gone.'), pr(1412, 'Cleanup', [1414]),
   ];
-  fs.writeFileSync(path.join(root, 'dashboard', 'issue-index.json'), JSON.stringify({ schema: 1, items: Object.fromEntries(items.map(i => [`${i.kind}:${i.number}`, i])) }));
+  fs.writeFileSync(path.join(root, 'dashboard', 'issue-index.json'), JSON.stringify({
+    schema: 1, items: Object.fromEntries(items.map(i => [`${i.kind}:${i.number}`, i])),
+  }));
 }
 
 const failures = [];
@@ -77,7 +86,9 @@ try {
   fs.mkdirSync(storageRoot, { recursive: true, mode: 0o700 }); fs.mkdirSync(outDir, { recursive: true });
   seed(stateRoot, { installs: true }); seed(emptyRoot, { installs: false });
   const pkg = lock.packages['playwright-core'];
-  await run('restore', { phase: 'restore', command: ['sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`] });
+  await run('restore', { phase: 'restore', command: [
+    'sh', '-c', `tar -xzf /src/browser/vendor/playwright-core-${pkg.version}.tgz -C /cache && test -f /cache/package/index.mjs`,
+  ] });
   for (const profile of ['desktop-1280', 'phone-390']) {
     const make = root => handler({ wake: () => {}, root, config, host: '127.0.0.1', port: 8731, now: () => NOW });
     const real = make(stateRoot), empty = make(emptyRoot);
@@ -97,8 +108,13 @@ try {
       if (req.headers.referer?.includes('empty=1') && new URL(req.url, 'http://x').pathname === '/api/v1/about') return empty(req, res);
       return real(req, res);
     });
-    await run(profile, { phase: 'test', command: ['node', '/src/browser/ui-about-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `ui-about-${profile}`] }, server);
+    await run(profile, { phase: 'test', command: [
+      'node', '/src/browser/ui-about-scenario.mjs', '--target', 'fixture', '--profile', profile, '--name', `ui-about-${profile}`,
+    ] }, server);
   }
-} finally { fs.rmSync(storageRoot, { recursive: true, force: true }); fs.rmSync(stateRoot, { recursive: true, force: true }); fs.rmSync(emptyRoot, { recursive: true, force: true }); stage.cleanup(); }
+} finally {
+  for (const dir of [storageRoot, stateRoot, emptyRoot]) fs.rmSync(dir, { recursive: true, force: true });
+  stage.cleanup();
+}
 if (failures.length) { console.error(`UI ABOUT BROWSER CHECK FAILED (${failures.length}):\n${failures.join('\n')}`); process.exit(1); }
 console.log('UI ABOUT BROWSER CHECK DONE');
