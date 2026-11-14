@@ -11,6 +11,12 @@ const STYLE_BLOCK = /<(?:[\w.-]+:)?style\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?style\
 // The XML parser decodes a character reference before SVG or CSS reads the text, so one could spell href, url( or @import past every text test.
 const CHARACTER_REFERENCE = /&#/;
 
+// A processing instruction (xml-stylesheet) or a DOCTYPE external identifier pulls in outside text without any element tag, so only the leading xml
+// declaration is allowed and a DOCTYPE may not carry SYSTEM or PUBLIC.
+const XML_DECLARATION = /^\s*<\?xml\s[^>]*\?>/;
+const EXTERNAL_DOCTYPE = /<!DOCTYPE[^>]*\b(?:SYSTEM|PUBLIC)\b/i;
+const hasForbiddenInstruction = text => text.replace(XML_DECLARATION, '').includes('<?');
+
 const ANIMATION = new Set(['set', 'animate']);
 const ANIMATED_REFERENCE = /(?:^|[\s"'/])attributeName\s*=\s*["']?\s*(?:[\w-]+:)?(?:href|on[\w-]*)\b/i;
 const STYLE_ATTRIBUTE = /(?:^|[\s"'/])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
@@ -27,6 +33,8 @@ export function checkIcon(text) {
   if (Buffer.byteLength(text, 'utf8') > MAX_ICON_BYTES) return { ok: false, reason: `the file is larger than ${MAX_ICON_BYTES} bytes` };
   if (/<!ENTITY/i.test(text)) return { ok: false, reason: 'the file declares an entity' };
   if (CHARACTER_REFERENCE.test(text)) return { ok: false, reason: 'the file has a character reference' };
+  if (hasForbiddenInstruction(text)) return { ok: false, reason: 'the file has a processing instruction other than the xml declaration' };
+  if (EXTERNAL_DOCTYPE.test(text)) return { ok: false, reason: 'the DOCTYPE names an external identifier' };
   const rest = text.slice(text.match(PROLOGUE)[0].length);
   if (!/^<svg(?=[\s>/])/i.test(rest)) return { ok: false, reason: 'the root element is not svg' };
   const styles = [...text.matchAll(STYLE_BLOCK)];

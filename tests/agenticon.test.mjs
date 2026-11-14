@@ -78,3 +78,19 @@ test('a file that is not svg, an empty file, whitespace and a non-string are ref
 test('words that only look like an on attribute or a script are not refused', () => {
   assert.equal(checkIcon(withBody('<title>once on a script</title><path id="icon" d="M0 0"/>')).ok, true);
 });
+
+const NS = 'xmlns="http://www.w3.org/2000/svg"';
+const STYLESHEET_PI = '<?xml-stylesheet href="http://evil.example/a.css"?>';
+test('a processing instruction other than the xml declaration is refused anywhere in the file', () => {
+  assert.match(checkIcon(`${STYLESHEET_PI}<svg ${NS}><path d="M0 0"/></svg>`).reason, /processing instruction/);
+  assert.match(checkIcon(`<svg ${NS}><path d="M0 0"/></svg>${STYLESHEET_PI}`).reason, /processing instruction/);
+  assert.match(checkIcon(`<?xml version="1.0"?>${STYLESHEET_PI}<svg ${NS}/>`).reason, /processing instruction/);
+});
+
+test('a DOCTYPE with a SYSTEM or PUBLIC identifier is refused', () => {
+  const system = `<!DOCTYPE svg SYSTEM "http://evil.example/x.dtd"><svg ${NS}/>`;
+  const pub = `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://evil.example/x.dtd"><svg ${NS}/>`;
+  assert.match(checkIcon(system).reason, /DOCTYPE/);
+  assert.match(checkIcon(pub).reason, /DOCTYPE/);
+  assert.equal(checkIcon(`<!DOCTYPE svg><svg ${NS}/>`).ok, true);
+});
