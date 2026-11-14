@@ -16,8 +16,8 @@ export const PAD = Object.freeze({
   hopSteps: 10,
   hopHeight: 16,
   returnLift: 30,
-  riseBase: 6,          // the lift of an arc above its start grows with the distance flown, from this base
-  riseGrowth: 60,
+  riseBase: 6,          // the lift of the arc to the nearest box; the farthest box gets the highest lift the board leaves room for
+  riseMax: 36,
   apexShare: 0.2,       // the arc has risen by the time this share of it is flown, then it falls
   settleShare: 0.12,    // the share of the time the ball spends settling from the pad into its place in the box
   landBaseMs: 1700,
@@ -49,11 +49,24 @@ function arcY(from, pad, rise, s) {
   return apex + (pad.y - apex) * ((s - PAD.apexShare) / (1 - PAD.apexShare)) ** 2;
 }
 
+// The lift grows in step with the distance to the box, measured between the nearest and the farthest box from the start, so every farther box
+// gets a visibly higher arc even though the room above the head of a lane is small. It never reaches past the top edge of the board.
+function riseFor(pad, from, geometry) {
+  const distance = point => Math.hypot(point.x - from.x, point.y - from.y);
+  const distances = geometry.boxes.map(box => distance(padPoint(box)));
+  const nearest = Math.min(...distances, distance(pad));
+  const farthest = Math.max(...distances, distance(pad));
+  const share = farthest > nearest ? (distance(pad) - nearest) / (farthest - nearest) : 0;
+  const top = Math.min(PAD.riseMax, Math.max(0, from.y - LAYOUT.ballRadius));
+  const base = Math.min(top, PAD.riseBase);
+  return base + (top - base) * share;
+}
+
 // The land: one arc from the start to the pad, flown with the speed easing in at lift off and out at landing, then a short settle into the box.
 export function planLand({ box, from, to, geometry }) {
   const pad = padPoint(box);
   const reach = Math.hypot(pad.x - from.x, pad.y - from.y) / Math.hypot(geometry.width, geometry.height);
-  const rise = clamp(PAD.riseBase + PAD.riseGrowth * reach, 0, Math.max(0, from.y - LAYOUT.ballRadius));
+  const rise = riseFor(pad, from, geometry);
   const arc = Array.from({ length: PAD.arcSteps + 1 }, (_, index) => {
     const s = smooth(index / PAD.arcSteps);
     return onBoard({ x: from.x + (pad.x - from.x) * s, y: arcY(from, pad, rise, s) }, geometry);

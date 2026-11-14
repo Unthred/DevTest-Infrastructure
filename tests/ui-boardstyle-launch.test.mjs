@@ -110,6 +110,20 @@ test('boundary: the farthest box peaks higher than the nearest and both stay on 
   for (const flight of [near, far]) assert.ok(flight.points.every(onBoard));
 });
 
+test('boundary: from every lane each box that is farther has a higher arc, for one lane and for six lanes', () => {
+  for (const count of [1, 6]) {
+    const geometry = geometryOf(boardWith(count));
+    for (const { lane } of geometry.groups.flatMap(group => group.lanes)) {
+      const start = head(laneEntry(geometry, lane.id));
+      const flights = geometry.boxes.map(box => ({ box, distance: Math.hypot(launch.padPoint(box).x - start.x, launch.padPoint(box).y - start.y),
+        top: peak(launch.plan(landOf(geometry, lane.id, box.id, 'x')).trail) }));
+      for (const a of flights) for (const b of flights) {
+        if (b.distance - a.distance >= 40) assert.ok(a.top - b.top >= 1, `${lane.id}: ${b.box.id} peaks at least 1 px higher than ${a.box.id}`);
+      }
+    }
+  }
+});
+
 test('boundary: a lane directly above its box still rises before it falls', () => {
   const geometry = geometryOf(realBoard());
   const lane = laneEntry(geometry, 'claude/opus');
