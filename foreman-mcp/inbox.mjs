@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { redact } from './redact.mjs';
+import { secretShapedRefusal } from './refusal-reason.mjs';
 import { matchesInboxSearch } from './inbox-search.mjs';
 import { dependencyRefusal, parseDependsOn } from './dependency-parser.mjs';
 import { afterFormatRefusal, afterLabels, resolveAfter } from './draft-after.mjs';
@@ -80,7 +81,7 @@ export function checkProposal(args) {
     const max = maxOf(k, a.action);
     if (v.length > max) return { ok: false, error: `${k} is longer than ${max} characters` };
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)) return { ok: false, error: `${k} contains control characters` };
-    if (redact(v) !== v) return { ok: false, error: `${k} contains secret-shaped text; remove it` };
+    if (redact(v) !== v) return { ok: false, error: secretShapedRefusal(k, v) };
     if (ATTRIBUTION.some(re => re.test(v))) return { ok: false, error: `${k} contains AI attribution text, which this project does not allow` };
     item[k] = v;
   }

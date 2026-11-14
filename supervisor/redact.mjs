@@ -5,7 +5,7 @@ export const KEY = '(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?
 // Auth scheme words that may precede a credential; the key rule consumes the scheme and the credential together.
 const SCHEME = '(?:bearer|basic|token|digest)';
 // Issue #467: redact is pure, and a dashboard build calls it for the same job texts on every build. A bounded memo (cleared when full, keys
-// capped at MAX_SCAN characters) skips the ten regular expressions for text already seen.
+// capped at MAX_SCAN characters) skips the masking rules for text already seen.
 const MEMO_MAX = 5000, MEMO_TEXT = 600;   // at most ~6 MB
 let memo = new Map();
 export function redact(value, max = 200) {
@@ -18,19 +18,28 @@ export function redact(value, max = 200) {
   memo.set(key, out);
   return out;
 }
+// Issue #1372: each masking rule has a short stable name so an Inbox refusal can say which one changed the text. This list is the one source
+// of what is masked: redactUncached applies it in order, and maskingRuleIn applies it one rule at a time.
+export const MASK_RULES = [
+  { name: 'quoted key and value', re: new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), to: '$1"[secret]"' },
+  { name: 'word then separator', re: new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:${SCHEME}\\s+)?[^\\s,;&"']+`, 'gi'), to: '$1$2[secret]' },
+  { name: 'address with user part', re: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, to: '$1[userinfo]@' },
+  { name: 'web token', re: /\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/g, to: '[jwt]' },
+  { name: 'cloud key prefix', re: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/g, to: '[aws-key]' },
+  { name: 'vault token prefix', re: /\bhv[sbr]\.[\w-]{8,}/g, to: '[token]' },
+  { name: 'e-mail address', re: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, to: '[email]' },
+  { name: 'service key prefix', re: /\b(?:gh[pousr]_|github_pat_|sk-|xox[abp]-)[\w-]{8,}/g, to: '[token]' },
+  { name: 'bearer scheme', re: /\b[Bb]earer\s+[\w.~+/=-]{8,}/g, to: 'Bearer [token]' },
+  { name: 'long unbroken run', re: /\b(?!0{40}\b)(?![0-9a-f]{40}\b)[A-Za-z0-9_-]{40,}\b/g, to: '[token]' },
+];
 function redactUncached(value, max) {
-  return String(value ?? '').slice(0, MAX_SCAN)
-    .replace(new RegExp(`("${KEY}"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"`, 'gi'), '$1"[secret]"')
-    .replace(new RegExp(`\\b(${KEY})(\\s*[=:]\\s*)(?!\\[)(?:${SCHEME}\\s+)?[^\\s,;&"']+`, 'gi'), '$1$2[secret]')
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[userinfo]@')
-    .replace(/\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/g, '[jwt]')
-    .replace(/\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/g, '[aws-key]')
-    .replace(/\bhv[sbr]\.[\w-]{8,}/g, '[token]')
-    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]')
-    .replace(/\b(?:gh[pousr]_|github_pat_|sk-|xox[abp]-)[\w-]{8,}/g, '[token]')
-    .replace(/\b[Bb]earer\s+[\w.~+/=-]{8,}/g, 'Bearer [token]')
-    .replace(/\b(?!0{40}\b)(?![0-9a-f]{40}\b)[A-Za-z0-9_-]{40,}\b/g, '[token]')
-    .replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
+  const scanned = String(value ?? '').slice(0, MAX_SCAN);
+  return MASK_RULES.reduce((text, rule) => text.replace(rule.re, rule.to), scanned).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
+}
+// The first masking rule that changes the text (rules tried one at a time, in redact order), or null.
+export function maskingRuleIn(value) {
+  const text = String(value ?? '').slice(0, MAX_SCAN);
+  return MASK_RULES.find(rule => text.replace(rule.re, rule.to) !== text) ?? null;
 }
 // Long free text (a requirements file) redacted without losing its tail: redact() reads only MAX_SCAN characters, so the text is
 // scanned in pieces of at most MAX_SCAN (split at line ends, then at spaces) and rejoined with its line ends. When the result would pass
