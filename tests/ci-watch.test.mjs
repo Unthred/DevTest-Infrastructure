@@ -122,7 +122,9 @@ test('the wake module accepts ci and diagnostics count its passes separately', t
   assert.equal(stats.byTrigger.ci.startedSomething, 1);
   assert.equal(stats.byTrigger.schedule.didNothing, 1);
   assert.equal(stats.unlabelled, 0);
-  assert.throws(() => requestWake({ root, reason: 'bogus', spawnPass: () => {} }), /unknown wake reason/);
+  const refusal = requestWake({ root, reason: 'bogus', spawnPass: () => {} });   // issue #1410: refused with a result, not thrown
+  assert.equal(refusal.requested, false);
+  assert.equal(refusal.refused, true);
 });
 
 test('pendingHeads picks only pending non-draft heads with a sha', () => {

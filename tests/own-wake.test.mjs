@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Team } from '../supervisor/team.mjs';
+import * as inbox from '../supervisor/inbox.mjs';
 import { stateRoot } from '../supervisor/core.mjs';
 import { drivePass } from '../supervisor/wakepass.mjs';
 import { requestWake, pendingRequest, takeRequest, wakeStatus } from '../supervisor/wake.mjs';
@@ -163,4 +164,21 @@ test('the diagnostics count passes started by the follow-up reason', () => {
   assert.equal(stats.byTrigger['follow-up'].passes, 2);
   assert.equal(stats.byTrigger['follow-up'].startedSomething, 1);
   assert.equal(stats.unlabelled, 0);
+});
+
+// Review of PR #1441: park and unpark through the control route (the decision card's Park button) change a parked state too.
+test('valid: parking pull request #1189 through the control route is followed by one more pass', async t => {
+  const w = world(t, []); w.spawned = [];
+  const inboxDir = path.join(path.dirname(w.root), 'inbox'); for (const d of ['items', 'status']) fs.mkdirSync(path.join(inboxDir, d), { recursive: true });
+  w.team.c.inbox = { dir: inboxDir };
+  w.gh.pulls = [{ ...ready(1189), headRefOid: H(9), labels: [] }];
+  w.gh.addLabelAsApp = async (n, label) => { w.gh.pulls.find(p => p.number === n).labels.push(label); };
+  const id = 'c'.repeat(32);
+  fs.writeFileSync(path.join(inboxDir, 'items', `${id}.json`), JSON.stringify({ kind: 'control', title: 'park 1189', action: 'park', target: '1189', reason: 'hold it while the split is decided' }));
+  inbox.scan(inboxDir, 1000);
+  await runPass(w);
+  assert.equal(inbox.allStatuses(inboxDir).find(s => s.id === id).state, 'done');
+  assert.deepEqual(w.spawned, ['follow-up'], 'the park asked for a follow-up pass');
+  await runPass(w);
+  assert.deepEqual(w.spawned, ['follow-up'], 'nothing changed the second time, so no further follow-up is asked for');
 });

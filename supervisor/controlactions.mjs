@@ -90,6 +90,7 @@ export async function runControl(team, dir, st, item, inboxStore, report) {
   try {
     const r = await applyControl(item, depsOf(team));
     const control = { ...(st.control || {}), changed: r.changed };
+    if (r.changed && (item.action === 'park' || item.action === 'unpark')) (report.parkedChanged ||= []).push(Number(item.target));   // issue #1410: the pass asks for a follow-up
     if (r.outcome === 'refused') inboxStore.finish(dir, st.id, { state: 'refused', reason: r.text, result: 'nothing was changed', control }, now());
     else inboxStore.finish(dir, st.id, { state: 'done', result: r.text, control }, now());
     (report.actions ||= []).push({ type: 'overseer-control', result: `${item.action} ${item.target}: ${r.text}` });
