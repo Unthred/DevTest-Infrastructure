@@ -53,7 +53,7 @@ import { clearLatchApproved } from './latchaction.mjs';
 import { releaseAgentApproved } from './releaseagent.mjs';
 import { acceptSplit } from './splitaccept.mjs';
 import { stuckSplitPass, ingestStuckSplit, approveStuckSplit, rejectStuckSplit, readStuckDraft } from './splitstuck.mjs';
-import { dispatchApproved, unparkApproved, depsOf, unparkedPulls, routineApproved } from './controlactions.mjs';
+import { dispatchApproved, unparkApproved, depsOf, unparkedPulls, routineApproved, openGrant, spendGrant, withGrantedModel } from './controlactions.mjs';
 import { isParked, jobTargetParked, reReviewParkedText } from './parkhold.mjs';
 import { recordDiskSample, DEFAULT_VOLUMES } from './hostdisk.mjs';
 import { openDependencies, refreshDependencies, dependencyExclusion, dependencyGate, enforceStops, dependencyTools } from './teamdeps.mjs';
@@ -496,7 +496,7 @@ export class Team {
     const low = (!!mode && mode !== 'normal') || (Number.isFinite(utilization) && utilization >= (this.c.models?.allowance_threshold ?? DEFAULT_THRESHOLD));
     const base = { modelsConfig: this.c.models, agent: act.agent, kind, manifestModels: this.providerModels[provider] === undefined && lenient ? ANY_MODEL : this.providerModels[provider], escalation, utilization, reReview: act.reReview === true, low };
     Object.assign(base, modelCapacity(mode, this.modes?.[act.agent]?.capacity));   // issue #1116
-    const first = resolveModel(base);
+    const first = withGrantedModel(this.s, act, kind, resolveModel(base));   // #1339: a granted extra fix round may name a model
     let { fields, warnings } = first;
     // Issue #316 (homeowner decision 2 Nov 2026): a writing job never runs on a model its agent is configured to review with, and never
     // on a model that would leave the PR with no available independent reviewer. It is refused, not given a different model.
@@ -695,7 +695,7 @@ export class Team {
   writeBlock(pr, kind = 'fix') {
     const agent = agentOfBranch(this.c, pr.headRefName);
     if (!agent || !this.c.agents[agent]) return null;
-    return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}` }, kind, {}, true).writeRefusal || null;
+    return this.modelFor({ agent, pr: pr.number, branch: pr.headRefName, key: `wb:${pr.number}`, head: pr.headRefOid }, kind, {}, true).writeRefusal || null;
   }
   // Issue #368: the model a writing job would run on that is Opus, or could be. Judged on the configured entry's name before the manifest
   // fallback (a rejected "Opus" must not slip to the CLI default); a writer left without a pinned model on a provider whose manifest
@@ -1228,7 +1228,7 @@ export class Team {
       // repeats to retry the notice, at most 3 times so it stays bounded. A green scanner check clears both markers (issue #451).
       const scanOnly = scannerOnly(checks);
       if (scanOnly && (this.s.scanOnlyAnnounced[pr.number] || (this.s.scanOnlyRounds[pr.number] || 0) >= 3)) continue;
-      const escalated = !scanOnly && this.fixCount(pr.number) >= L.max_fix_attempts;
+      const escalated = !scanOnly && !openGrant(this.s, pr.number, pr.headRefOid) && this.fixCount(pr.number) >= L.max_fix_attempts;   // #1339
       if (busy('cifix', key) || (escalated && (!this.canEscalate(pr.number, pr))) || this.writeBlock(pr, 'cifix') || this.repairOverlap(agent, 'cifix', pr, issueByNo)) continue;
       if (!allow('cifix')) break;
       return { type: 'cifix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, checks, key, ...(scanOnly ? { scanOnly: true } : {}), ...(escalated ? { escalated: true } : {}) };
@@ -1236,9 +1236,9 @@ export class Team {
     // fix: my PR with a CHANGES verdict on its current head
     for (const pr of repair ? up : []) {
       if (agentOfBranch(this.c, pr.headRefName) !== agent) continue;
-      const key = verdictKey(pr.number, pr.headRefOid);
-      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || this.churned(pr.number)) continue;   // issue #864: churn stops the fix loop
-      const description = descriptionRoundFor(this, pr), escalated = !description && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1226
+      const key = verdictKey(pr.number, pr.headRefOid), extra = !!openGrant(this.s, pr.number, pr.headRefOid);   // #1339: one granted round
+      if (this.s.verdicts[key]?.verdict !== 'CHANGES' || busy('fix', key) || (this.churned(pr.number) && !extra)) continue;   // #864 churn stops fixes
+      const description = descriptionRoundFor(this, pr), escalated = !extra && !description && this.fixCount(pr.number) >= L.max_fix_attempts;   // issue #1226
       if ((escalated && (!this.canEscalate(pr.number, pr) || this.carriedHold(pr))) || this.writeBlock(pr) || this.repairOverlap(agent, 'fix', pr, issueByNo)) continue;   // an escalating PR stops with one Needs you item
       if (!allow('fix')) break;
       return { type: 'fix', pr: pr.number, head: pr.headRefOid, branch: pr.headRefName, key, ...(escalated ? { escalated: true } : {}), ...(description ? { description: true } : {}) };
@@ -1967,7 +1967,7 @@ export class Team {
     const id = st.id, now = () => this.clock.now();
     if (!inboxStore.claim(dir, id, 'approved', { state: 'running' }, now())) return;   // issue #856: an Undo won; run nothing
     try {
-      const result = String(await (routineApproved(this, item, st) ?? this.applyInboxAction(item, report))).slice(0, 300);   // #1332, #1337
+      const result = String(await (routineApproved(this, item, st, b => agentOfBranch(this.c, b)) ?? this.applyInboxAction(item, report))).slice(0, 300);
       inboxStore.finish(dir, id, { state: 'done', result }, now());
       (report.actions ||= []).push({ type: 'inbox-action', result: `${item.action} ${item.target}: ${result}` });
     } catch (error) {
@@ -3416,7 +3416,7 @@ export class Team {
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
       Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
       this.save();
-      await bump(); this.save();
+      await bump(); spendGrant(this.s, act); this.save();   // #1339: a fix or CI fix job that starts uses up its extra round
       return `started the ${spec.kind} job ${job.id.slice(0, 8)} on ${spec.model || 'the default model'}`;
     };
     if (!act.escalated) { await create(); return; }

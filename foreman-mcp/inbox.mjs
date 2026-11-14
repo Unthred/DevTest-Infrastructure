@@ -21,7 +21,17 @@ export const BREAKER_SCOPE_MAX = 160;
 // Issue #1337: copies of SUPERSEDED_BY and SUPERSEDED_BY_MAX in supervisor/inbox.mjs; a test compares them.
 export const SUPERSEDED_BY = /^\d{1,9}(?:\s*,\s*\d{1,9}){0,4}$/;
 export const SUPERSEDED_BY_MAX = 60;
-const ALL_ACTIONS = { ...ACTIONS, unpark: ACTIONS.reopen, close_superseded: NUMBER, release_agent: /^[a-z][a-z0-9_-]{0,11}$/, resume_breaker: BREAKER_SCOPE };
+// Issue #1339: a copy of EXTRA_FIX_MODEL_MAX in supervisor/inbox.mjs; a test compares them.
+export const EXTRA_FIX_MODEL_MAX = 30;
+const AGENT_NAME = /^[a-z][a-z0-9_-]{0,11}$/;
+const ALL_ACTIONS = {
+  ...ACTIONS,
+  unpark: ACTIONS.reopen,
+  close_superseded: NUMBER,
+  extra_fix_round: NUMBER,
+  release_agent: AGENT_NAME,
+  resume_breaker: BREAKER_SCOPE,
+};
 const CONTROLS = { park: ACTIONS.reopen, stop_job: ACTIONS.stop_job };
 const ID_RE = /^[a-f0-9]{32}$/;
 const PROMPT_EFFECTS = ['read_only', 'report_only'];   // issue #1238: same values as supervisor/inbox.mjs (this module imports nothing from supervisor/)
@@ -31,7 +41,14 @@ const SUBMITTED_NOTE = 'Foreman validates the item, then the homeowner approves 
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 // Issue #1332: only resume_breaker's target may be long; issue #1337: superseded_by has its own limit.
-const maxOf = (key, action) => (key === 'target' && action === 'resume_breaker' ? BREAKER_SCOPE_MAX : key === 'superseded_by' ? SUPERSEDED_BY_MAX : (LIMITS[key] ?? 40));
+const maxOf = (key, action) => {
+  if (key === 'target' && action === 'resume_breaker') return BREAKER_SCOPE_MAX;
+  if (key === 'superseded_by') return SUPERSEDED_BY_MAX;
+  return key === 'model' ? EXTRA_FIX_MODEL_MAX : (LIMITS[key] ?? 40);
+};
+// Issue #1339: model belongs to extra_fix_round only, where it is optional; the other optional fields are listed here.
+const modelRefusal = item => (item.model === undefined || item.action === 'extra_fix_round' ? null : 'model is only accepted with extra_fix_round');
+const mayBeAbsent = (k, action) => ['why', 'effect', 'after', 'model'].includes(k) || (k === 'superseded_by' && action !== 'close_superseded');
 // Issue #1337: superseded_by belongs to close_superseded only, where it is required.
 function supersededRefusal(item) {
   if (item.action !== 'close_superseded') return item.superseded_by === undefined ? null : 'superseded_by is only accepted with close_superseded';
@@ -48,7 +65,7 @@ export function checkProposal(args) {
   if (!['prompt', 'issue_draft', 'action', 'control'].includes(kind)) return { ok: false, error: 'kind must be "prompt", "issue_draft", "action" or "control"' };
   const named = kind === 'action' || kind === 'control';
   const bodyKey = kind === 'prompt' ? 'prompt' : named ? 'reason' : 'body', allowed = named ? ['kind', 'title', 'action', 'target', 'reason'] : ['kind', 'title', bodyKey, 'why'];
-  if (kind === 'action') allowed.push('superseded_by');   // issue #1337
+  if (kind === 'action') allowed.push('superseded_by', 'model');   // issues #1337, #1339
   if (kind === 'issue_draft') allowed.push('after');   // issue #1259: earlier drafts this one is posted after
   if (kind === 'prompt') allowed.push('effect');   // issue #1238: optional, read_only or report_only
   const extra = Object.keys(a).filter(k => !allowed.includes(k));
@@ -56,7 +73,7 @@ export function checkProposal(args) {
   const item = { kind };
   for (const k of allowed.filter(k => k !== 'kind')) {
     const v = a[k];
-    if (v === undefined && (k === 'why' || k === 'effect' || k === 'after' || (k === 'superseded_by' && a.action !== 'close_superseded'))) continue;
+    if (v === undefined && mayBeAbsent(k, a.action)) continue;
     if (k === 'after') { const bad = afterFormatRefusal(v); if (bad) return { ok: false, error: bad }; item.after = v; continue; }
     if (k === 'effect' && !PROMPT_EFFECTS.includes(v)) return { ok: false, error: `effect must be one of: ${PROMPT_EFFECTS.join(', ')}` };
     if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `${k} must be a non-empty string` };
@@ -75,7 +92,7 @@ export function checkProposal(args) {
   if (named) {
     const table = kind === 'control' ? CONTROLS : ALL_ACTIONS;
     if (!Object.hasOwn(table, item.action)) return { ok: false, error: `action must be one of: ${Object.keys(table).join(', ')}` };
-    const bad = supersededRefusal(item);
+    const bad = supersededRefusal(item) || modelRefusal(item);
     if (bad) return { ok: false, error: bad };
     if (!table[item.action].test(item.target)) return { ok: false, error: 'target must be a pull request or issue number, the 8-character job id, or an agent name, or for resume_breaker @global, all or a halt key of at most 160 characters (clear_latch takes none)' };
   }

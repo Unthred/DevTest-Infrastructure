@@ -40,7 +40,7 @@ test('churn stopped below the fix limit raises one churn card with action severi
   assert.match(card.text, /different blocking findings.*no further fix jobs/);
   assert.match(card.action, /Choose one:/);
   assert.equal(card.card.type, 'churn');
-  assert.deepEqual(card.card.controls.map(c => c.action), ['close_superseded', 'park']);
+  assert.deepEqual(card.card.controls.map(c => c.action), ['extra_fix_round', 'close_superseded', 'park']);
 });
 
 test('at the fix limit only the fix limit card is raised', async t => {

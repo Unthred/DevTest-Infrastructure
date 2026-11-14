@@ -44,10 +44,10 @@ test('invariant: every Needs you rank and every id the source raises has a table
   assert.ok(raised.size > 25, 'the scan found the raised ids');
   for (const id of raised) assert.ok(typeOf(id), `raised id ${id} has no decision entry`);
 });
-test('every control the table offers is an existing action; none is a slice 2 or 3 action', () => {
+test('every control the table offers is an existing action; none is a slice 3 action', () => {
   const known = new Set([...Object.keys(ACTIONS), ...Object.keys(INBOX_CONTROLS)]);
   for (const a of Object.keys(CONTROLS)) assert.ok(known.has(a), `${a} is not an existing action`);
-  for (const later of ['extra_fix_round', 'merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
+  for (const later of ['merge', 'approve', 'verdict']) assert.ok(!(later in CONTROLS));
 });
 test('the breaker entry offers resume_breaker with the halt cause carried as the item scope, and no longer says the control is to come', () => {
   assert.ok('resume_breaker' in CONTROLS);
@@ -62,7 +62,8 @@ test('longest type wins and unmapped ids have no type', () => {
   assert.equal(typeOf('noreviewer-refused-3'), 'noreviewer-refused'); assert.equal(typeOf('mystery-1'), null); assert.equal(typeOf('fixlimitation-1'), null);
 });
 test('each mapped type with items renders a reason, a clear condition and its controls', () => {
-  const want = { fixlimit: ['close_superseded'], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'], reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
+  const want = { fixlimit: ['extra_fix_round', 'close_superseded'], retrycap: ['clear_retry_cap'], reviewlimit: ['new_review_attempt'],
+    reviewrefused: ['new_review_attempt'], 'selfcheck-review': ['new_review_attempt'],
     'selfcheck-job': ['stop_job'], job: ['resume_job', 'close_job'], 'stale-mark': ['reopen'] };
   for (const [k, item] of Object.entries(ITEMS)) {
     const card = decisionCard(item);
@@ -73,22 +74,24 @@ test('each mapped type with items renders a reason, a clear condition and its co
     for (const c of card.controls) assert.match(html, new RegExp(`name="control" value="${c.action}"`));
   }
 });
-test('fixlimit says what clears it and names the slice that will bring its other options', () => {
+test('fixlimit says what clears it, offers the extra fix round, and names the slice that will bring its other options', () => {
   const card = decisionCard(ITEMS.fixlimit);
   assert.equal(card.clears, 'clears when a new head is reviewed PASS; no more fix jobs start');
-  assert.match(card.reason, /still rejected after 2 fix rounds/); assert.match(card.later, /slice 2/);
-  assert.match(decisionHtml({ ...ITEMS.fixlimit, card }), /slice 2/);
+  assert.match(card.reason, /still rejected after 2 fix rounds/); assert.match(card.later, /slice 3/);
+  assert.doesNotMatch(card.later, /extra fix round/i, 'the later text no longer says the control is still to come');
+  assert.ok(card.controls.some(c => c.action === 'extra_fix_round'));
+  assert.match(decisionHtml({ ...ITEMS.fixlimit, card }), /slice 3/);
 });
 test('a card with no text still has a reason; the reason is never empty', () => {
   assert.match(decisionCard({ id: 'drift', text: '' }).reason, /drift/);
 });
 test('park only with the GitHub App; unpark only when parked; the target is the item number', () => {
   const none = decisionCard(ITEMS.fixlimit, { appConfigured: false });
-  assert.deepEqual(none.controls.map(c => c.action), ['close_superseded'], 'closing as superseded needs no GitHub App');
+  assert.deepEqual(none.controls.map(c => c.action), ['extra_fix_round', 'close_superseded'], 'neither control needs the GitHub App');
   const app = decisionCard(ITEMS.fixlimit, { appConfigured: true });
-  assert.deepEqual(app.controls.map(c => [c.action, c.target]), [['close_superseded', '7'], ['park', '7']]);
+  assert.deepEqual(app.controls.map(c => [c.action, c.target]), [['extra_fix_round', '7'], ['close_superseded', '7'], ['park', '7']]);
   const parked = decisionCard(ITEMS.fixlimit, { appConfigured: true, parked: new Set([7]) });
-  assert.deepEqual(parked.controls.map(c => c.action), ['close_superseded', 'unpark']);
+  assert.deepEqual(parked.controls.map(c => c.action), ['extra_fix_round', 'close_superseded', 'unpark']);
 });
 test('a type with no entry renders the explicit error card with no control', () => {
   const card = decisionCard({ id: 'mystery-1', text: 'x', ref: PR(1) });
@@ -104,7 +107,7 @@ test('withDecisionCards puts a card on every Needs you item and reads parked lab
   const view = { panels: { needsYou: [ITEMS.fixlimit, { id: 'mystery-1', text: 'x' }] } };
   const cfg = { github_app: { app_id: 1, installation_id: 2, key_file: '/k' } };
   withDecisionCards(view, cfg, { pulls: [{ number: 7, labels: ['parked'] }] });
-  assert.deepEqual(view.panels.needsYou[0].card.controls.map(c => c.action), ['close_superseded', 'unpark']);
+  assert.deepEqual(view.panels.needsYou[0].card.controls.map(c => c.action), ['extra_fix_round', 'close_superseded', 'unpark']);
   assert.ok(view.panels.needsYou[1].card.error);
   assert.deepEqual(withDecisionCards({ panels: {} }, cfg, {}), { panels: {} });
 });
@@ -142,7 +145,8 @@ test('page: the fix limit card shows a non-empty reason and the clear condition,
   const card = body.slice(body.indexOf('att-fixlimit-7'));
   assert.match(card, /Why: [^<]*is still rejected after 2 fix rounds/);
   assert.match(card, /Clears when a new head is reviewed PASS; no more fix jobs start\./);
-  assert.match(card, /slice 2 of #1111/);
+  assert.match(card, /slice 3 of #1111/);
+  assert.match(card, /name="control" value="extra_fix_round"/);
   assert.ok(!/Decide it here|it has no button here/.test(body));
   assert.match(card, /name="card" value="fixlimit-7"[^>]*><input type="hidden" name="control" value="park"/, 'park is offered with the GitHub App');
 });
@@ -213,7 +217,12 @@ test('end to end: a clicked park and a clicked clear_retry_cap are each applied 
 
 // Issue #1337: the numbers field on the cards that can be closed as superseded.
 test('close_superseded is on the fix limit, churn, CI and stalled cards, each with a numbers field; other cards do not offer it', () => {
-  const items = { fixlimit: ITEMS.fixlimit, churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) }, ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) }, stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) } };
+  const items = {
+    fixlimit: ITEMS.fixlimit,
+    churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) },
+    ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) },
+    stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) },
+  };
   for (const [type, item] of Object.entries(items)) {
     const card = decisionCard(item);
     assert.equal(card.type, type);
@@ -223,4 +232,24 @@ test('close_superseded is on the fix limit, churn, CI and stalled cards, each wi
   }
   for (const item of [ITEMS.retrycap, ITEMS.reviewlimit, ITEMS.job]) assert.ok(!decisionCard(item).controls.some(c => c.action === 'close_superseded'), item.id);
   assert.ok(!decisionHtml({ ...ITEMS.fixlimit, card: decisionCard(ITEMS.retrycap) }).includes('name="superseded_by"'), 'a card without the control has no numbers field');
+});
+
+// Issue #1339: the extra fix round control is on the fix limit, churn, CI and stalled cards and nowhere else; it takes no input field.
+test('extra_fix_round is on the fix limit, churn, CI and stalled cards at the routine tier, with no model field', () => {
+  const items = {
+    fixlimit: ITEMS.fixlimit,
+    churn: { id: 'churn-7', text: 'PR #7 churned', ref: PR(7) },
+    ci: { id: 'ci-7', text: 'PR #7 CI red', ref: PR(7) },
+    stalled: { id: 'stalled-7', text: 'PR #7 stalled', ref: PR(7) },
+  };
+  for (const [type, item] of Object.entries(items)) {
+    const card = decisionCard(item);
+    assert.equal(card.type, type);
+    const control = card.controls.find(c => c.action === 'extra_fix_round');
+    assert.deepEqual([control.target, control.input ?? null, control.label], ['7', null, 'Extra fix round'], type);
+    assert.doesNotMatch(card.later ?? '', /extra fix round/i, type);
+  }
+  for (const item of [ITEMS.retrycap, ITEMS.reviewlimit, ITEMS.job]) {
+    assert.ok(!decisionCard(item).controls.some(c => c.action === 'extra_fix_round'), item.id);
+  }
 });
