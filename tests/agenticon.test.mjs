@@ -8,6 +8,9 @@ const STAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
 const HEXAGON = '<?xml version="1.0"?>\n<!-- a hexagon -->\n'
   + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/></svg>';
 const withBody = body => `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">${body}</svg>`;
+const HEX_HREF_ANIMATE = '<use href="#a"><animate attributeName="&#x68;ref" values="http://e/x.svg#a"/></use>';
+const PREFIXED_STYLE_URL = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg">'
+  + '<s:style>path{fill:url(http://e/x)}</s:style></svg>';
 
 test('a star and a hexagon are accepted, with or without an xml prologue', () => {
   assert.deepEqual(checkIcon(STAR), { ok: true });
@@ -50,11 +53,11 @@ test('each listed unsafe kind is refused with its own reason', () => {
     ['a css escape spelling url in a style element', withBody('<style>path{fill:\\75rl(http://e/x)}</style>'), /style element/],
     ['an import in a style attribute', withBody('<path style="@import \'http://e\'" d="M0 0"/>'), /style attribute/],
     ['a character reference spelling href', withBody('<a><set attributeName="&#104;ref" to="javascript:alert(1)"/></a>'), /character reference/],
-    ['a hex character reference spelling href', withBody('<use href="#a"><animate attributeName="&#x68;ref" values="http://e/x.svg#a"/></use>'), /character reference/],
+    ['a hex character reference spelling href', withBody(HEX_HREF_ANIMATE), /character reference/],
     ['a character reference spelling a parenthesis after url', withBody('<style>path{fill:url&#40;http://e/x)}</style>'), /character reference/],
     ['a character reference spelling import', withBody('<style>@im&#112;ort "http://e/x.css";</style>'), /character reference/],
     ['a character reference in a style attribute', withBody('<path style="fill:url&#40;http://e/x)" d="M0 0"/>'), /character reference/],
-    ['a prefixed style element with a url', '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:style>path{fill:url(http://e/x)}</s:style></svg>', /style element/],
+    ['a prefixed style element with a url', PREFIXED_STYLE_URL, /style element/],
     ['an entity declaration', '<!DOCTYPE svg [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg"/>', /entity/],
   ];
   for (const [label, text, reason] of cases) {
