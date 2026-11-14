@@ -181,7 +181,7 @@ test('the Overview centres the tiles, explains Data age, splits the queue and sh
   assert.match(html, /PRs opened\/h/); assert.match(html, /per merged issue, from implement through merge/);
   assert.match(html, /href="\/headline\/cost\?window=7d"/); assert.match(html, /data-card="k-queue"[^>]*href="\/work"/);
   const css = readFileSync(new URL('../supervisor/dashui/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.kpi\{text-align:center\}/); assert.match(css, /\.headline \.hl-row\{align-items:center;text-align:center\}/);
+  assert.match(css, /\.kpi\{text-align:center\}/); assert.match(css, /\.headline \.hl-block\{[^}]*align-items:center;gap:var\(--sp1\);text-align:center/);
 });
 
 // Issue #928: through the real buildView path (compactPulls, state.jobs without a pr on implement jobs), not injected rows.

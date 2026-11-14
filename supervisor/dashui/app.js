@@ -10,7 +10,7 @@ import { saveLists, watchLists } from './lists-ui.mjs';
 import { barShown, cardVerdict, createBarGuard, createRefusals, span } from './remove-guard.mjs';
 import { postDecision, runDecision, lowerCount, showOutcomeInViews, lowerWaitingChip } from './inbox-ui.mjs';
 import { readRegions, startRefresh } from './refresh.mjs';
-
+import './headline-period.mjs';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const store = {

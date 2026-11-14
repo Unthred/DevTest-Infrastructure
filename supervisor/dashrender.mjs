@@ -23,7 +23,7 @@ import { allowanceBody as allowanceCard } from './allowancecard.mjs';
 import { outcomeFromQuery, outcomeNote } from './probeoutcome.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
-import { bestLine } from './dashbest.mjs';
+import { HEADLINE, PERIOD_UNIT, headlineCards as buildHeadlineCards, trendText } from './headline-cards.mjs';
 import { queueSplit, queueText } from './queuesplit.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
@@ -523,42 +523,14 @@ function watchingCard(view) {
   return card({ id: 'watching', title: `Watching${list.length ? ` (${list.length})` : ''}`, span: 12, movable: false, body, cls: 'panel watching', type: 'panel' });
 }
 // ---- Issue #866: headline progress numbers (top of the Overview) and the drill-down behind each.
-const pctText = n => (Number.isFinite(n) ? `${dec1(n)}%` : 'no data');
-const signed = n => (n > 0 ? `+${num(n)}` : n < 0 ? `\u2212${num(-n)}` : '0');
-const HEADLINE = {
-  issues: c => ({ big: `net ${signed(c.net)}`, sub: `${c.opened} opened, ${c.closed} closed` }),
-  processed: c => ({ big: pctText(c.value), sub: `${c.processed} closed of ${c.total} in play` }),
-  throughput: c => ({ big: Number.isFinite(c.openedPerHour) ? `${dec1(c.openedPerHour)} PRs opened/h` : 'no data', sub: `${dec1(c.mergedPerHour)} merged/h, ${dec1(c.implementedPerHour)} issues implemented/h (${c.opened} opened, ${c.merged} merged, ${c.implemented} implemented)` }),
-  cost: c => ({ big: formatCost(c.value, { unknown: 'unknown' }), sub: `per merged issue, from implement through merge incl. review, fix and rebase rounds; ${c.withKnownCost} of ${c.merged} merged with known cost; usage equivalent, not a cash charge` }),
-  'merge-rate': c => ({ big: Number.isFinite(c.value) ? `${dec1(Math.round(c.value * 100) / 100)}/h` : 'no data', sub: `${c.merged} merged` }),
-  'first-pass': c => ({ big: pctText(c.value), sub: c.reviewed ? `${c.approved} of ${c.reviewed} approved first time${c.descriptionOnlyRejected ? `; ${c.descriptionOnlyRejected} more rejected for the description only` : ''}` : 'no first reviews' }),
-  rounds: c => ({ big: Number.isFinite(c.value) ? dec1(c.value) : 'no data', sub: `${c.merged} merged (review, fix and rebase rounds)` }),
-  tokens: c => ({ big: Number.isFinite(c.value) ? num(c.value) : 'unknown', sub: `${c.withKnownTokens} of ${c.merged} merged with known usage; usage equivalent, not a cash charge` }),
-  waste: c => ({ big: num(c.value), sub: c.topCause ? `top cause: ${c.topCause.cause} (${num(c.topCause.tokens)})` : 'no wasted jobs' }),
-  rejects: c => ({ big: String(c.value), sub: `${c.changes} CHANGES, ${c.blocked} blocked` }),
-};
-const trendText = (c, name) => (c.direction === null ? (c.previousNote ? 'no previous period to compare' : `no previous ${name} figure`) : c.direction === 'flat' ? `unchanged from the previous ${name}` : `${c.direction} ${num(Math.abs(c.delta))} from the previous ${name}`);
-function headlineCards(view) {
-  const h = view.headline;
-  if (!h) return '';
-  return CARD_IDS.map(id => {
-    const rows = Object.keys(WINDOWS).map(name => {
-      const c = h.windows[name].cards[id], t = HEADLINE[id](c);
-      return `<div class="hl-row" data-window="${esc(name)}"><span class="hl-w">${esc(name === '24h' ? 'Last 24 hours' : 'Last 7 days')}</span><a class="hl-v" href="${esc(`/headline/${id}?window=${name}`)}">${esc(t.big)}</a><span class="sub">${esc(t.sub)}</span>
-        <span class="sub hl-trend" data-dir="${esc(c.direction || '')}">${icon(c.direction === 'up' ? 'up' : c.direction === 'down' ? 'down' : 'sort')}${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}</span>
-        ${name === '24h' ? bestLine(id, view.best, view.tz) : ''}</div>`;
-    }).join('');
-    const extra = id === 'issues' ? `<p class="sub">${h.openNow} open now</p>` : '';
-    return card({ id: `hl-${id}`, title: CARD_TITLES[id], span: 3, href: `/headline/${id}`, cls: 'panel headline', type: 'panel', body: rows + extra });
-  }).join('');
-}
+const headlineCards = view => buildHeadlineCards(view, { card, icon, esc });
 function headlinePage(view, query, path, route) {
   const h = view.headline, id = route.id;
   if (!h || !CARD_IDS.includes(id)) return null;
   const name = Object.hasOwn(WINDOWS, query.get('window')) ? query.get('window') : '24h', c = h.windows[name].cards[id], t = HEADLINE[id](c);
   const switcher = `<div class="ranges" role="group" aria-label="Period">${Object.keys(WINDOWS).map(w => `<a href="${esc(withQuery(path, query, { window: w, 'hl.page': null }))}"${w === name ? ' aria-current="true"' : ''}>${w}</a>`).join('')}</div>`;
   const summary = card({ id: 'hl-sum', title: CARD_TITLES[id], span: 12, movable: false, tools: switcher, cls: 'panel', type: 'panel',
-    body: `<p class="hl-v-big">${esc(t.big)}</p><p class="sub">${esc(t.sub)}. ${esc(trendText(c, name === '24h' ? '24 hours' : '7 days'))}.</p><p class="sub">${esc(h.note)}</p>${c.count > c.shown ? `<p class="sub">The table shows the newest ${c.shown} of ${c.count}.</p>` : ''}` });
+    body: `<p class="hl-v-big">${esc(t.big)}</p><p class="sub">${esc(t.sub)}. ${esc(trendText(c, PERIOD_UNIT[name]))}.</p><p class="sub">${esc(h.note)}</p>${c.count > c.shown ? `<p class="sub">The table shows the newest ${c.shown} of ${c.count}.</p>` : ''}` });
   const link = r => (r.kind === 'pr' ? prLink(r.ref) : r.kind === 'issue' ? issueLink(r.ref) : r.kind === 'job' ? esc(`job ${r.ref}`) : esc(String(r.ref)));
   const rows = c.items.map(r => ({ ...r, item: `${r.kind} ${r.ref}` }));
   const t2 = card({ id: 'hl-items', title: 'Items behind the number', span: 12, movable: false, body: table({ id: 'hl', path, query, noun: 'items', rows, searchKeys: ['item', 'title', 'detail'], totals: { item: 'count', tokens: 'sum' },

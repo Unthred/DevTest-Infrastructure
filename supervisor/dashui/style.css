@@ -433,15 +433,23 @@ body.layout-editing{overscroll-behavior:contain}
 @media(prefers-reduced-motion:no-preference){.cards.editing>.card{transition:none}}
 .lay-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .cards.editing .tools{visibility:hidden}
-/* Issue #866: headline progress cards */
-.headline .hl-row{display:flex;flex-direction:column;gap:2px;padding:var(--sp2) 0;border-top:1px solid var(--line)}
-.headline .hl-row:first-of-type{border-top:0;padding-top:0}
-.headline .hl-w{color:var(--mut);font-size:var(--fs-sm)}
-.headline .hl-v,.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
+/* Issue #866, #1453: the summary cards show one period; data-period on the card (24h unless the viewer chose 7d) picks the block. */
+.hl-v-big{font-size:var(--fs-kpi);font-weight:700;line-height:1.1}
+.cards>.card.headline{align-self:start}   /* only as tall as its content, not stretched to the tallest card of the row */
+.headline .hl-block{display:flex;flex-direction:column;align-items:center;gap:var(--sp1);text-align:center;overflow-wrap:anywhere}
+.headline:not([data-period="7d"]) .hl-block[data-window="7d"],.headline[data-period="7d"] .hl-block[data-window="24h"]{display:none}
+.headline .hl-chip{font-size:var(--fs-xs);color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 var(--sp2)}
+.headline .hl-main{display:flex;align-items:center;justify-content:center;gap:var(--sp2);flex-wrap:wrap}
+.headline .hl-v{font-size:var(--fs-kpi);font-weight:700;line-height:1.1;text-decoration:none;color:inherit}
 .headline .hl-v:hover{color:var(--link)}
-.headline .hl-trend svg{width:1em;height:1em;vertical-align:-.15em;margin-right:.25em}
-/* Issue #928: the headline and KPI numbers are centred in their tiles. */
-.headline .hl-row{align-items:center;text-align:center}
+.headline .hl-arrow svg{width:1.4em;height:1.4em;vertical-align:middle}
+.headline .hl-arrow[data-tone="good"]{color:var(--ok)}.headline .hl-arrow[data-tone="bad"]{color:var(--action)}
+.headline .hl-badge{gap:var(--sp2);white-space:normal;flex-wrap:wrap;justify-content:center}
+.headline .hl-badge[data-tone="neutral"],.headline .hl-badge[data-tone="none"]{color:var(--mut);background:none}
+.headline .hl-rule{width:100%;border:0;border-top:1px solid var(--line);margin:var(--sp1) 0}
+.headline .hl-pick{display:inline-flex;gap:2px}
+.headline .hl-pickbtn{min-width:36px;font-size:var(--fs-xs)}
+.headline .hl-pickbtn[aria-pressed="true"]{background:var(--link);color:var(--surface);border-radius:var(--r-sm)}
 .kpi{text-align:center}.kpi .kpi-sub{font-size:var(--fs-sm)}
 
 /* Inbox decisions (issue #856) */
