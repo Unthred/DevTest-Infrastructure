@@ -125,12 +125,16 @@ export function createAbout(deps = {}) {
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', returnFocus);
 
+  // Only the newest load may draw, so a slow older reply cannot overwrite a newer one.
+  let latest = 0;
   async function load() {
+    const mine = ++latest;
     content.replaceChildren(el('p', {}, 'Loading'));
     try {
-      renderAbout(content, (await fetchModel('about')).data, now());
+      const model = await fetchModel('about');
+      if (mine === latest) renderAbout(content, model.data, now());
     } catch {
-      renderFailure(content, load);
+      if (mine === latest) renderFailure(content, load);
     }
   }
   function open() {
