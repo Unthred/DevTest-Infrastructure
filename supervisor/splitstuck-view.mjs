@@ -5,9 +5,36 @@ import { redact } from './redact.mjs';
 export const STANDING_OPTIONS = 'wait for another agent to be able to review (allowance reset), change the approach, or fix it by hand';
 const HIDDEN = /^(fixlimit|churn|homeowner-pr|ci|escalating)-/;
 const AFTER_PARK = ['rejected', 'failed', 'filed'];
+const STATUS = {
+  planning: 'a read-only planning job is drafting the split',
+  proposed: 'a split is proposed and waits for the homeowner',
+  rejected: 'the split was rejected; the pull request stays parked',
+  failed: 'no usable split could be drafted',
+  filed: 'the split is filed and waits for its items to merge',
+};
 
 const itemsOf = rec => (rec.items || []).map((x, i) => ({ title: x.title, files: x.files, number: rec.filed?.[i] ?? null }));
 const list = items => items.map((x, i) => `${i + 1}. ${x.number ? `#${x.number} ` : ''}${x.title} (${x.files.join(', ')})`).join('; ');
+
+// Pure view facts for a pull request page. A missing split record deliberately has no presentation effect.
+export function splitFacts(state, number) {
+  const record = state?.stuckSplits?.[number];
+  if (!record) return null;
+  return {
+    reason: record.reason,
+    status: STATUS[record.status] ?? record.status,
+    items: itemsOf(record),
+  };
+}
+
+// Rows fit directly into the pull request facts list; the renderer supplies its normal escaping and issue link helpers.
+export function splitFactsHtml(facts, { esc, issueLink }) {
+  if (!facts) return '';
+  const items = facts.items.length
+    ? `<dt>Split items</dt><dd>${facts.items.map(item => `${item.number ? `${issueLink(item.number)} ` : ''}${esc(item.title)}`).join('<br>')}</dd>`
+    : '';
+  return `<dt>Parked</dt><dd>${esc(facts.reason)}</dd><dt>Split</dt><dd>${esc(facts.status)}</dd>${items}`;
+}
 
 function parkedText(rec) {
   const state = rec.parked ? '' : rec.parkError ? ` (not parked yet: ${rec.parkError})` : ' (parking in progress)';

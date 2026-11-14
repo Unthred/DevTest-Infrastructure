@@ -24,6 +24,7 @@ import { outcomeFromQuery, outcomeNote } from './probeoutcome.mjs';
 import { agentBarHtml } from './appbaragent.mjs';
 import { withWorkViews } from './jobs-page.mjs';
 import { bestLine } from './dashbest.mjs';
+import { splitFactsHtml } from './splitstuck-view.mjs';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export const utc = ms => (Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'unknown');
 // Every time on the page is a <time>: UTC text for no-script and for tests, rewritten in the viewer's zone by dashui/app.js.
@@ -669,8 +670,9 @@ function workPage(view, query, path) {
 function prDetail(view, query, path, route) {
   const p = view.prs.find(x => x.number === route.id);
   if (!p) return null;
+  const rounds = `${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase`;
   const facts = card({ id: 'facts', title: p.full || p.name, span: 12, movable: false, body: `<dl class="kv"><dt>State</dt><dd>${esc(p.stage ? `${p.status} (${p.stage})` : p.status)}</dd><dt>Author</dt><dd>${agentTag(p.agent, view)}</dd><dt>CI</dt><dd>${checksBadge(p.checks)}</dd><dt>Latest verdict</dt><dd>${verdictBadge(p.verdict)}</dd>${p.carry ? `<dt>Carried verdict</dt><dd>${esc(`${String(p.carry.oldHead).slice(0, 7)} → ${String(p.carry.newHead).slice(0, 7)}`)}${p.carry.valid ? '' : ' (record does not match this head)'}<br>${esc(`no conflict resolved: ${p.carry.evidence.resolvedConflicts === false ? 'yes' : 'not shown'}; patch unchanged: ${p.carry.evidence.patchUnchanged === true ? 'yes' : 'not shown'}; CI: ${p.carry.evidence.ci || 'unknown'}`)}</dd>` : ''}
-<dt>Rounds</dt><dd>${p.reviewRounds} review · ${p.fixRounds} fix · ${p.rebaseRounds} rebase</dd><dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'pr', p.number, path)}</dd></dl>` });
+<dt>Rounds</dt><dd>${esc(rounds)}</dd>${splitFactsHtml(p.split, { esc, issueLink })}<dt>Tokens</dt><dd>${esc(num(p.tokens))}</dd><dt>On GitHub</dt><dd>${ext(p.url, p.name || `PR #${p.number}`)}</dd><dt>Watch</dt><dd>${watchBtn(view, 'pr', p.number, path)}</dd></dl>` });
   const tl = card({ id: 'tl', title: 'Timeline', span: 6, movable: false, body: p.timeline.length ? `<ol class="tl">${p.timeline.map(r => `<li><b>${lt(r.at)}</b><br>${esc(r.text)}</li>`).join('')}</ol>` : empty('No events recorded', 'Review, fix and merge events appear here.', 'clock') });
   const vh = card({ id: 'vh', title: 'Verdict history', span: 6, movable: false, body: p.verdicts.length ? p.verdicts.map(v => `<h3>${verdictBadge(v.verdict)} ${esc(v.reviewer)}${v.model ? ` <span class="sub">(${esc(v.model)})</span>` : ''} at ${v.fullHead ? shaCopy(v.fullHead) : `<span class="mono">${sha7(v.head)}</span>`} <span class="sub">${lt(v.at)}</span></h3>${v.findings.length ? `<ul>${v.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : '<p class="sub">No findings recorded.</p>'}${v.followUpIssue ? `<p class="sub">Follow-up: ${issueLink(v.followUpIssue)}</p>` : ''}`).join('') : empty('No verdicts yet', 'No independent reviewer has reviewed this pull request.', 'review') });
   const jobs = card({ id: 'pj', title: 'Jobs on this PR', span: 12, movable: false, body: table({ id: 'jobs', path, query, noun: 'jobs', rows: p.jobs, searchKeys: ['id', 'kind', 'status', 'agent'], cols: jobCols(view).map(c => ({ ...c, total: undefined })), totals: jobTotals, emptyState: empty('No jobs recorded', 'Jobs that reviewed or fixed this PR show here.', 'list') }) });
@@ -686,7 +688,6 @@ function issueDetail(view, query, path, route) {
   return { title: i.name || `#${i.number}`, crumbs: [['/work', 'Work'], [null, i.name || `#${i.number}`]], body: grid('issue', facts + card({ id: 'deps', title: 'Dependencies and blockers', span: 6, movable: false, body: deps })
     + card({ id: 'dependents', title: 'Waiting on this issue', span: 6, movable: false, body: dependents.length ? `<ul class="panel-list">${dependents.map(d => `<li class="sev-info"><div class="t">${issueLink(d.number)}</div></li>`).join('')}</ul>` : empty('Nothing waits on it', 'No cached issue lists this one as a prerequisite.', 'check') }), 'fit') };
 }
-
 // Issue #362: the whole retained history, from the first job. Read from files only (no GitHub, no model); every field was allowlisted
 // and redacted when it was archived, and the text shown is rebuilt from those fields. Filters are plain GET parameters.
 const KIND_LABEL = { job: 'Job', verdict: 'Review', merge: 'Merge', rebase: 'Rebase', description: 'Description round', unblock: 'Unblock', migration: 'Migration' };
