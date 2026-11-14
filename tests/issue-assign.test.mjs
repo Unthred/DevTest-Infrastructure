@@ -81,7 +81,7 @@ test('collectAssignments reads the team: list position, unlisted pool, exclusion
 
 test('the idle reason names the rule, also when nothing is assigned', () => {
   const rows = [explainIssue(base({ owner: { agent: null, rule: 'unlisted', rank: 1, of: 1 }, agents: [agent('codex')] }))];
-  assert.match(idleRuleText('claude', 0, rows), /unlisted issues go to the first agent with a free slot.*#7 to codex/);
+  assert.match(idleRuleText('claude', 0, rows), /unlisted issues go to the agent chosen from spare allowance.*#7 to codex/);
   assert.match(idleRuleText('claude', 3, []), /agents\.claude\.issues lists 3 issues, 0 still open/);
 });
 

@@ -35,6 +35,7 @@ import { findWorktreeWriter } from './worktreewriter.mjs';
 import { probesOwed } from './probesdue.mjs';
 import { refreshBeforeAdmission } from './admissionrefresh.mjs';
 import { capacityFor, spareScoreOf, mayTakeFrom, figure } from './capacity.mjs';
+import { chooseForSlot, holdUnchosen, chosenFields, withRequiredPins } from './slotchoice.mjs';
 import { candidateRows, workRank, modelCapacity, reserveOut, budgetsWithPulls } from './capacityteam.mjs';
 import { chooseInboxAgent } from './inboxagent.mjs';
 import { weeklyWindow, shortWindowOf } from './budget.mjs';
@@ -539,7 +540,7 @@ export class Team {
   ciState(pr) { return checksState(pr.statusCheckRollup, this.retried(pr)); }
   agents() { return Object.entries(this.c.agents); }
   // An agent's issue list, plus follow-up issues the dispatcher queued at its end (issue #163).
-  issuesOf(agent) { return [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]; }
+  issuesOf(agent) { return withRequiredPins(this.c, agent, [...(this.c.agents[agent]?.issues || []), ...(this.s.unblock.queued[agent] || []).filter(n => !this.c.agents[agent].issues.includes(n))]); }
   // Issue #212: every open issue is eligible unless excluded. Returns null when eligible, else { kind, text, refs } where kind is
   // label | dependency | waiting_on (what a stopped job reported as open).
   exclusion(n, issueByNo, prs = this.view?.prs || []) {
@@ -871,7 +872,7 @@ export class Team {
     for (const pr of prs) {
       if ((this.s.scanOnlyAnnounced[pr.number] || this.s.scanOnlyRounds[pr.number]) && latestChecks(pr.statusCheckRollup).some(c => checkDone(c) && isSecretScanner({ name: c.name || c.context }) && CHECK_OK.includes(c.conclusion || c.state))) { delete this.s.scanOnlyAnnounced[pr.number]; delete this.s.scanOnlyRounds[pr.number]; }
     }
-    this.modes = this.budgets(); this.held = {}; this.heldPr = {};
+    this.modes = this.budgets(); this.held = {}; this.heldPr = {}; this.choiceHolds = new Set();
     await this.loadFiles(prs); await refreshDependencies(this, issues, prs);   // issue #1103
     this.recordHeadWriters(prs);
     this.recordReviewWaits(prs);
@@ -914,9 +915,9 @@ export class Team {
           if (act) cands.push({ agent, act, rank: this.slotRank(agent, act, prs) + 0.1 * actions.filter(x => x.agent === agent).length });   // tie-break: spread load to an agent without a slot this tick
         }
         if (!cands.length) break;
-        const best = cands.sort((x, y) => x.rank - y.rank)[0];   // stable: ties keep the team.json agent order
-        const why = best.act.type === 'review' ? this.reviewWhy(best.agent, best.act, prs) : null;
-        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}) }); used[role]++; if (role !== 'inbox') total++;
+        const { best, why, choice, group } = chooseForSlot(this, cands, { prs, usedBy, role, planned: actions });
+        if (!best) { holdUnchosen(this, group, why); continue; }
+        actions.push({ agent: best.agent, ...best.act, ...(why ? { why } : {}), ...(choice ? { choice } : {}) }); used[role]++; if (role !== 'inbox') total++;
         { const k = `${this.c.agents[best.agent].provider}:${role}`; usedBy[k] = (usedBy[k] || 0) + 1; }
         const bm = this.modes?.[best.agent];   // the next candidate check is charged for this job's estimated cost
         if (bm?.known) this.plannedUse[best.agent] = (this.plannedUse[best.agent] || 0) + (bm.costs.cost(best.act.type) || 0);
@@ -1022,7 +1023,7 @@ export class Team {
     // Repair work (rebase, cifix, fix, continue) outranks a new implement across agents, so a rejected, red or conflicting PR is never
     // starved by another agent's implement backlog; within each, the issue's owner precedes an agent taking it over.
     // An owner at a usage limit ranks last, so another agent can take its ready issue (#104).
-    return workRank(act, this.ownerOut(agent), this.spareScore(agent));
+    return workRank(act, this.ownerOut(agent));
   }
 
   // The issue a draft PR continues for `agent`, or null when the draft is not continuable (not mine, not an owned issue, issue closed,
@@ -3422,7 +3423,7 @@ export class Team {
       catch (error) { if (unclaim) unclaim(); throw error; }
       await recordCreatedInboxJob({ inboxDir: this.inboxDir(), act, job, now: () => this.clock.now(), announce });
       this.s.jobs[job.id] = { kind: act.type, agent: act.agent, key: act.key, ticket: spec.postcondition.ticket, model: spec.model ?? null, effort: spec.effort ?? null, modelSource: spec.modelSource ?? null, modelReason: spec.modelReason ?? null, ...meta, ingested: false, at: this.clock.now() };
-      Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]));   // issue #204: the titles are stored with the job
+      Object.assign(this.s.jobs[job.id], this.titlesFor(this.s.jobs[job.id]), chosenFields(act));   // issue #204: the titles; #1346: why this agent
       this.save();
       await bump(); spendGrant(this.s, act); this.save();   // #1339: a fix or CI fix job that starts uses up its extra round
       return `started the ${spec.kind} job ${job.id.slice(0, 8)} on ${spec.model || 'the default model'}`;

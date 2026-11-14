@@ -11,7 +11,7 @@ export const MOVING_KINDS = new Set(['running', 'pr-open', 'next']);
 const RULE_TEXT = {
   listed: (a, r, of) => `listed in agents.${a}.issues (position ${r} of ${of})`,
   queued: (a, r, of) => `queued for ${a} by the unblock list (position ${r} of ${of})`,
-  unlisted: (a, r, of) => `in no agent's issue list: open issues are taken in number order by the first agent with a free slot (position ${r} of ${of})`
+  unlisted: (a, r, of) => `in no agent's issue list: open issues are taken in number order by the agent the job costs least of its plan relative to its spare allowance, among agents with a free slot (position ${r} of ${of})`
 };
 
 const clock = (until, zone) => (Number.isFinite(until)
@@ -137,7 +137,7 @@ export function idleRuleText(agent, listedCount, assignments) {
   const pool = assignments.filter(a => a.rule.startsWith('in no agent') && !MOVING_KINDS.has(a.wait?.kind));
   if (pool.length) {
     const shown = pool.slice(0, 3).map(a => `#${a.number} to ${a.agent || 'no agent'}`).join(', ');
-    return `rule: unlisted issues go to the first agent with a free slot; ${pool.length} open (${shown}), ${agent} waits for its turn`;
+    return `rule: unlisted issues go to the agent chosen from spare allowance among those with a free slot (issue #1346); ${pool.length} open (${shown}), ${agent} waits for its turn`;
   }
   const plural = listedCount === 1 ? '' : 's';
   return `rule: agents.${agent}.issues lists ${listedCount} issue${plural}, ${own} still open; no open issue is assigned to ${agent} by any rule`;
