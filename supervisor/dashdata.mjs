@@ -19,6 +19,7 @@ import { bestDayStep } from './best-day-step.mjs';
 import { readIncidents } from './migrations.mjs';
 import { classifyIdle } from './idlecause.mjs';
 import { isDroppedClose } from './closedreason.mjs';
+import { readTier } from './tier.mjs';
 import { ensureStartedAt } from './closedreason-store.mjs';
 
 // Issue #362: the hot file keeps the last 35 days for the planner; older snapshots rotate into compressed monthly archives and are never deleted.
@@ -127,6 +128,8 @@ export const compactIssues = issues => (issues || []).map(i => ({ number: i.numb
     : (i.labels || []).slice(0, 10).map(l => redact(l, 40)),
   // Parsed from the full title and body before the body is dropped, so the dashboard's exclusions match the tick's (issue #212).
   prerequisites: prerequisites(i.body), pullPrerequisites: pullPrerequisites(i.title, i.body), proseDependencies: proseDependencies(i.body),
+  // Issue #1415: the priority tier and its warning, read from the full body before it is dropped.
+  tierRead: readTier(i),
   // Issue #414: the question the issue states for the homeowner and whether Foreman filed it, read before the body is dropped.
   ...(homeownerQuestion(i.body) ? { question: homeownerQuestion(i.body) } : {}), ...(/devtest-postmerge v1/.test(i.body || '') ? { foremanFiled: true } : {}) }));
 

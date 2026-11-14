@@ -90,3 +90,23 @@ test('the real plan of a tick starts #1331 (tier 0) before #1325, #1327 and #133
   assert.equal((await run({ claude: [], codex: [] }))[0], 1331);
   assert.equal((await run({ claude: [1327], codex: [] }))[0], 1327, 'a listed issue still goes first to its owner');
 });
+
+// The review fix: the real buildView reads the dashboard cache, which keeps no bodies, so the tier must survive compactIssues.
+import { buildView } from '../supervisor/dashboard.mjs';
+import { compactIssues } from '../supervisor/dashdata.mjs';
+
+test('through the real buildView with compacted issues: tier, place and warning reach foreman_why_blocked data', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tier-view-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const agent = (p, own) => ({ provider: p, branch_prefix: `${p}/`, issues: own });
+  const config = { schema_version: 1, enabled: true, repository: 'o/r', repo_path: '/p/r', worktree_base: '/p', access: { mode: 'full', decision: 'D-020' },
+    limits: { roles: { implementer: 1, reviewer: 1 }, overall: 2, max_review_attempts: 2, max_fix_attempts: 2 },
+    agents: { claude: agent('claude', []), codex: agent('codex', []) } };
+  const raw = [issue(1325, 'Tier: 5'), issue(1327, 'Tier: 6'), issue(1330, 'Tier: 3'), issue(1331, 'Tier: 0'), issue(1340, 'Tier: 9')];
+  const cache = { tick: { at: 1, status: 'ok', error: null, lastOkAt: 1 }, pulls: [], issues: compactIssues(raw), probes: {} };
+  assert.equal(cache.issues[0].body, undefined);
+  const v = await buildView({ config, root, jobs: [], events: [], state: {}, cache, snapshots: [], now: 2 });
+  const by = n => v.assignments.find(a => a.number === n);
+  assert.match(by(1331).rule, /tier 0, place 1 of 5 ready issues/);
+  assert.match(by(1325).rule, /tier 5, place 4 of 5/);
+  assert.match(by(1340).rule, /tier 4, place 3 of 5 ready issues.*Tier line ignored/);
+});

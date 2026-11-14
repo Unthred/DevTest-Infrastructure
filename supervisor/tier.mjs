@@ -8,7 +8,9 @@ const TIER_LINE = /^\s*Tier\s*:/i;
 const FOLLOW_UPS_TITLE = /^\s*Review follow-ups/i;
 
 // Returns { tier, warning }. `warning` is null unless a Tier line was present but could not be used.
+// The dashboard cache drops bodies, so compactIssues stores the result as `tierRead`; it is used when the body is absent.
 export function readTier(issue) {
+  if (issue?.tierRead && issue.body === undefined) return issue.tierRead;
   const lines = String(issue?.body || '').split(/\r?\n/).map(l => l.trim()).filter(l => TIER_LINE.test(l));
   const fallback = FOLLOW_UPS_TITLE.test(String(issue?.title || '')) ? FOLLOW_UP_TIER : DEFAULT_TIER;
   if (lines.length === 1 && VALID_LINE.test(lines[0])) return { tier: Number(VALID_LINE.exec(lines[0])[1]), warning: null };
