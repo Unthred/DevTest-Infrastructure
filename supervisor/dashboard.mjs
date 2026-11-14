@@ -946,7 +946,7 @@ function dashExtras({ root, config, cache, jobs, state, states, plan, queues, at
   const tickAt = cache.tick?.at ?? null;
   const nextTick = teamEnabled ? tickCountdown({ lastAt: tickAt, runningSince: root ? runningTickSince(root) : null, now }) : null;
   const ctx = { ticks: sup.ticks, jobs, state, cache, now };
-  const consolidated = consolidateNeedsYou(attention, { cache, pendingSteps: state.pendingSteps, repository: config.repository });
+  const consolidated = consolidateNeedsYou(attention, { cache, state, names, repo, pendingSteps: state.pendingSteps, repository: config.repository });
   const needsYou = consolidated.needsYou.map(a => {
     // `ai-supervisor status <id>` prints the job record (there is no `job` command).
     const command = COMMANDS[a.id] || (a.id.startsWith('job-') ? `ai-supervisor status ${a.id.slice(4, 36)}` : null);

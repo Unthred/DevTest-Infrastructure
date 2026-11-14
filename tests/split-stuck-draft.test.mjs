@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { acceptSplit } from '../supervisor/splitaccept.mjs';
 import { bodyFault, checkStuckDraft, itemBody } from '../supervisor/splitstuck-draft.mjs';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/split-stuck/pr1139.json', import.meta.url), 'utf8'));
-const ordinarySplitSource = fs.readFileSync(new URL('../supervisor/team.mjs', import.meta.url), 'utf8');
 const item = (title, files, extra = {}) => ({
   title,
   scope: `${title} scope`,
@@ -73,7 +73,21 @@ test('item bodies name the parked PR, add a dependency only for an earlier item,
   assert.match(refusal, /Depends on line must be a comma-separated list/);
 });
 
-test('ordinary issue split text remains in its existing owner unchanged', () => {
-  assert.ok(ordinarySplitSource.includes('Read #${issue} for the full requirements; deliver only this part.'));
-  assert.ok(ordinarySplitSource.includes('This issue is not started again; close it when the children are done.'));
+test('ordinary issue split text is unchanged by the move of acceptSplit into its own module', async () => {
+  const filed = [];
+  const notices = [];
+  const team = {
+    s: { unblock: { queued: {} }, splits: { 7: { status: 'proposed', agent: 'codex', children: [
+      { title: 'a', scope: 'part one' }, { title: 'b', scope: 'part two' }] } } },
+    gh: { findIssueByMarker: async () => null, createIssue: async (title, body) => filed.push(body) + 99 },
+    save: () => {},
+    clock: { now: () => 1 },
+    postNotice: async (issue, key, text) => notices.push([issue, key, text])
+  };
+  await acceptSplit(team, 7);
+  const expected = ['<!-- devtest-split-child v1 parent=7 idx=0 -->',
+    'Part 1 of 2 of #7, split by Foreman after #7 ran out of context (accepted by the homeowner).',
+    '', '**Scope:** part one', '', 'Read #7 for the full requirements; deliver only this part.'].join('\n');
+  assert.equal(filed[0], expected);
+  assert.match(notices[0][2], /This issue is not started again; close it when the children are done\./);
 });

@@ -7,10 +7,12 @@
 // Pure: no I/O. The caller supplies the attention items and the lists it already holds.
 import { redact } from './redact.mjs';
 import { stepItems } from './pendingsteps.mjs';
+import { withStuckSplits } from './splitstuck-view.mjs';
 
 // Lower is more specific: the primary cause of a merged item is the lowest-ranked one present.
 export const RANK = [
   'breaker',
+  'split-stuck',
   'fixlimit',
   'churn',
   'retrycap',
@@ -38,7 +40,14 @@ const refKey = ref => (ref && ref.kind && Number.isSafeInteger(ref.n) ? `${ref.k
 // A stall item lists PRs; Foreman progresses by itself unless a reason says the homeowner must act.
 export const needsHomeowner = item => item.homeowner !== false;
 
-export function consolidateNeedsYou(attention, { cache = {}, pendingSteps = null, repository = '' } = {}) {   // issue #1155: pendingSteps are the merged PRs' homeowner steps
+// The open pull request numbers and their labels, for the split cards of parked pull requests.
+const openPulls = cache => ({
+  open: new Set((cache.pulls || []).map(p => p.number)),
+  labels: new Map((cache.pulls || []).map(p => [p.number, p.labels || []]))
+});
+
+export function consolidateNeedsYou(attentionIn, { cache = {}, state = null, names = null, repo = '', pendingSteps = null, repository = '' } = {}) {   // issue #1155: pendingSteps are the merged PRs' homeowner steps
+  const attention = names ? withStuckSplits(attentionIn, { state, names, repo, ...openPulls(cache) }) : attentionIn;   // issue #1338
   const pulls = Array.isArray(cache.pulls) ? cache.pulls : null, issues = Array.isArray(cache.issues) && cache.issues.length ? cache.issues : null;
   const openPr = pulls ? new Set(pulls.map(p => p.number)) : null;
   const issueState = issues ? new Map(issues.map(i => [i.number, i])) : null;
