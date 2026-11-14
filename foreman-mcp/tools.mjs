@@ -55,13 +55,36 @@ export function dropNullFields(out, key) {
 }
 
 // The headline figures without the item lists (the MCP server imports nothing from the supervisor tree).
-const summariseHeadline = (h, v) => ({ ...h, windows: Object.fromEntries(Object.entries(h.windows || {}).map(([w, v]) => [w, { ...v, cards: Object.fromEntries(Object.entries(v.cards || {}).map(([id, c]) => { const { items, ...rest } = gbpCard(id, c, v); return [id, rest]; })) }])) });
-// Issue #1097: the cost and waste cards carry USD for the dashboard renderer; the answer converts them to pounds.
-const gbpCard = (id, c, v) => {
-  if (id === 'cost') { const { totalCostUsd, value, unit, ...r } = c; return { ...r, value: gbpOf(value, v), totalCostGbp: gbpOf(totalCostUsd, v), unit: 'GBP equivalent' }; }
-  if (id === 'waste') { const { costUsdEquivalent, ...r } = c; return { ...r, costGbpEquivalent: gbpOf(costUsdEquivalent, v) }; }
-  return c;
+const summariseHeadline = (h, view) => {
+  const windows = {};
+  for (const [name, win] of Object.entries(h.windows || {})) {
+    const cards = {};
+    for (const [id, card] of Object.entries(win.cards || {})) {
+      const { items, ...rest } = gbpCard(id, card, view);
+      cards[id] = rest;
+    }
+    windows[name] = { ...win, cards };
+  }
+  return { ...h, windows };
 };
+// Issue #1097: the cost and waste cards carry USD for the dashboard renderer; the answer converts them to pounds.
+// Issue #1379: the previous period is converted with the same rate; with no rate the dollar figures stay labelled as dollars and a note says so.
+const NO_RATE_NOTE = 'No pounds rate is set in the dashboard view (display.gbpPerUsd), so these figures stay in US dollars.';
+const withoutKeys = (o, keys) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
+const hasRate = v => Number.isFinite(v?.display?.gbpPerUsd);
+function gbpCard(id, c, v) {
+  if (id !== 'cost' && id !== 'waste') return c;
+  if (!hasRate(v)) return { ...c, unit: id === 'cost' ? 'USD equivalent' : c.unit, rateNote: NO_RATE_NOTE };
+  const prev = c.previous;
+  if (id === 'cost') {
+    const rest = withoutKeys(c, ['totalCostUsd', 'value', 'unit', 'previous', 'previousValue', 'delta']);
+    const previous = prev ? { ...withoutKeys(prev, ['totalCostUsd', 'value', 'unit']), value: gbpOf(prev.value, v), totalCostGbp: gbpOf(prev.totalCostUsd, v), unit: 'GBP equivalent' } : prev;
+    return { ...rest, value: gbpOf(c.value, v), totalCostGbp: gbpOf(c.totalCostUsd, v), unit: 'GBP equivalent', previous, previousValue: gbpOf(c.previousValue, v), delta: gbpOf(c.delta, v) };
+  }
+  const rest = withoutKeys(c, ['costUsdEquivalent', 'previous']);
+  const previous = prev ? { ...withoutKeys(prev, ['costUsdEquivalent']), costGbpEquivalent: gbpOf(prev.costUsdEquivalent, v) } : prev;
+  return { ...rest, costGbpEquivalent: gbpOf(c.costUsdEquivalent, v), previous };
+}
 const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const num = (x, lo, hi, dflt) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : dflt; };
 
