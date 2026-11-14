@@ -14,7 +14,11 @@ const RULE_TEXT = {
   unlisted: (a, r, of) => `in no agent's issue list: open issues are taken in number order by the first agent with a free slot (position ${r} of ${of})`
 };
 
-const clock = (until, zone) => (Number.isFinite(until) ? new Intl.DateTimeFormat('en-GB', { timeZone: zone || 'UTC', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until)).replace(',', '') : null);
+const clock = (until, zone) => (Number.isFinite(until)
+  ? new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone || 'UTC', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(new Date(until)).replace(',', '')
+  : null);
 const at = (until, zone) => (clock(until, zone) ? ` until ${clock(until, zone)}` : '');
 
 // i = { number, zone, running, prText, exclusion: { kind, text } | null, startedEarlier, owner: { agent, rule, rank, of } | null,
@@ -26,7 +30,14 @@ export function explainIssue(i) {
   const free = i.agents.filter(a => a.canImplement && !a.out), ready = free.find(a => !a.busy && !a.hold) || free[0];
   const chosen = i.planned ? i.agents.find(a => a.name === i.planned.agent) : named || ready || null;
   const agent = chosen?.name ?? null, rule = i.owner ? RULE_TEXT[i.owner.rule](i.owner.agent || 'any agent', i.owner.rank, i.owner.of) : 'no rule assigns it';
-  const base = { number: i.number, agent, model: chosen?.model ?? null, rule: i.planned?.reassignedFrom ? `${rule}; reassigned from ${i.planned.reassignedFrom} for allowance` : rule, rank: i.owner?.rank ?? null, of: i.owner?.of ?? null };
+  const base = {
+    number: i.number,
+    agent,
+    model: chosen?.model ?? null,
+    rule: i.planned?.reassignedFrom ? `${rule}; reassigned from ${i.planned.reassignedFrom} for allowance` : rule,
+    rank: i.owner?.rank ?? null,
+    of: i.owner?.of ?? null,
+  };
   const wait = waitOf(i, chosen);
   return { ...base, wait, fault: !agent && !wait ? 'open issue with no implementer and no stated reason' : null };
 }
@@ -54,7 +65,9 @@ function allOut(i) {
   const out = i.agents.filter(a => a.canImplement && a.out);
   if (!out.length) return null;
   const first = out[0].out;
-  return { kind: first.kind, text: out.map(a => `${a.name} ${a.out.text}${at(a.out.until, i.zone)}`).join('; '), until: out.map(a => a.out.until).filter(Number.isFinite).sort((x, y) => x - y)[0] ?? null };
+  const text = out.map(a => `${a.name} ${a.out.text}${at(a.out.until, i.zone)}`).join('; ');
+  const until = out.map(a => a.out.until).filter(Number.isFinite).sort((x, y) => x - y)[0] ?? null;
+  return { kind: first.kind, text, until };
 }
 
 // The agent's own reason for not taking implement work now: paused or reviews-only mode, the reserve, or a usage limit.
@@ -62,7 +75,11 @@ function outOf(team, agent) {
   const m = team.modes?.[agent];
   if (m && m.mode !== 'normal') {
     const reserve = m.rule === 'high-water';
-    return { kind: m.mode === 'waiting' ? 'agent-paused' : reserve ? 'reserve' : 'allowance', text: `is ${MODE_LABEL[m.mode] || m.mode} (${String(m.reason || '').slice(0, 160)})`, until: m.until ?? null };
+    return {
+      kind: m.mode === 'waiting' ? 'agent-paused' : reserve ? 'reserve' : 'allowance',
+      text: `is ${MODE_LABEL[m.mode] || m.mode} (${String(m.reason || '').slice(0, 160)})`,
+      until: m.until ?? null,
+    };
   }
   const held = reserveOut(m);
   if (held) return { kind: 'reserve', text: held.why, until: held.until ?? null };
@@ -91,7 +108,14 @@ export function collectAssignments(team, { cache, plan, states, activeJobs }) {
   const unlisted = team.unlisted ? team.unlisted() : [];
   const capText = team.pauseText(prs, issues);
   const model = agent => { try { return team.modelFor({ agent, key: 'wb:implement' }, 'implement', {}, true).model ?? null; } catch { return null; } };
-  const agents = team.agents().map(([name]) => ({ name, canImplement: true, model: model(name), out: outOf(team, name), busy: !['idle', 'blocked'].includes(states[name]?.state), hold: team.held?.[name]?.implement || null }));
+  const agents = team.agents().map(([name]) => ({
+    name,
+    canImplement: true,
+    model: model(name),
+    out: outOf(team, name),
+    busy: !['idle', 'blocked'].includes(states[name]?.state),
+    hold: team.held?.[name]?.implement || null,
+  }));
   return open.map(issue => {
     const n = issue.number, re = new RegExp(`/issue-${n}(\\D|$)`);
     const pr = prs.find(p => re.test(p.headRefName)), act = plan.find(x => x.type === 'implement' && x.issue === n);
@@ -111,16 +135,30 @@ export function idleRuleText(agent, listedCount, assignments) {
   const own = assignments.filter(a => a.rank != null && a.rule.includes(`agents.${agent}.issues`)).length;
   if (mine.length) return `rule: ${mine[0].rule}; #${mine[0].number} waits (${mine[0].wait.kind}): ${mine[0].wait.text}`;
   const pool = assignments.filter(a => a.rule.startsWith('in no agent') && !MOVING_KINDS.has(a.wait?.kind));
-  if (pool.length) return `rule: unlisted issues go to the first agent with a free slot; ${pool.length} open (${pool.slice(0, 3).map(a => `#${a.number} to ${a.agent || 'no agent'}`).join(', ')}), ${agent} waits for its turn`;
-  return `rule: agents.${agent}.issues lists ${listedCount} issue${listedCount === 1 ? '' : 's'}, ${own} still open; no open issue is assigned to ${agent} by any rule`;
+  if (pool.length) {
+    const shown = pool.slice(0, 3).map(a => `#${a.number} to ${a.agent || 'no agent'}`).join(', ');
+    return `rule: unlisted issues go to the first agent with a free slot; ${pool.length} open (${shown}), ${agent} waits for its turn`;
+  }
+  const plural = listedCount === 1 ? '' : 's';
+  return `rule: agents.${agent}.issues lists ${listedCount} issue${plural}, ${own} still open; no open issue is assigned to ${agent} by any rule`;
 }
 
 // The view's share of the explanations: `assignments` (names and text redacted), `assignmentFaults`, and each issue row with its
 // explanation; a row with no other reason shows the wait (or the fault) as its status so the Issues table never shows a blank.
 export function assignmentFields(extra, assignments, names) {
-  const rows = (assignments || []).map(a => ({ ...a, name: redact(names.issue(a.number).text, 300), rule: redact(a.rule, 300), wait: a.wait && { ...a.wait, text: redact(a.wait.text, 300) } }));
+  const rows = (assignments || []).map(a => ({
+    ...a,
+    name: redact(names.issue(a.number).text, 300),
+    rule: redact(a.rule, 300),
+    wait: a.wait && { ...a.wait, text: redact(a.wait.text, 300) },
+  }));
   const by = new Map(rows.map(r => [r.number, r]));
   const status = r => (r ? explanationText(r) : null);
-  const issues = extra.issues.map(i => ({ ...i, assignment: by.get(i.number) ?? null, reason: [i.reason, status(by.get(i.number))].filter(Boolean).join(' | ') }));
+  const issues = extra.issues.map(i => ({
+    ...i,
+    assignment: by.get(i.number) ?? null,
+    // null, not '', when there is neither a reason nor a status: consumers test for null (issue #1351)
+    reason: [i.reason, status(by.get(i.number))].filter(Boolean).join(' | ') || null,
+  }));
   return { ...extra, assignments: rows, assignmentFaults: rows.filter(r => r.fault).map(r => ({ issue: r.number, fault: r.fault })), issues };
 }

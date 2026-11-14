@@ -1,4 +1,5 @@
-// Issue #1116: the one place allowance is computed in real capacity (the provider readings themselves are read in allowance.mjs). Pure functions over plain data: no clock, no file, no network.
+// Issue #1116: the one place allowance is computed in real capacity (the provider readings themselves are read in allowance.mjs).
+// Pure functions over plain data: no clock, no file, no network.
 //
 // The providers report a percentage of a weekly window, but the plans differ hugely (15 percent of one is a day or two of
 // implementing, 15 percent of another a few hours), so a percentage cannot be compared across agents. Each agent therefore gets
@@ -65,15 +66,19 @@ export function capacitySamples(jobs) {
 
 // Capacity in tokens per week. Trusted only from at least `min_trusted_windows` windows that each moved far enough to be a signal;
 // one window, however clean, is not trusted alone (it falls back to the configured starting value).
-// `exceptResetsAt` leaves one window out, so the daily check (issue #1167) compares today with the earlier windows, not with an average that contains today.
+// `exceptResetsAt` leaves one window out, so the daily check (issue #1167) compares today with the earlier windows,
+// not with an average that contains today.
 export function learnCapacity({ jobs, configured = null, options = ALLOWANCE_DEFAULTS, exceptResetsAt = null }) {
-  const usable = capacitySamples(jobs).filter(w => w.delta >= options.min_window_delta && !sameReset(w.resetsAt, exceptResetsAt)).slice(-options.capacity_windows);
+  const usable = capacitySamples(jobs)
+    .filter(w => w.delta >= options.min_window_delta && !sameReset(w.resetsAt, exceptResetsAt))
+    .slice(-options.capacity_windows);
   const start = Number.isFinite(configured) && configured > 0 ? configured : null;
   if (usable.length >= options.min_trusted_windows) {
     const tokens = usable.reduce((s, w) => s + w.tokens, 0), delta = usable.reduce((s, w) => s + w.delta, 0);
     const each = usable.map(w => w.tokens / w.delta), spread = Math.max(...each) / Math.min(...each);
     const confidence = usable.length >= 3 && spread <= 2 ? 'high' : 'medium';
-    return { capacity: tokens / delta, source: 'learned', confidence, windows: usable.length, note: `learned from ${usable.length} weekly windows (${confidence} confidence)` };
+    const note = `learned from ${usable.length} weekly windows (${confidence} confidence)`;
+    return { capacity: tokens / delta, source: 'learned', confidence, windows: usable.length, note };
   }
   const why = usable.length ? 'only one usable weekly window so far, not trusted alone' : 'no usable history yet';
   if (start !== null) {
@@ -113,12 +118,22 @@ export function summarise(input) {
   const warnings = [fixed !== null ? configuredWarning(fixed, learnedCapacity) : null,
     dailyCheck({ current, learned: priorCapacity, minDelta: options.min_window_delta })].filter(Boolean);
   const base = { used: usage.ok ? usage.used : null, capacity, capacitySource: fixed !== null ? 'configured' : learned.source,
-    confidence: fixed !== null ? 'configured' : learned.confidence, windows: learned.windows, learnedCapacity, warnings, shortWindow, remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
+    confidence: fixed !== null ? 'configured' : learned.confidence, windows: learned.windows, learnedCapacity, warnings, shortWindow,
+    remaining: null, need: null, reserve: null, belowReserve: null, basis: 'percent' };
   if (!usage.ok) return { ...base, reason: `${usage.reason}; the fixed share rule applies` };
   if (capacity === null) return { ...base, reason: `${learned.note}; the fixed share rule applies` };
   const remaining = capacity * (1 - usage.used), need = projectedNeed({ jobs, openPrs });
   const reserve = need + capacity * options.reserve_margin;
-  const result = { ...base, basis: 'absolute', remaining, need, reserve, openPrs: Number.isSafeInteger(openPrs) && openPrs > 0 ? openPrs : 0, belowReserve: remaining <= reserve, reason: note };
+  const result = {
+    ...base,
+    basis: 'absolute',
+    remaining,
+    need,
+    reserve,
+    openPrs: Number.isSafeInteger(openPrs) && openPrs > 0 ? openPrs : 0,
+    belowReserve: remaining <= reserve,
+    reason: note,
+  };
   return { ...result, text: describe(result) };
 }
 
@@ -146,13 +161,25 @@ const shortWindowView = w => (w ? { used: w.used, resetsAt: Number.isFinite(w.re
 export function capacityView(s) {
   if (!s) return null;
   const round = n => (Number.isFinite(n) ? Math.round(n) : null);
-  return { basis: s.basis, usedPercent: Number.isFinite(s.used) ? Math.round(s.used * 1000) / 10 : null, capacity: round(s.capacity), source: s.capacitySource, confidence: s.confidence, windows: s.windows,
-    remaining: round(s.remaining), reserve: round(s.reserve), need: round(s.need), belowReserve: s.belowReserve, learnedCapacity: round(s.learnedCapacity), warnings: s.warnings ?? [],
+  return {
+    basis: s.basis,
+    usedPercent: Number.isFinite(s.used) ? Math.round(s.used * 1000) / 10 : null,
+    capacity: round(s.capacity),
+    source: s.capacitySource,
+    confidence: s.confidence,
+    windows: s.windows,
+    remaining: round(s.remaining),
+    reserve: round(s.reserve),
+    need: round(s.need),
+    belowReserve: s.belowReserve,
+    learnedCapacity: round(s.learnedCapacity),
+    warnings: s.warnings ?? [],
     shortWindow: shortWindowView(s.shortWindow), unitsNote: UNITS_NOTE, text: s.text ?? s.reason };
 }
 
 // One agent's capacity summary for a tick: the weekly use of its live window (null when unknown), its job history and the open pull requests that
-// `owns` names the author agent of (each is projected to need one fix round); only those of `name` that are neither draft nor parked count. `settings` carries the optional starting capacity and reserve margin.
+// `owns` names the author agent of (each is projected to need one fix round); only those of `name` that are neither draft nor parked count.
+// `settings` carries the optional starting capacity and reserve margin.
 export function capacityFor({ name, used, jobs, settings, prs, owns, resetsAt = null, shortWindow = null }) {
   const options = { ...ALLOWANCE_DEFAULTS, reserve_margin: settings.reserve_margin ?? ALLOWANCE_DEFAULTS.reserve_margin };
   const openPrs = (prs || []).filter(pr => owns(pr) === name && !pr.isDraft && !isParked(pr)).length;
