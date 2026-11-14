@@ -12,6 +12,18 @@ import { run } from '../tools/ci/check-size.mjs';
 
 const CLI = new URL('../tools/ci/check-size.mjs', import.meta.url).pathname;
 const REPO = new URL('..', import.meta.url).pathname;
+// The check prints one row per warning; node's 1 MiB default buffer kills the child once that table grows past it (issue #1474).
+const MAX_BUFFER = 64 * 1024 * 1024;
+const DEFAULT_BUFFER = 1024 * 1024;
+const TAIL_CHARS = 2000;
+
+// Runs the size check as a child process; the message says why a run failed instead of printing the whole table.
+function runCli(args, maxBuffer = MAX_BUFFER) {
+  const r = spawnSync('node', [CLI, ...args], { encoding: 'utf8', maxBuffer });
+  const output = `${r.stdout || ''}${r.stderr || ''}`;
+  const why = r.status === null ? `no exit status, error ${r.error && r.error.code}` : `exit status ${r.status}`;
+  return { status: r.status, output, message: `${why}; last ${TAIL_CHARS} characters of ${output.length}:\n${output.slice(-TAIL_CHARS)}` };
+}
 
 // A function of exactly `n` lines (header, n-2 statements, closing brace).
 const fn = (name, n) => `function ${name}() {\n${'  step();\n'.repeat(n - 2)}}\n`;
@@ -175,10 +187,29 @@ test('test fixtures are not scanned', t => {
 
 test('the CLI exits 1 on a failure and 2 on a bad argument', t => {
   const root = tree(t, { 'a.mjs': bigFile(fn('long', 60)) });
-  spawnSync('node', [CLI, '--root', root, '--init-baseline']);
+  runCli(['--root', root, '--init-baseline']);
   fs.writeFileSync(path.join(root, 'a.mjs'), bigFile(fn('long', 70)));
-  assert.equal(spawnSync('node', [CLI, '--root', root]).status, 1);
-  assert.equal(spawnSync('node', [CLI, '--nope']).status, 2);
+  assert.equal(runCli(['--root', root]).status, 1);
+  const bad = runCli(['--nope']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.message, /exit status 2; last \d+ characters of \d+:\n[\s\S]*\S/, 'the message shows the end of the output');
+});
+
+test('a check that prints more than the default buffer still gives its exit status (issue #1474)', t => {
+  const files = {};
+  for (let f = 0; f < 70; f += 1) {
+    files[`many/f${f}.mjs`] = Array.from({ length: 100 }, (_, i) => `const v${f}_${i} = '${'z'.repeat(200)}';\n`).join('');
+  }
+  const r = runCli(['--root', tree(t, files)]);
+  assert.equal(r.status, 0, r.message);
+  assert.ok(r.output.length > DEFAULT_BUFFER, `the tree must print more than ${DEFAULT_BUFFER} characters, got ${r.output.length}`);
+});
+
+test('without the larger buffer the same run has no exit status and the message names the error code', t => {
+  const files = { 'a.mjs': Array.from({ length: 4000 }, (_, i) => `const v${i} = '${'z'.repeat(200)}';\n`).join('') };
+  const r = runCli(['--root', tree(t, files)], 1024);
+  assert.equal(r.status, null);
+  assert.match(r.message, /no exit status, error ENOBUFS/);
 });
 
 test('a new long line in a healthy file that already has long lines warns without failing', t => {
@@ -229,8 +260,8 @@ test('the table is printed even when no unit changed', t => {
 });
 
 test('the committed baseline passes on this repository and stays at or below the measured figures', () => {
-  const r = spawnSync('node', [CLI, '--root', REPO], { encoding: 'utf8' });
-  assert.equal(r.status, 0, r.stdout);
+  const r = runCli(['--root', REPO]);
+  assert.equal(r.status, 0, r.message);
   const base = JSON.parse(fs.readFileSync(path.join(REPO, 'tools/ci/size-baseline.json'), 'utf8'));
   // Upper bounds, so a committed shrink stays green. Measured on main 4312c5c (issue #1067): team.mjs 3652 lines, 155 methods,
   // 244 lines over 200 characters and 42 over 400; dashrender.mjs 1039 lines, 55 over 400. The bounds below add the merges since.
