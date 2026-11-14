@@ -3,6 +3,7 @@
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
 import { sweepJobTmp } from './jobtmp.mjs';
+import { saveState } from './statesave.mjs';
 import { readHostPressure, recordHostPressure, pressureText } from './hostpressure.mjs';
 import { overlayHostHold } from './holdreason.mjs';
 import fs from 'node:fs';
@@ -484,7 +485,7 @@ export class Team {
     for (const k of ['pr', 'day', 'limit', 'flags', 'resumed', 'noResume', 'escalated', 'queued']) this.s.unblock[k] ||= {};
     this.s.unblock.log ||= [];
   }
-  save() { atomicJson(this.file, this.s); }
+  save() { saveState(this.file, this.s, { alertOf: () => this.alert, now: () => this.clock.now() }); }
   // Model and effort for one job (issue #64). Escalation: an earlier attempt of the same work ended incomplete on the cheaper
   // model, or the PR has drawn CHANGES twice. Allowance: reported weekly use at or above the threshold keeps the cheap model
   // for everything but implement/continue. Both reasons are stored on the job. Invalid values degrade to the CLI default.
