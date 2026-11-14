@@ -111,9 +111,9 @@ export class BoardScreen {
     this.changedCount = 0;
     const plan = planChange(before, after, { width: this.width(), now: Date.now() });
     this.carry = carryLaps(this.carry, plan.events, after);
+    this.changedCount = plan.changed;
     if (this.reduced()) return;
     this.travels.begin(plan.travels, after);
-    this.changedCount = plan.changed;
   }
 
   view() {

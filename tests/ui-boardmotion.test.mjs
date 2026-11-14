@@ -24,6 +24,14 @@ const running1244 = board({ running: [running('6ff7be3f', 'claude/opus', 1244, '
 const changes1244 = board({ landed: [landed('6ff7be3f', 'claude/opus', 1244, 'changes_asked', 'review', 1), ...first1307.landed] });
 const again1244 = board({ waiting: [waiting(1, 1244, 'review')], landed: changes1244.landed });
 
+test('boundary: a newer landing in To review hides an older Changes asked landing, so waiting again gives no return', () => {
+  const older = landed('r1', 'claude/opus', 1244, 'changes_asked', 'review', 1);
+  const newer = { ...landed('f1', 'claude/sonnet', 1244, 'to_review', 'implement'), ended_at: '2026-11-13T09:30:00Z' };
+  const before = board({ landed: [newer, older] });
+  const after = board({ waiting: [waiting(1, 1244, 'review')], landed: before.landed });
+  assert.deepEqual(diffBoard(before, after), []);
+});
+
 test('valid: issue 1307 waiting then running gives one launch to the claude sonnet lane', () => {
   const events = diffBoard(first1307, second1307);
   assert.deepEqual(events, [{ type: 'launch', job_id: 'aaaa1307', lane_id: 'claude/sonnet', job_type: 'implement', number: 1307 }]);

@@ -18,7 +18,7 @@ export const MOTION = Object.freeze({
 // The pegs of the peg board as boardsvg.mjs draws them: a pattern anchored at the origin of the drawing.
 export const PEG = Object.freeze({ pitch: 28, radius: 2.5, spots: Object.freeze([[7, 7], [21, 21]]) });
 
-// A ball that landed in one of these boxes and is waiting again has gone round once more.
+// The newest landing of an item decides: a ball that landed in one of these boxes and is waiting again has gone round once more.
 const RETURN_BOXES = new Set(['changes_asked', 'failed', 'out_of_allowance']);
 
 const quiet = () => {};
@@ -43,13 +43,13 @@ export function diffBoard(prev, next, warn = quiet) {
   }
   const latest = new Map();
   for (const job of prev.landed) {
-    if (job.number == null || !RETURN_BOXES.has(job.box)) continue;
+    if (job.number == null) continue;
     const held = latest.get(job.number);
     if (!held || Date.parse(job.ended_at) > Date.parse(held.ended_at)) latest.set(job.number, job);
   }
   for (const item of next.waiting) {
     const job = latest.get(item.number);
-    if (!job || wasWaiting.has(item.number)) continue;
+    if (!job || !RETURN_BOXES.has(job.box) || wasWaiting.has(item.number)) continue;
     events.push({ type: 'return', job_id: job.job_id, number: item.number, job_type: item.job_type, box: job.box, laps_from: job.laps, laps_to: job.laps + 1 });
   }
   return events;
