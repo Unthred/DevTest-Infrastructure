@@ -2,6 +2,7 @@
 // here. Models run only inside supervised jobs that the dispatcher creates through the existing supervisor.
 // Provider-agnostic (D-012): agents and their providers come from team.json; nothing here names Claude or Codex.
 import { selfCheck, applySelfCheck } from './selfcheck.mjs';
+import { orderByTier } from './tier.mjs';
 import { sweepJobTmp } from './jobtmp.mjs';
 import { saveState } from './statesave.mjs';
 import { readHostPressure, recordHostPressure, pressureText } from './hostpressure.mjs';
@@ -512,10 +513,10 @@ export class Team {
     if (waits.length) return { kind: 'waiting_on', refs: waits, text: `waiting on ${waits.map(d => `#${d}`).join(', ')}` };
     return null;
   }
-  // Open issues in no agent's list, in number order: eligible for whichever agent has a free slot (issue #212). Config only orders and assigns.
+  // Open issues in no agent's list, by priority tier then number: eligible for whichever agent has a free slot (issues #212, #1415). Config only orders and assigns.
   unlisted() {
     const listed = new Set(this.agents().flatMap(([a]) => this.issuesOf(a)));
-    return (this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)).map(i => i.number).sort((a, b) => a - b);
+    return orderByTier((this.view?.issues || []).filter(i => i.state === 'OPEN' && !listed.has(i.number)));
   }
   candidates(agent) { return [...this.issuesOf(agent), ...this.unlisted()]; }
   // Review independence (issue #152). The models that wrote a pull request head are the models of every implementer job the dispatcher
